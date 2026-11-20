@@ -264,6 +264,9 @@ impl SessionManager {
     }
 
     fn load_from_store(&self) -> Result<(), AgentError> {
+        // The previous daemon cannot prove a provider effect just by having
+        // committed its intention. Never silently resume in-flight work.
+        self.store.recover_after_restart().map_err(to_agent_error)?;
         let workspaces = self.store.list_workspaces().map_err(to_agent_error)?;
         let sessions = self.store.list_sessions().map_err(to_agent_error)?;
         let approvals = self.store.list_approvals(None).map_err(to_agent_error)?;

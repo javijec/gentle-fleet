@@ -257,6 +257,44 @@ impl SessionStore for SqliteStore {
         Ok(())
     }
 
+    fn recover_after_restart(&self) -> StoreResult<()> {
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+        // All prior runner handles were process-local. Classify rather than
+        // re-send effects whose delivery or final result cannot be proven.
+        tx.execute(
+            "UPDATE operations SET status='uncertain',
+               message=COALESCE(message, 'daemon restarted before a durable final result'),
+               updated_at=?1
+             WHERE status IN ('reserved','accepted')",
+            params![now_ms() as i64],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.execute(
+            "UPDATE approvals SET status='uncertain'
+             WHERE status IN ('pending','delivered','dispatching')",
+            [],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.execute(
+            "UPDATE turns SET state='uncertain', updated_at=?1
+             WHERE state IN ('running','awaiting_approval')",
+            params![now_ms() as i64],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.execute(
+            "UPDATE sessions SET state='needs_reconciliation', turn_state='uncertain',
+                updated_at=?1
+             WHERE state IN ('running','stopping','stop_unconfirmed')",
+            params![now_ms() as i64],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))
+    }
+
     fn health(&self) -> StoreResult<StoreHealth> {
         let connection = self.connection()?;
         let version: u32 = connection
@@ -466,6 +504,14 @@ impl SessionStore for SqliteStore {
                     "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
                      WHERE operation_id IN (SELECT operation_id FROM turns WHERE turn_id=?1)",
                     params![turn_id, reason, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            }
+            fleet_domain::EventKind::ApprovalRequested { turn_id, .. } => {
+                tx.execute(
+                    "UPDATE turns SET state='awaiting_approval', updated_at=?2
+                     WHERE turn_id=?1",
+                    params![turn_id, now_ms() as i64],
                 )
                 .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
             }

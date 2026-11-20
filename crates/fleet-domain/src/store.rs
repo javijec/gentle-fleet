@@ -147,6 +147,9 @@ pub struct ApprovalRequest {
 pub trait SessionStore: Send + Sync {
     fn init(&self) -> StoreResult<()>;
     fn health(&self) -> StoreResult<StoreHealth>;
+    /// Reclassify in-flight effects as uncertain after daemon restart.
+    /// Never redeliver an operation as a side effect of loading the DB.
+    fn recover_after_restart(&self) -> StoreResult<()>;
 
     fn save_workspace(&self, workspace: &WorkspaceRecord) -> StoreResult<()>;
     fn list_workspaces(&self) -> StoreResult<Vec<WorkspaceRecord>>;

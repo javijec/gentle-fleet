@@ -1,6 +1,6 @@
 # Decisiones arquitectónicas — baseline nuevo
 
-**Todas las decisiones están propuestas.** Los spikes P0 ya se ejecutaron con los tres motores reales (20/11/2026, ver [`P0_FINDINGS.md`](P0_FINDINGS.md) y [`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md)); las propuestas P0-D1…D6 requieren ratificación explícita. No se trasladan automáticamente los ADR antiguos.
+**D01–D12 y P0-D1…D6 están ratificadas (20/11/2026).** Los spikes P0 se ejecutaron con los tres motores reales (ver [`P0_FINDINGS.md`](P0_FINDINGS.md) y [`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md)). No se trasladan automáticamente los ADR antiguos.
 
 | ID | Decisión | Motivo | Alternativa rechazada por ahora |
 |---|---|---|---|
@@ -17,15 +17,23 @@
 | D11 | Pruebas verticales antes de blindar subsistemas | Encontrar incompatibilidades reales temprano | Completar módulos horizontales con 100+ tests aislados antes del chat |
 | D12 | Versionar wire después del primer smoke | Evitar un Protocol que impide la función central | Publicar v1 inmutable sin mensajes de conversación ni subscribe |
 
-## Concreciones propuestas tras P0 (pendientes de ratificación)
+## Ratificación P0-D1…D6 (20/11/2026)
 
-Los IDs, la justificación, las alternativas y las consecuencias de P0-D1…D6 están
-desarrollados en
-[`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md#propuestas-p0-d1d6--pendientes-de-ratificación).
-Resumen: P0-D1 OpenCode como primer driver real; P0-D2 mantener D04 con
-capacidades por versión; P0-D3 Runner que posee o se adjunta; P0-D4 reconciliar
-antes de reenviar; P0-D5 fixtures por versión; P0-D6 cursor Fleet propio.
-**Ninguna está ratificada.**
+Las alternativas y consecuencias analizadas están en
+[`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md). Se ratifican
+con las condiciones siguientes:
+
+| ID | Decisión ratificada | Condición de aplicación |
+|---|---|---|
+| P0-D1 | OpenCode es el **primer driver implementado** en P1 | Fleet sigue siendo independiente del proveedor: `SessionManager` y el wire no conocen OpenCode; el registro de proveedores permite añadir Codex/Pi sin tocarlos |
+| P0-D2 | D04 se mantiene: `AgentDriver` con capacidades y native IDs | Las capacidades se declaran **por versión del proveedor**; el cliente no deduce funciones por el nombre del motor |
+| P0-D3 | D05 se matiza: el Runner admite **procesos propios** y **conexión a servicios existentes** | En P1 OpenCode usa attach al servicio de usuario o levanta su propio `serve`; el Runner no asume un hijo exclusivo. El runner como proceso independiente sigue siendo P3 |
+| P0-D4 | D09 se refuerza: no reenviar operaciones de resultado incierto | Un timeout nunca dispara un reenvío automático; antes de cualquier reintento hay que reconciliar aprobaciones pendientes y cursor de eventos |
+| P0-D5 | Versión fijada por driver y evidencia por versión | La compatibilidad se comprueba con un rango (`>=mínimo, <siguiente mayor`) para **no bloquear actualizaciones compatibles**; un cambio incompatible obliga a nueva fixture |
+| P0-D6 | Fleet mantiene su propio orden de eventos | `seq` monotónico por sesión lo asigna Fleet; los IDs nativos son opacos y quedan dentro del driver; no se usa timestamp como orden |
+
+Estas decisiones concretan D01–D12 sin modificarlas. Cualquier reapertura
+requiere el caso de uso, reproducción y comparación de la regla existente.
 
 ## Deudas de arquitectura aceptadas temporalmente
 

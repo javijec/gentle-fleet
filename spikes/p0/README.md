@@ -66,6 +66,26 @@ de evidencia. Resumen:
 | Cliente desconectado | **mata al proceso** (stdio) | el proceso sigue vivo; el request de aprobación queda pendiente | la sesión sigue; la aprobación queda pendiente |
 | Servidor compartido | no | no | sí: `opencode serve` / servicio de usuario con password local |
 
+### Codex: recuperar un thread no es mantener vivo un turno
+
+La prueba de Codex hizo dos cosas distintas y no deben confundirse:
+
+- **Recuperar un thread (VERIFIED):** tras cerrar el primer `app-server`, un
+  proceso nuevo con el mismo `CODEX_HOME` ejecutó `thread/resume` y
+  `thread/turns/list` y volvió a leer el prompt, la aprobación y la respuesta
+  del turno ya terminado. Esto demuestra persistencia del **historial**, con
+  `threadId` como identificador nativo opaco.
+- **Mantener vivo un turno en ejecución (UNTESTED):** no se probó cerrar el
+  cliente mientras un turno seguía corriendo, ni reconectar a ese mismo turno,
+  ni reaparecer una aprobación pendiente. El app-server puede seguir vivo, pero
+  P0 no demostró que el trabajo en vuelo continúe ni que pueda reanudarse sin
+  duplicar efectos.
+
+En términos de `LIFECYCLE.md`: `thread/resume` cubre *Sesión* e *historial*,
+no el estado *Turn Running* ni una *Operation* incierta. Por eso P0-D4 prohíbe
+reenviar automáticamente un prompt tras un timeout y P3 debe probar la
+supervivencia del runner antes de prometer recuperación de turnos vivos.
+
 ## Fixtures
 
 [`fixtures/`](fixtures/) contiene las capturas anonimizadas de las ejecuciones

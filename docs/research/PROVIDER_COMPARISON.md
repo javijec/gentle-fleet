@@ -94,10 +94,11 @@ Derivados de [`docs/DRIVERS.md`](../DRIVERS.md) y de la evidencia P0. Son
 `durable.seq`, los shells persistentes y el `projectID` de OpenCode. Se traducen
 dentro del driver o se reportan como `Unsupported`.
 
-## Propuestas P0-D1…D6 — PENDIENTES DE RATIFICACIÓN
+## Propuestas P0-D1…D6 — RATIFICADAS el 20/11/2026
 
-No están aprobadas. No cambian D01–D12 de
-[`docs/DECISIONS.md`](../DECISIONS.md); las concretan.
+Ratificadas con condiciones en
+[`docs/DECISIONS.md`](../DECISIONS.md#ratificación-p0-d1d620112026). No cambian
+D01–D12; las concretan. El texto inferior conserva el análisis original.
 
 ### P0-D1 — Primer driver real de P1: OpenCode
 
@@ -111,7 +112,7 @@ No están aprobadas. No cambian D01–D12 de
   resolver propiedad de runner antes de poder demostrar el chat.
 - **Consecuencias:** P1 no prueba posesión de proceso hijo; esa prueba se traslada
   a P3/P4 con Pi. Se necesita leer el password local del servicio sin loguearlo.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ### P0-D2 — `AgentDriver` con capacidades y native IDs, sin paridad falsa
 
@@ -124,7 +125,7 @@ No están aprobadas. No cambian D01–D12 de
   `always`).
 - **Consecuencias:** más trabajo de traducción y pruebas matrix-driven por
   capacidad; el cliente ve `Unsupported` donde corresponde.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ### P0-D3 — El Runner posee o se adjunta; no asume un hijo único
 
@@ -136,7 +137,7 @@ No están aprobadas. No cambian D01–D12 de
   instancias y rompería la detección de servicio compartido.
 - **Consecuencias:** el patrón de identidad del Runner debe admitir `owned` y
   `attached`; la reconciliación de P3 no puede basarse solo en PID.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ### P0-D4 — Reconciliación obligatoria antes de reenviar
 
@@ -150,7 +151,7 @@ No están aprobadas. No cambian D01–D12 de
   efectos externos ya ejecutados.
 - **Consecuencias:** P2 debe implementar consulta de aprobaciones y snapshot con
   cursor antes de considerar completo el reenvío.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ### P0-D5 — Versión fijada por driver y fixtures por versión
 
@@ -162,7 +163,7 @@ No están aprobadas. No cambian D01–D12 de
   no detectaría cambios semánticos de eventos.
 - **Consecuencias:** CI de contratos con matriz de versión; un cambio de versión
   bloquea el driver hasta regenerar evidencia.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ### P0-D6 — Cursor Fleet propio
 
@@ -174,7 +175,7 @@ No están aprobadas. No cambian D01–D12 de
   `API.md` lo prohíbe explícitamente.
 - **Consecuencias:** P2 debe persistir secuencia y detectar huecos; el conector
   de cada driver normaliza eventos hacia esa secuencia.
-- **Estado:** PENDIENTE DE RATIFICACIÓN.
+- **Estado:** RATIFICADA el 20/11/2026; condiciones en `docs/DECISIONS.md`.
 
 ## Cierre de P0
 

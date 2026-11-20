@@ -1,8 +1,8 @@
 # P0 — resumen ejecutivo e índice de investigación (20/11/2026)
 
-Estado: **P0 ejecutado con motores reales; cierre definitivo pendiente de la
-ratificación de P0-D1…D6**. No se ha implementado P1, daemon, API Fleet ni
-esquema definitivo.
+Estado: **P0 CERRADO (20/11/2026)**. P0-D1…D6 ratificadas en
+[`DECISIONS.md`](DECISIONS.md). P1 está en ejecución con OpenCode como primer
+driver real; este documento conserva la evidencia de la fase cerrada.
 
 Este documento mantenía antes el detalle completo de los tres motores. Ese
 detalle vive ahora en [`docs/research/`](research/), con etiquetas de evidencia

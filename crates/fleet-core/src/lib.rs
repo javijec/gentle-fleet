@@ -16,7 +16,7 @@ use fleet_agent::{
     AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent, LaunchContext, ProviderRegistry,
 };
 use fleet_domain::store::{
-    ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord, OperationReservation,
+    ApprovalClaim, ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord, OperationReservation,
     OperationStatus, SessionStore, StoreError, TurnRecord,
 };
 use fleet_domain::{
@@ -529,19 +529,29 @@ impl SessionManager {
         })
     }
 
-    /// Persiste antes de publicar. Si el store falla, el evento no sale.
+    /// The event, session projection and any turn/approval/operation transition
+    /// are durable in ONE SQLite transaction before any observer receives it.
     fn publish_locked(
         &self,
         state: &mut ManagerState,
         session_id: &str,
         kind: EventKind,
     ) -> Result<(), AgentError> {
+        self.publish_locked_with_approval(state, session_id, kind, None)
+    }
+
+    fn publish_locked_with_approval(
+        &self,
+        state: &mut ManagerState,
+        session_id: &str,
+        kind: EventKind,
+        approval: Option<&ApprovalRequest>,
+    ) -> Result<(), AgentError> {
         let record = state
             .sessions
             .get_mut(session_id)
             .expect("session disappeared while publishing");
         let seq = record.next_seq;
-        record.next_seq += 1;
         let event = Event {
             event_id: format!("{session_id}-e{seq}"),
             session_id: session_id.to_string(),
@@ -549,9 +559,20 @@ impl SessionManager {
             created_at_ms: now_ms(),
             kind,
         };
-        self.store.append_event(&event).map_err(to_agent_error)?;
-        // El bus se publica con el lock de sesión tomado: snapshot y streaming
-        // no pueden perder ni duplicar eventos (P1.1).
+        let projection = fleet_domain::store::SessionRecord {
+            session_id: session_id.to_string(),
+            workspace_id: record.summary.workspace_id.clone(),
+            provider_id: record.summary.provider_id.clone(),
+            state: record.summary.state,
+            turn_state: record.summary.turn_state,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        self.store
+            .commit_event(&event, &projection, approval)
+            .map_err(to_agent_error)?;
+        // Never advance seq on a failed commit: replay must remain gap-free.
+        record.next_seq += 1;
         self.bus.publish(&event);
         Ok(())
     }
@@ -601,8 +622,8 @@ impl SessionManager {
 
     fn publish_agent(&self, session_id: &str, event: AgentEvent) -> Result<(), AgentError> {
         let next_approval_id = self.next_id("appr");
-        let (kind, operation_update, new_approval, approval_update) = {
-            let mut state = self.state.lock().expect("manager poisoned");
+        let mut state = self.state.lock().expect("manager poisoned");
+        let (kind, _operation_update, new_approval, approval_update) = {
             let Some(record) = state.sessions.get_mut(session_id) else {
                 return Ok(());
             };
@@ -753,10 +774,10 @@ impl SessionManager {
                     else {
                         return Ok(());
                     };
-                    if !matches!(
-                        approval.status,
-                        ApprovalStatus::Pending | ApprovalStatus::Delivered
-                    ) {
+                    if approval.status != ApprovalStatus::Dispatching
+                        || approval.decision.as_deref() != Some(decision.as_str())
+                        || approval.session_id != session_id
+                    {
                         return Ok(());
                     }
                     let status = if decision == "reject" {
@@ -777,36 +798,22 @@ impl SessionManager {
             (kind, operation_update, new_approval, approval_update)
         };
 
+        // Keep the manager lock across the native event transition; no other
+        // client may change the approval between checking and committing it.
+        self.publish_locked_with_approval(
+            &mut state,
+            session_id,
+            kind,
+            new_approval.as_ref(),
+        )?;
         if let Some(approval) = new_approval {
-            self.store
-                .save_approval(&approval)
-                .map_err(to_agent_error)?;
-            self.state
-                .lock()
-                .expect("manager poisoned")
-                .approvals
-                .insert(approval.approval_id.clone(), approval);
+            state.approvals.insert(approval.approval_id.clone(), approval);
         }
         if let Some((approval, status)) = approval_update {
-            self.store
-                .update_approval_status(&approval.approval_id, status)
-                .map_err(to_agent_error)?;
             let mut resolved = approval;
             resolved.status = status;
-            resolved.decision = match &kind {
-                EventKind::ApprovalResolved { decision, .. } => Some(decision.clone()),
-                _ => None,
-            };
             resolved.resolved_at_ms = Some(now_ms());
-            self.state
-                .lock()
-                .expect("manager poisoned")
-                .approvals
-                .insert(resolved.approval_id.clone(), resolved);
-        }
-        self.publish_local(session_id, kind)?;
-        if let Some((operation_id, status, message)) = operation_update {
-            let _ = self.store.update_operation(&operation_id, status, message);
+            state.approvals.insert(resolved.approval_id.clone(), resolved);
         }
         Ok(())
     }
@@ -852,171 +859,91 @@ impl SessionManager {
             .map_err(to_agent_error)
     }
 
-    /// Responde una aprobación: solo la primera decisión ganadora se registra.
+    /// Atomically claim the approval and its operation. The HTTP result is
+    /// NOT known here: only a native driver event can confirm final delivery.
     pub fn answer_approval(
         &self,
         approval_id: &str,
         decision: String,
         operation_key: &str,
     ) -> Result<ApprovalRequest, AgentError> {
-        let (session_id, native_request_id, fingerprint) = {
-            let state = self.state.lock().expect("manager poisoned");
-            let approval = state.approvals.get(approval_id).ok_or_else(|| AgentError {
-                code: "not_found".into(),
-                message: format!("unknown approval `{approval_id}`"),
-            })?;
-            if !approval.allowed_decisions.contains(&decision) {
-                return Err(AgentError {
-                    code: "InvalidDecision".into(),
-                    message: format!("`{decision}` is not allowed for `{approval_id}`"),
-                });
-            }
-            if !matches!(
-                approval.status,
-                ApprovalStatus::Pending | ApprovalStatus::Delivered
-            ) {
-                return Err(AgentError {
-                    code: "Conflict".into(),
-                    message: format!(
-                        "approval `{approval_id}` is already {}",
-                        approval.status_text()
-                    ),
-                });
-            }
-            let fingerprint = format!("{}\0{}\0{}", approval.session_id, approval_id, decision);
-            (
-                approval.session_id.clone(),
-                approval.native_request_id.clone(),
-                fingerprint,
-            )
-        };
-
+        let mut state = self.state.lock().expect("manager poisoned");
+        let approval = state.approvals.get(approval_id).cloned().ok_or_else(|| AgentError {
+            code: "not_found".into(),
+            message: format!("unknown approval `{approval_id}`"),
+        })?;
+        if !approval.allowed_decisions.contains(&decision) {
+            return Err(AgentError {
+                code: "InvalidDecision".into(),
+                message: format!("`{decision}` is not allowed for `{approval_id}`"),
+            });
+        }
         let operation = OperationRecord {
-            operation_id: self.next_id("op"),
+            operation_id: Self::next_id_locked(&mut state, "op"),
             operation_key: operation_key.to_string(),
             kind: OperationKind::AnswerApproval,
-            session_id: session_id.clone(),
+            session_id: approval.session_id.clone(),
             target_id: Some(approval_id.to_string()),
-            fingerprint: fingerprint.clone(),
+            fingerprint: format!("{}\0{}\0{}", approval.session_id, approval_id, decision),
             status: OperationStatus::Reserved,
             message: None,
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        match self
-            .store
-            .reserve_operation(&operation)
-            .map_err(to_agent_error)?
-        {
-            OperationReservation::Conflict => {
-                return Err(AgentError {
-                    code: "Conflict".into(),
-                    message: "operation key was used with different arguments".into(),
-                })
-            }
-            OperationReservation::Existing(existing)
-                if existing.status == OperationStatus::Uncertain =>
-            {
-                return Err(AgentError {
-                    code: "NeedsReconciliation".into(),
-                    message: "approval decision delivery is uncertain; no automatic retry".into(),
-                })
-            }
-            OperationReservation::Existing(_) => {}
-            OperationReservation::Created(_) => {}
-        }
-
-        let status = if decision == "reject" {
-            ApprovalStatus::Rejected
-        } else {
-            ApprovalStatus::Accepted
-        };
-        let won = self
-            .store
-            .resolve_approval(approval_id, &decision, status)
+        let claimed = self.store
+            .claim_approval(approval_id, &decision, &operation)
             .map_err(to_agent_error)?;
-        if !won {
-            let _ = self.store.update_operation(
-                &operation.operation_id,
-                OperationStatus::Failed,
-                Some("another client won the decision".into()),
-            );
-            return Err(AgentError {
+        let updated = match claimed {
+            ApprovalClaim::Existing(existing, approval) => {
+                if existing.status == OperationStatus::Uncertain {
+                    return Err(AgentError {
+                        code: "NeedsReconciliation".into(),
+                        message: "approval delivery uncertain; no automatic retry".into(),
+                    });
+                }
+                return Ok(approval); // same operation key: no second dispatch
+            }
+            ApprovalClaim::Conflict => return Err(AgentError {
                 code: "Conflict".into(),
-                message: "another client already resolved this approval".into(),
+                message: "approval already claimed or operation key has different parameters".into(),
+            }),
+            ApprovalClaim::Created(updated) => updated,
+        };
+        state.approvals.insert(approval_id.to_string(), updated.clone());
+        let command_tx = state.sessions.get(&approval.session_id)
+            .and_then(|record| record.driver.as_ref().map(|d| d.commands.clone()));
+        drop(state);
+
+        let result = command_tx.ok_or_else(|| AgentError {
+            code: "driver_unavailable".into(),
+            message: "no live driver to deliver approval".into(),
+        }).and_then(|tx| tx.send(DriverCommand::Answer {
+            approval_id: approval_id.to_string(),
+            native_request_id: approval.native_request_id.clone(),
+            decision: decision.clone(),
+        }).map_err(|error| AgentError {
+            code: "approval_delivery_failed".into(),
+            message: error.to_string(),
+        }));
+        if let Err(error) = result {
+            self.mark_approval_uncertain(&approval.session_id, approval_id, &error);
+            return Err(AgentError {
+                code: "NeedsReconciliation".into(),
+                message: error.message,
             });
         }
-        let _ =
-            self.store
-                .update_operation(&operation.operation_id, OperationStatus::Completed, None);
-
-        let mut approved = {
-            let mut state = self.state.lock().expect("manager poisoned");
-            let approval = state
-                .approvals
-                .get_mut(approval_id)
-                .expect("approval checked");
-            approval.status = status;
-            approval.decision = Some(decision.clone());
-            approval.resolved_at_ms = Some(now_ms());
-            approval.clone()
-        };
-        self.publish_local(
-            &session_id,
-            EventKind::ApprovalResolved {
-                approval_id: approval_id.to_string(),
-                turn_id: approved.turn_id.clone(),
-                decision: decision.clone(),
-            },
-        )?;
-
-        let command_tx = self
-            .state
-            .lock()
-            .expect("manager poisoned")
-            .sessions
-            .get(&session_id)
-            .and_then(|record| record.driver.as_ref().map(|driver| driver.commands.clone()));
-        match command_tx {
-            Some(tx) => {
-                if tx
-                    .send(DriverCommand::Answer {
-                        approval_id: approval_id.to_string(),
-                        native_request_id,
-                        decision,
-                    })
-                    .is_err()
-                {
-                    approved.status = ApprovalStatus::Uncertain;
-                    let _ = self
-                        .store
-                        .update_approval_status(approval_id, ApprovalStatus::Uncertain);
-                    let _ = self.store.update_operation(
-                        &operation.operation_id,
-                        OperationStatus::Uncertain,
-                        Some("driver channel closed before decision delivery".into()),
-                    );
-                }
-            }
-            None => {
-                approved.status = ApprovalStatus::Uncertain;
-                let _ = self
-                    .store
-                    .update_approval_status(approval_id, ApprovalStatus::Uncertain);
-                let _ = self.store.update_operation(
-                    &operation.operation_id,
-                    OperationStatus::Uncertain,
-                    Some("no live driver to deliver the decision".into()),
-                );
-            }
-        }
-        Ok(approved)
+        Ok(updated) // Dispatching: NOT Accepted/Rejected until native confirmation
     }
 
     pub fn mark_approval_uncertain(&self, session_id: &str, approval_id: &str, error: &AgentError) {
-        let _ = self
-            .store
-            .update_approval_status(approval_id, ApprovalStatus::Uncertain);
+        if let Err(store_error) = self.store.mark_approval_uncertain(approval_id, &error.message) {
+            eprintln!("could not persist uncertain approval: {store_error:?}");
+        }
+        if let Some(approval) = self.state.lock().expect("manager poisoned")
+            .approvals.get_mut(approval_id)
+        {
+            approval.status = ApprovalStatus::Uncertain;
+        }
         let _ = self.publish_local(
             session_id,
             EventKind::AgentError {
@@ -1025,121 +952,141 @@ impl SessionManager {
         );
     }
 
-    /// Reserva la operación de forma durable, valida el turno y despacha una sola vez.
+    /// Validate before reserving; a rejected prompt never consumes its key.
+    /// Reservation and session state check are serialized by the manager lock.
     pub fn send_prompt(
         &self,
         session_id: &str,
         text: String,
         operation_key: &str,
     ) -> Result<PromptReceipt, AgentError> {
-        let turn_id = self.next_id("turn");
-        let operation_id = self.next_id("op");
+        let mut state = self.state.lock().expect("manager poisoned");
         let fingerprint = format!("{session_id}\0{text}");
+        // Idempotent responses must work even after a daemon restart when the
+        // session has no runner. They never dispatch the original prompt again.
+        if let Some(existing) = self.store.get_operation(operation_key).map_err(to_agent_error)? {
+            if existing.kind != OperationKind::SendPrompt
+                || existing.session_id != session_id
+                || existing.fingerprint != fingerprint
+            {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key was used with different arguments".into(),
+                });
+            }
+            if existing.status == OperationStatus::Uncertain
+                || existing.status == OperationStatus::Reserved
+            {
+                return Err(AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "previous prompt outcome is uncertain; no automatic retry".into(),
+                });
+            }
+            if existing.status == OperationStatus::Failed {
+                return Err(AgentError {
+                    code: "PreviousOperationFailed".into(),
+                    message: existing.message.unwrap_or_else(|| "previous dispatch failed".into()),
+                });
+            }
+            return Ok(PromptReceipt {
+                operation_id: existing.operation_id,
+                session_id: existing.session_id,
+                turn_id: existing.target_id.unwrap_or_default(),
+            });
+        }
+        {
+            let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: format!("unknown session `{session_id}`"),
+            })?;
+            if record.driver.is_none() || record.summary.state != SessionState::Running {
+                return Err(AgentError {
+                    code: "session_stopped".into(),
+                    message: format!("session `{session_id}` does not have a running driver"),
+                });
+            }
+            if !record.summary.turn_state.accepts_prompt() {
+                return Err(AgentError {
+                    code: "TurnAlreadyRunning".into(),
+                    message: format!("session `{session_id}` has active turn"),
+                });
+            }
+        }
+        let turn_id = Self::next_id_locked(&mut state, "turn");
+        let operation_id = Self::next_id_locked(&mut state, "op");
         let operation = OperationRecord {
             operation_id: operation_id.clone(),
             operation_key: operation_key.to_string(),
             kind: OperationKind::SendPrompt,
             session_id: session_id.to_string(),
             target_id: Some(turn_id.clone()),
-            fingerprint: fingerprint.clone(),
+            fingerprint,
             status: OperationStatus::Reserved,
             message: None,
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        let reservation = self
-            .store
-            .reserve_operation(&operation)
-            .map_err(to_agent_error)?;
-        let existing = match reservation {
-            OperationReservation::Created(_) => None,
-            OperationReservation::Conflict => {
-                return Err(AgentError {
-                    code: "Conflict".into(),
-                    message: "operation key was used with different arguments or session".into(),
-                })
-            }
-            OperationReservation::Existing(record) => Some(record),
-        };
-        if let Some(record) = existing {
-            if record.status == OperationStatus::Uncertain {
-                return Err(AgentError {
-                    code: "NeedsReconciliation".into(),
-                    message: "previous prompt delivery is uncertain; no automatic resend".into(),
+        match self.store.reserve_operation(&operation).map_err(to_agent_error)? {
+            OperationReservation::Created(_) => {}
+            OperationReservation::Conflict => return Err(AgentError {
+                code: "Conflict".into(),
+                message: "operation key belongs to a different request".into(),
+            }),
+            OperationReservation::Existing(existing) => {
+                return Ok(PromptReceipt {
+                    operation_id: existing.operation_id,
+                    session_id: existing.session_id,
+                    turn_id: existing.target_id.unwrap_or_default(),
                 });
             }
-            return Ok(PromptReceipt {
-                operation_id: record.operation_id,
-                session_id: record.session_id,
-                turn_id: record.target_id.unwrap_or_default(),
-            });
         }
-
+        // A failed turn insert cannot leave an operation pretending to have
+        // been accepted: explicitly mark it failed before returning.
+        if let Err(error) = self.store.save_turn(&TurnRecord {
+            turn_id: turn_id.clone(),
+            session_id: session_id.to_string(),
+            operation_id: operation_id.clone(),
+            state: TurnState::Running,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        }) {
+            self.store.update_operation(
+                &operation_id,
+                OperationStatus::Failed,
+                Some("failed to persist turn before dispatch".into()),
+            ).map_err(to_agent_error)?;
+            return Err(to_agent_error(error));
+        }
         let command_tx = {
-            let mut state = self.state.lock().expect("manager poisoned");
-            let record = state
-                .sessions
-                .get_mut(session_id)
-                .ok_or_else(|| AgentError {
-                    code: "not_found".into(),
-                    message: format!("unknown session `{session_id}`"),
-                })?;
-            if record.driver.is_none() || record.summary.state != SessionState::Running {
-                return Err(AgentError {
-                    code: "session_stopped".into(),
-                    message: format!("session `{session_id}` is not running with a live runner"),
-                });
-            }
-            if !record.summary.turn_state.accepts_prompt() {
-                return Err(AgentError {
-                    code: "TurnAlreadyRunning".into(),
-                    message: format!(
-                        "session `{session_id}` has turn in state {:?}",
-                        record.summary.turn_state
-                    ),
-                });
-            }
-            let command_tx = record
-                .driver
-                .as_ref()
-                .expect("driver checked")
-                .commands
-                .clone();
+            let record = state.sessions.get_mut(session_id).expect("session checked");
             record.active_turn = Some(turn_id.clone());
             record.current_operation = Some(operation_id.clone());
             record.summary.turn_state = TurnState::Running;
-            command_tx
+            record.driver.as_ref().expect("driver checked").commands.clone()
         };
-        self.store
-            .save_turn(&TurnRecord {
-                turn_id: turn_id.clone(),
-                session_id: session_id.to_string(),
-                operation_id: operation_id.clone(),
-                state: TurnState::Running,
-                created_at_ms: now_ms(),
-                updated_at_ms: now_ms(),
-            })
-            .map_err(to_agent_error)?;
-        let _ = self
-            .store
-            .update_operation(&operation_id, OperationStatus::Accepted, None);
-
-        self.publish_locked(
-            &mut self.state.lock().expect("manager poisoned"),
-            session_id,
-            EventKind::TurnStarted {
-                turn_id: turn_id.clone(),
-            },
-        )?;
-        self.publish_locked(
-            &mut self.state.lock().expect("manager poisoned"),
-            session_id,
-            EventKind::UserMessage {
-                turn_id: turn_id.clone(),
-                text: text.clone(),
-            },
-        )?;
-
+        // The prompt cannot reach the provider before both startup events are
+        // committed. A failure makes the operation uncertain, never replayable.
+        for kind in [
+            EventKind::TurnStarted { turn_id: turn_id.clone() },
+            EventKind::UserMessage { turn_id: turn_id.clone(), text: text.clone() },
+        ] {
+            if let Err(error) = self.publish_locked(&mut state, session_id, kind) {
+                self.store.update_operation(
+                    &operation_id, OperationStatus::Uncertain,
+                    Some("prompt events were not fully persisted".into()),
+                ).map_err(to_agent_error)?;
+                if let Some(record) = state.sessions.get_mut(session_id) {
+                    record.summary.turn_state = TurnState::Uncertain;
+                    record.active_turn = None;
+                    record.current_operation = None;
+                }
+                return Err(error);
+            }
+        }
+        self.store.update_operation(
+            &operation_id, OperationStatus::Accepted, None,
+        ).map_err(to_agent_error)?;
+        drop(state);
         if let Err(error) = command_tx.send(DriverCommand::Prompt {
             text,
             turn_id: turn_id.clone(),
@@ -1154,7 +1101,7 @@ impl SessionManager {
             );
             return Err(AgentError {
                 code: "DispatchFailed".into(),
-                message: "prompt was not dispatched; no automatic retry will be attempted".into(),
+                message: "prompt was not dispatched; it will not be retried automatically".into(),
             });
         }
         Ok(PromptReceipt {

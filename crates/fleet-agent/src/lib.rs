@@ -97,6 +97,16 @@ pub enum DomainEvent {
         turn_id: TurnId,
         status: TurnStatus,
     },
+    /// Error terminal del turno; el único `AgentError` que cierra un turno.
+    TurnFailed {
+        turn_id: TurnId,
+        message: String,
+    },
+    /// Información del proveedor que debe mostrarse sin cerrar el turno.
+    AgentNotice {
+        message: String,
+    },
+    /// Error informativo que NO cierra el turno.
     AgentError {
         message: String,
     },
@@ -137,6 +147,14 @@ pub trait DriverFactory: Send + Sync {
     fn id(&self) -> ProviderId;
     fn compatibility(&self) -> VersionRange;
     fn create(&self) -> Box<dyn AgentDriver>;
+
+    /// Metadatos estáticos. La versión puede ser desconocida hasta `probe`.
+    fn metadata(&self) -> ProviderDescriptor;
+
+    /// Comprobación barata de disponibilidad/versión; no abre sesión.
+    fn probe(&self) -> ProviderDescriptor {
+        self.metadata()
+    }
 
     fn supports(&self, version: &ProviderVersion) -> bool {
         self.compatibility().compatible(version)
@@ -187,6 +205,17 @@ impl ProviderRegistry {
                 message: format!("no driver registered for `{id}`"),
             }),
         }
+    }
+
+    /// Información real del registro para `ListAgents`.
+    pub fn descriptors(&self) -> Vec<ProviderDescriptor> {
+        let mut result: Vec<_> = self
+            .factories
+            .values()
+            .map(|factory| factory.probe())
+            .collect();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result
     }
 }
 

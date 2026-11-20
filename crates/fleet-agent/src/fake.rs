@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use fleet_domain::{
-    ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode, SessionState,
-    TurnStatus, VersionRange,
+    ProviderAvailability, ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode,
+    SessionState, TurnStatus, VersionRange,
 };
 
 use super::{
@@ -13,8 +13,19 @@ use super::{
     RecoveryEvidence, SendReceipt,
 };
 
+/// Palancas deterministicas para reproducir carreras y fallos de driver.
+#[derive(Debug, Clone, Default)]
+pub struct FakeConfig {
+    pub fail_send: bool,
+    pub block_send: bool,
+    pub block_close: bool,
+    pub emit_provider_error: bool,
+    pub emit_terminal_failure: bool,
+}
+
 pub struct FakeDriver {
     descriptor: ProviderDescriptor,
+    config: FakeConfig,
     pending: VecDeque<AgentEvent>,
     turns: u64,
     opened: bool,
@@ -29,6 +40,10 @@ impl Default for FakeDriver {
 
 impl FakeDriver {
     pub fn new() -> Self {
+        Self::with_config(FakeConfig::default())
+    }
+
+    pub fn with_config(config: FakeConfig) -> Self {
         let capabilities = ProviderCapabilities {
             streaming_text: true,
             tool_events: true,
@@ -45,7 +60,9 @@ impl FakeDriver {
                 version: ProviderVersion::parse("0.1.0"),
                 capabilities,
                 mode: RunnerMode::Owned,
+                availability: ProviderAvailability::Available,
             },
+            config,
             pending: VecDeque::new(),
             turns: 0,
             opened: false,
@@ -81,13 +98,23 @@ impl AgentDriver for FakeDriver {
                 message: "fake driver is not open".into(),
             });
         }
+        if self.config.block_send {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        if self.config.fail_send {
+            return Err(AgentError {
+                code: "driver_send_failed".into(),
+                message: "injected fake send failure".into(),
+            });
+        }
         self.turns += 1;
         let turn = input.turn_id;
-        let input_text = input.text.clone();
-        self.pending
-            .push_back(Self::event(DomainEvent::TurnStarted {
-                turn_id: turn.clone(),
-            }));
+        if self.config.emit_provider_error {
+            self.pending
+                .push_back(Self::event(DomainEvent::AgentNotice {
+                    message: "provider notice before completion".into(),
+                }));
+        }
         self.pending
             .push_back(Self::event(DomainEvent::AssistantDelta {
                 turn_id: turn.clone(),
@@ -102,7 +129,7 @@ impl AgentDriver for FakeDriver {
             .push_back(Self::event(DomainEvent::ToolStarted {
                 turn_id: turn.clone(),
                 name: "fake_echo".into(),
-                input: input_text,
+                input: input.text.clone(),
             }));
         self.pending.push_back(Self::event(DomainEvent::ToolOutput {
             turn_id: turn.clone(),
@@ -120,11 +147,18 @@ impl AgentDriver for FakeDriver {
                 turn_id: turn.clone(),
                 text: "Hello from fake".into(),
             }));
-        self.pending
-            .push_back(Self::event(DomainEvent::TurnCompleted {
-                turn_id: turn,
-                status: TurnStatus::Completed,
+        if self.config.emit_terminal_failure {
+            self.pending.push_back(Self::event(DomainEvent::TurnFailed {
+                turn_id: turn.clone(),
+                message: "injected terminal failure".into(),
             }));
+        } else {
+            self.pending
+                .push_back(Self::event(DomainEvent::TurnCompleted {
+                    turn_id: turn,
+                    status: TurnStatus::Completed,
+                }));
+        }
         Ok(SendReceipt { accepted: true })
     }
 
@@ -137,6 +171,9 @@ impl AgentDriver for FakeDriver {
     }
 
     fn close(&mut self) -> Result<(), AgentError> {
+        if self.config.block_close {
+            std::thread::sleep(Duration::from_secs(60));
+        }
         self.closed = true;
         Ok(())
     }
@@ -158,7 +195,23 @@ impl AgentDriver for FakeDriver {
 }
 
 /// Fábrica simple: permite probar el flujo completo sin modelo real.
-pub struct FakeFactory;
+pub struct FakeFactory(FakeConfig);
+
+impl FakeFactory {
+    pub fn new() -> Self {
+        Self(FakeConfig::default())
+    }
+
+    pub fn with_config(config: FakeConfig) -> Self {
+        Self(config)
+    }
+}
+
+impl Default for FakeFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DriverFactory for FakeFactory {
     fn id(&self) -> String {
@@ -172,7 +225,25 @@ impl DriverFactory for FakeFactory {
         }
     }
     fn create(&self) -> Box<dyn AgentDriver> {
-        Box::new(FakeDriver::new())
+        Box::new(FakeDriver::with_config(self.0.clone()))
+    }
+    fn metadata(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: "fake".into(),
+            version: ProviderVersion::parse("0.1.0"),
+            capabilities: ProviderCapabilities {
+                streaming_text: true,
+                tool_events: true,
+                session_history: true,
+                native_turn_ids: true,
+                cancel_turn: false,
+                approvals: false,
+                can_own_process: false,
+                can_attach_service: false,
+            },
+            mode: RunnerMode::Owned,
+            availability: ProviderAvailability::Available,
+        }
     }
 }
 
@@ -200,7 +271,7 @@ mod tests {
         while let Some(event) = driver.next_event(Duration::from_millis(1)).unwrap() {
             kinds.push(event.kind);
         }
-        assert_eq!(kinds.len(), 8);
+        assert_eq!(kinds.len(), 7);
         assert!(matches!(
             kinds.last(),
             Some(DomainEvent::TurnCompleted {
@@ -208,7 +279,8 @@ mod tests {
                 ..
             })
         ));
-        assert!(FakeFactory.supports(&ProviderVersion::parse("0.9.0")));
-        assert!(!FakeFactory.supports(&ProviderVersion::parse("1.0.0")));
+        let factory = FakeFactory::new();
+        assert!(factory.supports(&ProviderVersion::parse("0.9.0")));
+        assert!(!factory.supports(&ProviderVersion::parse("1.0.0")));
     }
 }

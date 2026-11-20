@@ -83,6 +83,7 @@ pub struct ProviderDescriptor {
     pub version: ProviderVersion,
     pub capabilities: ProviderCapabilities,
     pub mode: RunnerMode,
+    pub availability: ProviderAvailability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +91,40 @@ pub enum SessionState {
     Running,
     Stopped,
     Failed,
+}
+
+/// Estado del turno, propiedad del SessionManager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnState {
+    Idle,
+    Running,
+    AwaitingApproval,
+    Completed,
+    Failed,
+    Interrupted,
+    Uncertain,
+}
+
+impl TurnState {
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            TurnState::Completed | TurnState::Failed | TurnState::Interrupted
+        )
+    }
+
+    pub fn accepts_prompt(self) -> bool {
+        self != TurnState::Running
+            && self != TurnState::AwaitingApproval
+            && self != TurnState::Uncertain
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProviderAvailability {
+    Available,
+    Unavailable,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,8 +188,22 @@ pub enum EventKind {
         turn_id: TurnId,
         status: TurnStatus,
     },
+    /// Información del proveedor que NO cierra el turno.
+    AgentNotice {
+        message: String,
+    },
+    /// Error informativo que NO cierra el turno.
     AgentError {
         message: String,
+    },
+    /// El turno quedó sin evidencia suficiente; no se reenvía.
+    TurnUncertain {
+        turn_id: TurnId,
+        reason: String,
+    },
+    /// Un suscriptor lento fue desconectado con límite explícito.
+    Backpressure {
+        limit: usize,
     },
 }
 

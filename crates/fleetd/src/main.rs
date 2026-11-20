@@ -254,8 +254,8 @@ fn handle_client(
                     .filter(|value| *value > 0)
                     .unwrap_or(SUBSCRIBER_LIMIT);
                 match manager.subscribe(&session_id, since_seq, limit) {
-                    Ok((new_subscription, snapshot)) => {
-                        let latest = snapshot.last().map(|event| event.seq).unwrap_or(since_seq);
+                    Ok((new_subscription, snapshot, cutoff)) => {
+                        let latest = cutoff;
                         // Cada suscripción tiene cursor propio.
                         let last_seq = Arc::new(AtomicU64::new(since_seq));
                         if let Some(old) = subscription.take() {
@@ -264,16 +264,45 @@ fn handle_client(
                         }
                         let handle = new_subscription.handle();
                         subscription = Some(handle);
-                        for event in snapshot {
-                            last_seq.store(event.seq, Ordering::SeqCst);
-                            write_frame(
-                                &mut *writer.lock().expect("writer poisoned"),
-                                &Frame::Event {
-                                    session_id: session_id.clone(),
-                                    seq: event.seq,
-                                    event,
-                                },
-                            )?;
+                        // Stream the complete durable backlog in bounded pages
+                        // before the live receiver starts. Snapshot cut-off was
+                        // captured under the same lock as publishing.
+                        let mut pending = snapshot;
+                        let mut cursor = since_seq;
+                        while cursor < cutoff {
+                            if pending.is_empty() {
+                                pending = manager
+                                    .read_timeline(&session_id, cursor, fleet_core::TIMELINE_PAGE)
+                                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                                if pending.is_empty() {
+                                    return Err(std::io::Error::other(
+                                        "durable timeline gap while replaying subscription",
+                                    ));
+                                }
+                            }
+                            for event in pending.drain(..) {
+                                if event.seq > cutoff {
+                                    break;
+                                }
+                                if event.seq <= cursor {
+                                    continue;
+                                }
+                                if event.seq != cursor + 1 {
+                                    return Err(std::io::Error::other(
+                                        "non-contiguous durable event sequence",
+                                    ));
+                                }
+                                cursor = event.seq;
+                                last_seq.store(cursor, Ordering::SeqCst);
+                                write_frame(
+                                    &mut *writer.lock().expect("writer poisoned"),
+                                    &Frame::Event {
+                                        session_id: session_id.clone(),
+                                        seq: cursor,
+                                        event,
+                                    },
+                                )?;
+                            }
                         }
                         let writer_for_events = Arc::clone(&writer);
                         let seq_for_events = Arc::clone(&last_seq);

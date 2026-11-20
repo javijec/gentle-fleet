@@ -1118,7 +1118,7 @@ impl SessionManager {
         session_id: &str,
         since_seq: u64,
         limit: usize,
-    ) -> Result<(Subscription, Vec<Event>), AgentError> {
+    ) -> Result<(Subscription, Vec<Event>, u64), AgentError> {
         let state = self.state.lock().expect("manager poisoned");
         if !state.sessions.contains_key(session_id) {
             return Err(AgentError {
@@ -1126,12 +1126,24 @@ impl SessionManager {
                 message: format!("unknown session `{session_id}`"),
             });
         }
+        let cutoff = self.store.max_seq(session_id).map_err(to_agent_error)?;
+        if since_seq > cutoff {
+            return Err(AgentError {
+                code: "InvalidCursor".into(),
+                message: format!("cursor {since_seq} is ahead of persisted seq {cutoff}"),
+            });
+        }
         let subscription = self.bus.subscribe(session_id, limit);
-        let snapshot = self
-            .store
-            .read_events(session_id, since_seq, TIMELINE_PAGE)
-            .map_err(to_agent_error)?;
-        Ok((subscription, snapshot))
+        let snapshot = match self.store.read_events(session_id, since_seq, TIMELINE_PAGE) {
+            Ok(events) => events,
+            Err(error) => {
+                self.bus.unsubscribe(subscription.id);
+                return Err(to_agent_error(error));
+            }
+        };
+        // Capture the durable high water mark under the publication lock:
+        // the daemon can page to this point before consuming buffered live events.
+        Ok((subscription, snapshot, cutoff))
     }
 
     fn persist_session_state(&self, session_id: &str) {
@@ -1395,8 +1407,8 @@ mod tests {
         let ws = workspace(&manager);
         let a = session(&manager, &ws.id);
         let b = session(&manager, &ws.id);
-        let (sub_a, _) = manager.subscribe(&a.id, 0, SUBSCRIBER_LIMIT).unwrap();
-        let (sub_b, _) = manager.subscribe(&b.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub_a, _, _) = manager.subscribe(&a.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub_b, _, _) = manager.subscribe(&b.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager.send_prompt(&a.id, "only A".into(), "op-a").unwrap();
 
         let events_a = collect_terminal(&sub_a);
@@ -1416,8 +1428,8 @@ mod tests {
         let manager = manager(FakeConfig::default());
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (sub_a, snapshot_a) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
-        let (sub_b, snapshot_b) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub_a, snapshot_a, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub_b, snapshot_b, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         assert_eq!(snapshot_a, snapshot_b);
         assert_eq!(snapshot_a.len(), 2);
 
@@ -1441,7 +1453,7 @@ mod tests {
         let manager = manager(FakeConfig::default());
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (_sub, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (_sub, _, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager
             .send_prompt(&session.id, "first".into(), "op-1")
             .unwrap();
@@ -1457,7 +1469,7 @@ mod tests {
         let manager = manager(FakeConfig::default());
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (sub, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub, _, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         let first = manager
             .send_prompt(&session.id, "hi".into(), "same-key")
             .unwrap();
@@ -1498,7 +1510,7 @@ mod tests {
         });
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (sub, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub, _, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager
             .send_prompt(&session.id, "hi".into(), "op-1")
             .unwrap();
@@ -1524,7 +1536,7 @@ mod tests {
         });
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (sub, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub, _, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager
             .send_prompt(&session.id, "hi".into(), "op-1")
             .unwrap();
@@ -1574,7 +1586,7 @@ mod tests {
         });
         let ws = workspace(&manager);
         let session = session(&manager, &ws.id);
-        let (sub, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (sub, _, _) = manager.subscribe(&session.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager
             .send_prompt(&session.id, "hi".into(), "op-1")
             .unwrap();
@@ -1626,7 +1638,7 @@ mod tests {
         let manager = manager_at(FakeConfig::default(), path.clone());
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
-        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (subscription, _, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
         let receipt = manager
             .send_prompt(&ses.id, "remember me".into(), "durable-key")
             .unwrap();
@@ -1661,7 +1673,7 @@ mod tests {
         });
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
-        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (subscription, _, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager.send_prompt(&ses.id, "run".into(), "op-1").unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let approval = loop {
@@ -1710,7 +1722,7 @@ mod tests {
         });
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
-        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let (subscription, _, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
         manager.send_prompt(&ses.id, "run".into(), "op-1").unwrap();
         let approval = loop {
             match subscription.recv_event(Duration::from_millis(100)) {

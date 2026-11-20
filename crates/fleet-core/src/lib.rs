@@ -60,7 +60,7 @@ struct OperationRecord {
 
 enum DriverCommand {
     Prompt { text: String, turn_id: String },
-    Close { done: Sender<()> },
+    Close { done: Sender<Result<(), AgentError>> },
 }
 
 struct DriverHandle {
@@ -205,8 +205,9 @@ impl EventBus {
             match subscriber.tx.try_send(event.clone()) {
                 Ok(()) => true,
                 Err(mpsc::TrySendError::Full(_)) => {
-                    subscriber.cancelled.store(true, Ordering::SeqCst);
+                    // Comunicar Overflow antes de cancelar, para no perder el motivo.
                     let _ = subscriber.signal_tx.send(SubscriberSignal::Overflow);
+                    subscriber.cancelled.store(true, Ordering::SeqCst);
                     overflowed.push(*id);
                     false
                 }
@@ -399,15 +400,9 @@ impl SessionManager {
                     }
                 }
                 Ok(DriverCommand::Close { done }) => {
-                    if let Err(error) = driver.close() {
-                        manager.publish_local(
-                            &session_id,
-                            EventKind::AgentError {
-                                message: error.to_string(),
-                            },
-                        );
-                    }
-                    let _ = done.send(());
+                    let outcome = driver.close();
+                    manager.finish_stop(&session_id, &outcome);
+                    let _ = done.send(outcome);
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -748,7 +743,66 @@ impl SessionManager {
         Ok((subscription, snapshot))
     }
 
-    /// Cierre acotado: nunca espera indefinidamente a un driver bloqueado.
+    /// El worker confirma el cierre real, incluso si el cliente agotó su plazo.
+    fn finish_stop(&self, session_id: &str, result: &Result<(), AgentError>) {
+        let mut state = self.state.lock().expect("manager poisoned");
+        let Some(record) = state.sessions.get_mut(session_id) else {
+            return;
+        };
+        if !matches!(
+            record.summary.state,
+            SessionState::Stopping | SessionState::StopUnconfirmed
+        ) {
+            return;
+        }
+        let new_state = if result.is_ok() {
+            SessionState::Stopped
+        } else {
+            SessionState::StopUnconfirmed
+        };
+        record.summary.state = new_state;
+        self.publish_locked(
+            &mut state,
+            session_id,
+            EventKind::SessionStateChanged { state: new_state },
+        );
+        if let Err(error) = result {
+            self.publish_locked(
+                &mut state,
+                session_id,
+                EventKind::AgentError {
+                    message: format!("driver close could not be confirmed: {error}"),
+                },
+            );
+        }
+    }
+
+    fn mark_stop_unconfirmed(&self, session_id: &str, reason: &str) {
+        let mut state = self.state.lock().expect("manager poisoned");
+        let Some(record) = state.sessions.get_mut(session_id) else {
+            return;
+        };
+        if record.summary.state != SessionState::Stopping {
+            return;
+        }
+        record.summary.state = SessionState::StopUnconfirmed;
+        self.publish_locked(
+            &mut state,
+            session_id,
+            EventKind::SessionStateChanged {
+                state: SessionState::StopUnconfirmed,
+            },
+        );
+        self.publish_locked(
+            &mut state,
+            session_id,
+            EventKind::AgentNotice {
+                message: reason.to_string(),
+            },
+        );
+    }
+
+    /// Cierre acotado: Stopped solo significa cierre confirmado.
     pub fn stop_session(&self, session_id: &str) -> Result<(), AgentError> {
         let (handle, active_turn, operation_id) = {
             let mut state = self.state.lock().expect("manager poisoned");
@@ -765,7 +819,7 @@ impl SessionManager {
             })?;
             let active_turn = record.active_turn.take();
             let operation_id = record.current_operation.take();
-            record.summary.state = SessionState::Stopped;
+            record.summary.state = SessionState::Stopping;
             if let Some(turn_id) = &active_turn {
                 record.summary.turn_state = TurnState::Uncertain;
                 self.publish_locked(
@@ -781,7 +835,7 @@ impl SessionManager {
                 &mut state,
                 session_id,
                 EventKind::SessionStateChanged {
-                    state: SessionState::Stopped,
+                    state: SessionState::Stopping,
                 },
             );
             if let Some(operation_id) = operation_id.clone() {
@@ -796,23 +850,25 @@ impl SessionManager {
         };
         let _ = (active_turn, operation_id);
         let (done_tx, done_rx) = mpsc::channel();
-        if handle
-            .commands
-            .send(DriverCommand::Close { done: done_tx })
-            .is_err()
-            || done_rx.recv_timeout(Duration::from_millis(500)).is_err()
-        {
-            self.publish_local(
-                session_id,
-                EventKind::AgentNotice {
-                    message: "driver did not acknowledge close within 500ms; thread detached"
-                        .into(),
-                },
-            );
+        let outcome = match handle.commands.send(DriverCommand::Close { done: done_tx }) {
+            Ok(()) => match done_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(result) => result,
+                Err(_) => Err(AgentError {
+                    code: "StopUnconfirmed".into(),
+                    message: "driver has not confirmed close within 500ms; execution may continue".into(),
+                }),
+            },
+            Err(_) => Err(AgentError {
+                code: "StopUnconfirmed".into(),
+                message: "driver command channel closed; cannot confirm termination".into(),
+            }),
+        };
+        if let Err(error) = &outcome {
+            self.mark_stop_unconfirmed(session_id, &error.message);
         }
-        // No se hace join incondicional: un driver bloqueado no debe colgar el cierre.
+        // El worker puede confirmar Stopped más tarde; no hacemos join bloqueante.
         drop(handle.join);
-        Ok(())
+        outcome
     }
 }
 
@@ -1078,8 +1134,18 @@ mod tests {
             .unwrap();
         let _ = collect_terminal(&sub);
         let started = std::time::Instant::now();
-        manager.stop_session(&session.id).unwrap();
+        let error = manager.stop_session(&session.id).unwrap_err();
+        assert_eq!(error.code, "StopUnconfirmed");
         assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(manager.list_sessions()[0].state, SessionState::StopUnconfirmed);
+    }
+
+    #[test]
+    fn confirmed_stop_is_stopped() {
+        let manager = manager(FakeConfig::default());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        manager.stop_session(&ses.id).unwrap();
         assert_eq!(manager.list_sessions()[0].state, SessionState::Stopped);
     }
 

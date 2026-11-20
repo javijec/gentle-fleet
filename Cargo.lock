@@ -95,6 +95,7 @@ dependencies = [
  "fleet-domain",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

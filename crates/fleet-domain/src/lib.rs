@@ -89,6 +89,8 @@ pub struct ProviderDescriptor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionState {
     Running,
+    Stopping,
+    StopUnconfirmed,
     Stopped,
     Failed,
 }

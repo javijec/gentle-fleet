@@ -31,9 +31,9 @@ fn main() -> std::io::Result<()> {
     registry.register(Box::new(FakeFactory::with_config(fake_config)));
     registry.register(Box::new(OpenCodeFactory));
     let manager = Arc::new(SessionManager::new(registry));
-    let expected = expected_token()?;
-
+    // bind() crea el token de Windows: no leerlo antes.
     let listener = LocalListener::bind()?;
+    let expected = expected_token()?;
     println!("fleetd listening on {} ({WIRE})", listener.description());
 
     loop {
@@ -59,7 +59,6 @@ fn handle_client(
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let writer = Arc::new(Mutex::new(BufWriter::new(stream)));
-    let last_seq = Arc::new(AtomicU64::new(0));
     let mut subscription: Option<SubscriptionHandle> = None;
     let mut authenticated = false;
 
@@ -199,7 +198,8 @@ fn handle_client(
                 match manager.subscribe(&session_id, since_seq, limit) {
                     Ok((new_subscription, snapshot)) => {
                         let latest = snapshot.last().map(|event| event.seq).unwrap_or(since_seq);
-                        last_seq.store(latest, Ordering::SeqCst);
+                        // Cada suscripción tiene cursor propio.
+                        let last_seq = Arc::new(AtomicU64::new(since_seq));
                         if let Some(old) = subscription.take() {
                             old.cancel();
                             manager.bus().unsubscribe(old.id);
@@ -261,11 +261,15 @@ fn forward_events(
     last_seq: Arc<AtomicU64>,
 ) {
     loop {
-        if subscription.cancelled.load(Ordering::SeqCst) {
-            break;
-        }
-        if let Ok(Some(fleet_core::SubscriberSignal::Overflow)) =
-            subscription.recv_signal(Duration::from_millis(50))
+        let overflow = matches!(
+            subscription.recv_signal(Duration::from_millis(1)),
+            Ok(Some(fleet_core::SubscriberSignal::Overflow))
+        );
+        if overflow || (subscription.cancelled.load(Ordering::SeqCst)
+            && matches!(
+                subscription.recv_signal(Duration::from_millis(1)),
+                Ok(Some(fleet_core::SubscriberSignal::Overflow))
+            ))
         {
             let _ = write_frame(
                 &mut *writer.lock().expect("writer poisoned"),
@@ -280,6 +284,9 @@ fn forward_events(
             );
             break;
         }
+        if subscription.cancelled.load(Ordering::SeqCst) {
+            break;
+        }
         match subscription.recv_event(Duration::from_millis(50)) {
             Ok(Some(event)) => {
                 if event.seq <= last_seq.load(Ordering::SeqCst) {
@@ -291,7 +298,11 @@ fn forward_events(
                     seq: event.seq,
                     event,
                 };
-                if write_frame(&mut *writer.lock().expect("writer poisoned"), &frame).is_err() {
+                let mut guard = writer.lock().expect("writer poisoned");
+                if subscription.cancelled.load(Ordering::SeqCst) {
+                    break;
+                }
+                if write_frame(&mut *guard, &frame).is_err() {
                     break;
                 }
             }

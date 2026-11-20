@@ -118,11 +118,8 @@ impl LocalListener {
         std::fs::create_dir_all(runtime_dir())?;
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         let address = listener.local_addr()?;
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let token = format!("{}-{}", std::process::id(), nanos);
+        // UUID v4 utiliza aleatoriedad del sistema; PID/tiempo eran predecibles.
+        let token = uuid::Uuid::new_v4().to_string();
         std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
         std::fs::write(address_file(), address.to_string())?;
         Ok(Self::Tcp(listener))

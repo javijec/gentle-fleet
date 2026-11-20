@@ -65,3 +65,10 @@ Detalle en [`P1_1_RESULTS.md`](P1_1_RESULTS.md). Windows sigue sin validar.
 ## Política anti-parches
 
 Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afectado; demostrar test rojo; corregir en el módulo propietario; test verde; buscar regresiones. Si dos correcciones seguidas requieren tocar tres módulos no relacionados, detener el corte y revisar el límite arquitectónico. No perseguir una lista infinita de amenazas fuera del modelo local. Cada fase termina con un único documento breve de decisiones, no una auditoría integral de meses.
+
+### P2.1 — casos regresivos adicionales
+
+- `tests/e2e_long_replay.sh`: timeline de más de 256 eventos, comparación de 270 secuencias contiguas.
+- `tests/e2e_concurrency.sh`: un prompt rechazado por turno ocupado no reserva `operation_key`.
+- Unit tests: claves foráneas en cada nueva conexión, privacidad de ID nativo en el wire, estado de aprobación en `Dispatching` antes del ACK.
+- Verificar los resultados de GitHub Actions sobre el último commit; los smokes de OpenCode real son opt-in.

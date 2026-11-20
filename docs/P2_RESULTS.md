@@ -143,3 +143,47 @@ sesión tras reinicio y flujo de aprobación con FakeDriver.
   runner/binding se añadirán con su propio caso de uso, no en P2.
 - P4: los drivers Codex y Pi implementarán el mismo `AgentDriver` y traducirán
   sus decisiones nativas al modelo de aprobación común, reutilizando el store.
+
+## P2.1 — estabilización para revisión del agente
+
+Se corrigieron invariantes detectadas en la revisión de P2. La evidencia
+definitiva de CI debe consultarse contra el HEAD de esta rama, no inferirse
+de ejecuciones históricas.
+
+- `send_prompt`: valida sesión y turno antes de reservar `operation_key`; un
+  prompt rechazado no genera recibo falso. Repeticiones completadas conservan
+  su recibo; estados inciertos no provocan reenvío.
+- `answer_approval`: operación y claim de decisión se guardan en una única
+  transacción. La respuesta a `answer` es `dispatching` y NO significa
+  `accepted/rejected`. Solo el evento nativo de confirmación cambia el estado
+  final y genera `ApprovalResolved`. Misma clave y payload no vuelven a enviar.
+- `commit_event`: los eventos, la proyección de sesión, el estado terminal del
+  turno y de la operación y las aprobaciones se confirman en una transacción.
+  El cursor no avanza cuando falla ese commit.
+- `SubscribeTimeline`: conserva un high-water mark y pagina el historial
+  persistido antes de entregar eventos vivos. Un suscriptor lento sigue sujeto
+  a backpressure explícito, sin cola infinita.
+- Cada conexión SQLite activa `foreign_keys`; el directorio privado y el
+  archivo de base tienen permisos estrictos en Unix. Fleet no cambia permisos
+  de directorios preexistentes ajenos: rechaza rutas inseguras.
+- Al reiniciar el daemon, efectos `reserved/accepted`, turnos activos y
+  aprobaciones pendientes quedan `uncertain`; NO se reenvían.
+- Los IDs nativos de aprobación permanecen en SQLite y se omiten de JSON.
+- FakeDriver simula un permiso realmente bloqueante. Se agregaron pruebas
+  para prompts rechazados, foreign keys, falta de exposición de IDs nativos
+  y replay de 270 eventos.
+
+### Puntos de revisión solicitados
+
+1. Verificar el comportamiento transaccional en inyecciones de fallo SQLite,
+   especialmente cuando no se puede escribir el diagnóstico de incertidumbre.
+2. Revisar los estados de recuperación P2 frente a las garantías futuras de
+   runner independiente de P3: no intentar rescatar una sesión nativa por
+   intuición ni reenviar operaciones en estado incierto.
+3. Comprobar que la UI y el protocolo interpretan `dispatching` como decisión
+   registrada, **no** como decisión efectivamente entregada.
+4. Comprobar la semántica de los eventos OpenCode de versiones futuras; los
+   smokes reales de OpenCode deben volver a ejecutarse en la máquina local.
+5. Windows y el aislamiento entre UIDs no fueron verificados en esta revisión.
+
+No se modifica `main` ni se implementa P3, P4, SSH o GPUI aquí.

@@ -74,3 +74,7 @@ Al arrancar, fleetd abre el store, marca operaciones InFlight como Recovering y 
 ## Reglas de parada
 
 StopSession es una operación explícita y auditable: pide al driver cancelación o shutdown según sus capacidades, espera un plazo acotado y puede escalar a matar el proceso bajo una política configurable. La salida del cliente no llama a StopSession. La limpieza de archivos y procesos solo ocurre cuando la propiedad y la finalización están verificadas.
+
+### Cierre verificado (P1.1.1)
+
+`StopSession` transita `Running → Stopping → Stopped` solo cuando `AgentDriver::close` confirma la terminación. Un fallo de confirmación o timeout produce `StopUnconfirmed`, nunca `Stopped`. Un worker que complete `close` posteriormente puede confirmar `Stopped` de forma asíncrona. Esta transición no presupone que sea seguro volver a ejecutar un prompt.

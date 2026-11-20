@@ -18,3 +18,9 @@ jobs:
       - run: cargo build --workspace
       - name: e2e con FakeDriver (sin servicios de pago)
         run: tests/e2e_fake.sh
+      - name: e2e concurrencia y aislamiento
+        run: tests/e2e_concurrency.sh
+      - name: e2e backpressure
+        run: tests/e2e_backpressure.sh
+      - name: e2e permisos de socket (sin root: solo modo de archivos)
+        run: tests/e2e_unix_permissions.sh

@@ -74,11 +74,16 @@ diff -u "$RUNTIME/p1.out" "$RUNTIME/p3.out"
 echo "PASS: duplicate operation key returned the same receipt"
 
 START=$(date +%s%N)
-"$BIN/fleetctl" stop "$C" >/dev/null
+set +e
+"$BIN/fleetctl" stop "$C" >"$RUNTIME/stop.out" 2>"$RUNTIME/stop.err"
+STOP_RC=$?
+set -e
 END=$(date +%s%N)
 ELAPSED_MS=$(( (END - START) / 1000000 ))
-if (( ELAPSED_MS > 2000 )); then echo "FAIL: stop blocked for ${ELAPSED_MS}ms"; exit 1; fi
-if ! "$BIN/fleetctl" session list | awk -F '\t' -v id="$C" '$1==id && $4=="Stopped" {found=1} END{exit !found}'; then
-  echo "FAIL: stopped session is not observable as Stopped"; exit 1
+if (( ELAPSED_MS > 2000 )); then echo "FAIL: stop blocked for too long"; exit 1; fi
+if (( STOP_RC == 0 )); then echo "FAIL: blocked driver reported successful stop"; exit 1; fi
+grep -q "StopUnconfirmed" "$RUNTIME/stop.err" || { echo "FAIL: missing unconfirmed stop error"; exit 1; }
+if ! "$BIN/fleetctl" session list | awk -F '\t' -v id="$C" '$1==id && $4=="StopUnconfirmed" {found=1} END{exit !found}'; then
+  echo "FAIL: blocked driver did not enter StopUnconfirmed"; exit 1
 fi
-echo "PASS: stop with blocked driver is bounded (${ELAPSED_MS}ms)"
+echo "PASS: blocked driver stop is bounded and explicitly unconfirmed"

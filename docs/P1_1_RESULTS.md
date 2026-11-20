@@ -106,3 +106,17 @@ ningún tipo HTTP/SSE. `SessionManager` recibe un `ProviderRegistry` y solo
 conoce `AgentDriver`, `AgentEvent` y `DomainEvent`. Los IDs nativos de OpenCode
 siguen confinados en `fleet-driver-opencode`. Codex y Gentle Shell/Pi podrán
 registrarse en P4 sin modificar `SessionManager`.
+
+## Revisión posterior P1.1.1 — 20/11/2026
+
+Cambios realizados en la misma rama, pendientes de validación final en CI:
+
+- `StopSession` solo devuelve éxito y `Stopped` si el driver confirmó `close()`; un timeout es `StopUnconfirmed`, y el worker puede confirmar `Stopped` más tarde.
+- OpenCode comprueba la respuesta HTTP del `DELETE` en lugar de ignorarla; un resultado incierto no se reporta como cerrado.
+- `Overflow` se notifica antes de cancelar y el reenviador comprueba la señal antes de terminar.
+- Cada `SubscribeTimeline` tiene cursor propio; el reenviador anterior no publica después de cancelarse.
+- El driver OpenCode espera `session.execution.started`, usa la secuencia nativa observada y `assistantMessageID` del paso para descartar eventos viejos. No se afirma que estos campos sean un contrato universal de otras versiones.
+- Windows genera token aleatorio UUID v4 y lo lee después de crear el listener. Sigue **NO VALIDADO** el aislamiento de ACL en Windows; no publicar soporte de seguridad Windows aún.
+- El test de otro usuario Linux declara `UNTESTED` cuando no dispone de privilegios para ejecutar `runuser`; ya no confunde falta de permiso para ejecutar `runuser` con rechazo del socket.
+
+**Pendientes explícitos:** no hay todavía una garantía criptográfica de vinculación entre el prompt y todos los eventos de ejecución de OpenCode; P2 deberá implementar reconciliación basada en el historial nativo cuando existan huecos. La muerte real de un runner atascado es P3, no un cierre simulado. El transporte Windows no está validado para otro usuario.

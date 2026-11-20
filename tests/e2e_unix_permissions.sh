@@ -33,8 +33,8 @@ echo "socket mode=$MODE runtime dir mode=$DIR_MODE"
 [[ "$MODE" == "600" ]] || { echo "FAIL: socket is not 0600"; exit 1; }
 [[ "$DIR_MODE" == "700" ]] || { echo "FAIL: runtime dir is not 0700"; exit 1; }
 
-if ! id nobody >/dev/null 2>&1 || ! command -v runuser >/dev/null 2>&1; then
-  echo "UNTESTED: no 'nobody' user or runuser available; filesystem modes verified only"
+if [[ "$EUID" -ne 0 ]] || ! id nobody >/dev/null 2>&1 || ! command -v runuser >/dev/null 2>&1; then
+  echo "UNTESTED: cross-user check requires root, nobody and runuser; filesystem modes verified"
   exit 0
 fi
 

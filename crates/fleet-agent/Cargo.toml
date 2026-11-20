@@ -1,0 +1,8 @@
+[package]
+name = "fleet-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }

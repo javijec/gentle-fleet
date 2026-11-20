@@ -1,0 +1,300 @@
+//! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
+
+use std::io::{BufReader, BufWriter};
+use std::net::TcpStream;
+use std::path::PathBuf;
+
+use fleet_domain::EventKind;
+use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
+
+struct Client {
+    reader: BufReader<TcpStream>,
+    writer: BufWriter<TcpStream>,
+    next_id: u64,
+}
+
+impl Client {
+    fn connect() -> Result<Self, String> {
+        let mut path = std::env::var_os("FLEET_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("gentle-fleet"));
+        path.push("fleetd.addr");
+        let address = std::fs::read_to_string(&path).map_err(|e| {
+            format!(
+                "cannot read {:?} (is fleetd running?): {e}",
+                path.file_name()
+            )
+        })?;
+        let stream = TcpStream::connect(address.trim())
+            .map_err(|e| format!("cannot connect to fleetd at {}: {e}", address.trim()))?;
+        Ok(Self {
+            reader: BufReader::new(stream.try_clone().map_err(|e| e.to_string())?),
+            writer: BufWriter::new(stream),
+            next_id: 0,
+        })
+    }
+
+    fn send(&mut self, request: Request) -> Result<String, String> {
+        self.next_id += 1;
+        let request_id = format!("r{}", self.next_id);
+        write_frame(
+            &mut self.writer,
+            &Frame::Request {
+                request_id: request_id.clone(),
+                request,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(request_id)
+    }
+
+    fn read_frame(&mut self) -> Result<Frame, String> {
+        read_frame(&mut self.reader)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "fleetd closed the connection".into())
+    }
+
+    fn call(&mut self, request: Request) -> Result<Response, String> {
+        let request_id = self.send(request)?;
+        loop {
+            match self.read_frame()? {
+                Frame::Response {
+                    request_id: id,
+                    result,
+                } if id == request_id => {
+                    return result.map_err(|e| format!("{}: {}", e.code, e.message));
+                }
+                Frame::Event { .. } => continue,
+                _ => continue,
+            }
+        }
+    }
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("error: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(command) = args.first() else {
+        return Err(usage());
+    };
+    match command.as_str() {
+        "workspace" => workspace(&args[1..]),
+        "session" => session(&args[1..]),
+        "prompt" => prompt(&args[1..]),
+        "watch" => watch(&args[1..]),
+        "stop" => stop(&args[1..]),
+        "agents" => {
+            let mut client = Client::connect()?;
+            client.call(Request::Hello {
+                client_id: "fleetctl".into(),
+            })?;
+            match client.call(Request::ListAgents)? {
+                Response::Agents { agents } => {
+                    for agent in agents {
+                        println!("{}\t{}\t{}", agent.id, agent.version, agent.mode);
+                    }
+                    Ok(())
+                }
+                other => Err(format!("unexpected response: {other:?}")),
+            }
+        }
+        _ => Err(usage()),
+    }
+}
+
+fn usage() -> String {
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl agents"
+        .into()
+}
+
+fn workspace(args: &[String]) -> Result<(), String> {
+    let mut client = Client::connect()?;
+    client.call(Request::Hello {
+        client_id: "fleetctl".into(),
+    })?;
+    match args.first().map(String::as_str) {
+        Some("add") => {
+            let path = args.get(1).ok_or_else(usage)?;
+            match client.call(Request::RegisterWorkspace { path: path.clone() })? {
+                Response::WorkspaceRegistered { workspace } => {
+                    println!("{}\t{}", workspace.id, workspace.path);
+                    Ok(())
+                }
+                other => Err(format!("unexpected response: {other:?}")),
+            }
+        }
+        Some("list") => match client.call(Request::ListWorkspaces)? {
+            Response::Workspaces { workspaces } => {
+                for workspace in workspaces {
+                    println!("{}\t{}", workspace.id, workspace.path);
+                }
+                Ok(())
+            }
+            other => Err(format!("unexpected response: {other:?}")),
+        },
+        _ => Err(usage()),
+    }
+}
+
+fn session(args: &[String]) -> Result<(), String> {
+    let mut client = Client::connect()?;
+    client.call(Request::Hello {
+        client_id: "fleetctl".into(),
+    })?;
+    match args.first().map(String::as_str) {
+        Some("create") => {
+            let workspace = flag(args, "--workspace").ok_or_else(usage)?;
+            let provider = flag(args, "--provider").unwrap_or_else(|| "opencode".into());
+            match client.call(Request::CreateSession {
+                workspace_id: workspace,
+                provider_id: provider,
+            })? {
+                Response::SessionCreated { session } => {
+                    println!("{}\t{}\t{}", session.id, session.provider_id, session.state);
+                    Ok(())
+                }
+                other => Err(format!("unexpected response: {other:?}")),
+            }
+        }
+        Some("list") => match client.call(Request::ListSessions)? {
+            Response::Sessions { sessions } => {
+                for session in sessions {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        session.id, session.provider_id, session.workspace_id, session.state
+                    );
+                }
+                Ok(())
+            }
+            other => Err(format!("unexpected response: {other:?}")),
+        },
+        _ => Err(usage()),
+    }
+}
+
+fn prompt(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let text = args[1..].join(" ");
+    if text.is_empty() {
+        return Err(usage());
+    }
+    let operation_key = uuid::Uuid::new_v4().to_string();
+    let mut client = Client::connect()?;
+    client.call(Request::Hello {
+        client_id: "fleetctl".into(),
+    })?;
+    match client.call(Request::SendPrompt {
+        session_id,
+        text,
+        operation_key,
+    })? {
+        Response::PromptAccepted {
+            operation_id,
+            session_id,
+            turn_id,
+        } => {
+            println!("{operation_id}\t{session_id}\t{turn_id}");
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn stop(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Request::Hello {
+        client_id: "fleetctl".into(),
+    })?;
+    match client.call(Request::StopSession { session_id })? {
+        Response::Stopped { session_id } => {
+            println!("stopped\t{session_id}");
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn watch(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let since = flag(args, "--since")
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|e| format!("invalid --since: {e}"))?
+        .unwrap_or(0);
+    let until_turn_end = args.iter().any(|a| a == "--until-turn-end");
+    let count = flag(args, "--count")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|e| format!("invalid --count: {e}"))?;
+    let mut client = Client::connect()?;
+    client.call(Request::Hello {
+        client_id: "fleetctl".into(),
+    })?;
+    let request_id = client.send(Request::SubscribeTimeline {
+        session_id: session_id.clone(),
+        since_seq: since,
+    })?;
+    let mut last_seq = since;
+    let mut printed = 0usize;
+    loop {
+        match client.read_frame()? {
+            Frame::Response {
+                request_id: id,
+                result,
+            } if id == request_id => {
+                let latest = match result.map_err(|e| format!("{}: {}", e.code, e.message))? {
+                    Response::Subscribed { latest_seq, .. } => latest_seq,
+                    other => return Err(format!("unexpected response: {other:?}")),
+                };
+                eprintln!("subscribed\t{session_id}\tlatest={latest}");
+            }
+            Frame::Event { seq, event, .. } => {
+                if seq <= last_seq {
+                    continue; // deducción defensiva, nunca duplica mensajes
+                }
+                last_seq = seq;
+                println!("{}\t{}", seq, describe(&event.kind));
+                printed += 1;
+                if count.is_some_and(|limit| printed >= limit) {
+                    return Ok(());
+                }
+                if until_turn_end && matches!(event.kind, EventKind::TurnCompleted { .. }) {
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn describe(kind: &EventKind) -> String {
+    match kind {
+        EventKind::SessionCreated { provider_id, .. } => format!("session_created\t{provider_id}"),
+        EventKind::SessionStateChanged { state } => format!("session_state\t{state:?}"),
+        EventKind::TurnStarted { .. } => "turn_started".into(),
+        EventKind::UserMessage { text, .. } => format!("user\t{text}"),
+        EventKind::AssistantDelta { text, .. } => format!("delta\t{text}"),
+        EventKind::AssistantMessage { text, .. } => format!("assistant\t{text}"),
+        EventKind::ToolStarted { name, input, .. } => format!("tool_started\t{name}\t{input}"),
+        EventKind::ToolOutput { name, output, .. } => format!("tool_output\t{name}\t{output}"),
+        EventKind::ToolCompleted { name, success, .. } => {
+            format!("tool_completed\t{name}\t{success}")
+        }
+        EventKind::TurnCompleted { status, .. } => format!("turn_completed\t{status:?}"),
+        EventKind::AgentError { message } => format!("agent_error\t{message}"),
+    }
+}
+
+fn flag(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1))
+        .cloned()
+}

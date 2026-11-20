@@ -1,0 +1,12 @@
+[package]
+name = "fleet-driver-opencode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }
+fleet-agent = { path = "../fleet-agent" }
+serde_json.workspace = true
+reqwest.workspace = true
+base64.workspace = true

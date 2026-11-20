@@ -234,6 +234,8 @@ struct ManagerState {
     sessions: HashMap<SessionId, SessionRecord>,
     approvals: HashMap<String, ApprovalRequest>,
     next_ids: u64,
+    /// Once a durable commit fails, reject further new effects until restart.
+    storage_fault: Option<String>,
 }
 
 pub struct SessionManager {
@@ -244,6 +246,16 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    fn ensure_writable(state: &ManagerState) -> Result<(), AgentError> {
+        if let Some(reason) = &state.storage_fault {
+            return Err(AgentError {
+                code: "StorageUnavailable".into(),
+                message: format!("Fleet storage failed; restart and reconcile before new operations: {reason}"),
+            });
+        }
+        Ok(())
+    }
+
     pub fn new(
         registry: ProviderRegistry,
         store: Arc<dyn SessionStore>,
@@ -257,6 +269,7 @@ impl SessionManager {
                 sessions: HashMap::new(),
                 approvals: HashMap::new(),
                 next_ids: 0,
+                storage_fault: None,
             }),
         };
         manager.load_from_store()?;
@@ -368,6 +381,7 @@ impl SessionManager {
         if let Some(existing) = state.workspaces.iter().find(|w| w.path == path) {
             return Ok(existing.clone());
         }
+        Self::ensure_writable(&state)?;
         let workspace = WorkspaceSummary {
             id: Self::next_id_locked(&mut state, "ws"),
             path,
@@ -399,6 +413,7 @@ impl SessionManager {
     ) -> Result<SessionSummary, AgentError> {
         let workspace = {
             let state = self.state.lock().expect("manager poisoned");
+            Self::ensure_writable(&state)?;
             state
                 .workspaces
                 .iter()
@@ -550,9 +565,10 @@ impl SessionManager {
         kind: EventKind,
         approval: Option<&ApprovalRequest>,
     ) -> Result<(), AgentError> {
+        Self::ensure_writable(state)?;
         let record = state
             .sessions
-            .get_mut(session_id)
+            .get(session_id)
             .expect("session disappeared while publishing");
         let seq = record.next_seq;
         let event = Event {
@@ -571,11 +587,14 @@ impl SessionManager {
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        self.store
-            .commit_event(&event, &projection, approval)
-            .map_err(to_agent_error)?;
-        // Never advance seq on a failed commit: replay must remain gap-free.
-        record.next_seq += 1;
+        if let Err(error) = self.store.commit_event(&event, &projection, approval) {
+            // The driver may still have side effects, but Fleet cannot safely
+            // acknowledge or start another operation while durable evidence is
+            // unavailable. The next daemon start marks in-flight work uncertain.
+            state.storage_fault = Some(error.message.clone());
+            return Err(to_agent_error(error));
+        }
+        state.sessions.get_mut(session_id).expect("session checked").next_seq += 1;
         self.bus.publish(&event);
         Ok(())
     }
@@ -870,6 +889,7 @@ impl SessionManager {
         operation_key: &str,
     ) -> Result<ApprovalRequest, AgentError> {
         let mut state = self.state.lock().expect("manager poisoned");
+        Self::ensure_writable(&state)?;
         let approval = state
             .approvals
             .get(approval_id)
@@ -1026,6 +1046,7 @@ impl SessionManager {
                 turn_id: existing.target_id.unwrap_or_default(),
             });
         }
+        Self::ensure_writable(&state)?;
         {
             let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
                 code: "not_found".into(),
@@ -1685,6 +1706,31 @@ mod tests {
                 can_attach_service: false,
             }
         );
+    }
+
+    #[test]
+    fn durable_commit_failure_blocks_new_provider_effects() {
+        use fleet_domain::store::SessionStore;
+        let path = unique_db_path();
+        let manager = manager_at(FakeConfig::default(), path.clone());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let store = fleet_store_sqlite::SqliteStore::open(path).unwrap();
+        // An unexpected durable event occupies the next Fleet cursor.
+        // The subsequent commit must fail without advancing seq or publishing.
+        store.append_event(&Event {
+            event_id: "external-conflict".into(),
+            session_id: ses.id.clone(),
+            seq: 3,
+            created_at_ms: now_ms(),
+            kind: EventKind::AgentNotice { message: "conflict".into() },
+        }).unwrap();
+        let failure = manager.send_prompt(&ses.id, "first".into(), "faulty-key")
+            .expect_err("durable sequence conflict must reject");
+        assert_eq!(failure.code, "sequence_conflict");
+        let second = manager.send_prompt(&ses.id, "second".into(), "another-key")
+            .expect_err("storage fault must prohibit new provider effects");
+        assert_eq!(second.code, "StorageUnavailable");
     }
 
     #[test]

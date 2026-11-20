@@ -71,6 +71,25 @@ El driver entrega solicitud estructurada; SessionManager la registra, crea appro
 
 Al arrancar, fleetd abre el store, marca operaciones InFlight como Recovering y consulta runner descriptors locales; usa handshake autenticado con identidad persistida y nonce para saber cuál runner controla cada sesión. Si no se encuentra, diferencia process_dead, descriptor_missing y unknown; un timeout no equivale a muerte. Después consume unacked runner events, reconstruye el estado del proveedor y publica RecoveryNotice. Una recuperación nunca reescribe la historia pasada como si el proveedor hubiera contestado algo que no se observó.
 
+## P2: estados durables y aprobaciones
+
+Las sesiones, turnos, operaciones, eventos y aprobaciones se guardan en SQLite.
+Al reiniciar `fleetd` sin runner verificado, una sesión antes `Running` se carga
+como `NeedsReconciliation` con `turn_state=Uncertain`: no se simula que el turno
+sigue vivo y no se reenvía ningún prompt. Un cliente desconectado no cambia el
+estado de la sesión; un cliente reiniciado reconstruye la timeline desde un
+cursor. La supervivencia del runner es P3.
+
+Ciclo de la operación: `Reserved → Accepted → Completed | Failed | Uncertain`.
+La reserva precede al efecto externo. Un resultado incierto nunca se reenvía.
+
+Una aprobación sigue `Pending → Delivered → Accepted | Rejected | Uncertain`.
+El SessionManager crea el `approval_id`, persiste el recurso y publica
+`ApprovalRequested`. `AnswerApproval` solo acepta la primera decisión válida; un
+segundo cliente recibe `Conflict`. No hay aprobación automática por timeout,
+desconexión ni ausencia de respuesta. Si el proveedor no confirma la entrega, el
+estado queda `Uncertain` y requiere reconciliación explícita.
+
 ## Reglas de parada
 
 StopSession es una operación explícita y auditable: pide al driver cancelación o shutdown según sus capacidades, espera un plazo acotado y puede escalar a matar el proceso bajo una política configurable. La salida del cliente no llama a StopSession. La limpieza de archivos y procesos solo ocurre cuando la propiedad y la finalización están verificadas.

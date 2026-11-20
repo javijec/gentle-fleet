@@ -46,7 +46,7 @@ Referencia: https://learn.chatgpt.com/docs/app-server
 
 Priorizar su API/servidor soportado por la versión instalada, no analizar salida TUI. Detectar si el proveedor dispone ya de un servidor por usuario y evitar iniciar instancias duplicadas sin necesidad. Mapear session IDs, eventos, prompts, permissions e historial a la misma interfaz AgentDriver. El proceso dueño real de la sesión podría ser el propio servidor OpenCode; la entidad Runner maneja el attach, no debe suponer un hijo exclusivamente suyo.
 
-P0 confirmó en 2.3.2: attach al servicio de usuario con password de `service.json`, SSE en `/api/event`, `permission.asked` + `POST .../reply` con `once|always|reject`, persistencia tras reinicio y store global que exige filtrar por `location.directory`. Detalle y evidencia en [`research/OPENCODE.md`](research/OPENCODE.md). Es el candidato recomendado para el primer driver real de P1 (P0-D1, pendiente de ratificación).
+P0 confirmó en 2.3.2: attach al servicio de usuario con password de `service.json`, SSE en `/api/event`, `permission.asked` + `POST .../reply` con `once|always|reject`, persistencia tras reinicio y store global que exige filtrar por `location.directory`. Detalle y evidencia en [`research/OPENCODE.md`](research/OPENCODE.md). Es el primer driver real (P0-D1 ratificada). En P2 implementa además la traducción de aprobaciones: `permission.asked` → `ApprovalRequested`, `POST .../reply` para entregar la decisión y `permission.replied` como confirmación. Codex y Pi harán su propia traducción en P4 reutilizando el mismo modelo de dominio.
 
 Referencias: https://opencode.ai/docs/cli y https://opencode.ai/docs/api
 

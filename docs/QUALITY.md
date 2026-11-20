@@ -45,6 +45,14 @@ T12 CLI remoto sobre SSH (P5) produce los mismos eventos/errores que local.
 
 Detalle en [`P1_1_RESULTS.md`](P1_1_RESULTS.md). Windows sigue sin validar.
 
+### P2 — ejecutadas y en verde
+
+- 25 tests unitarios (store, migración, integridad, cursor, idempotencia, aprobaciones y recuperación).
+- `tests/e2e_persistence.sh`: timeline antes/después de reiniciar `fleetd` y clave reutilizada sin reenvío.
+- `tests/e2e_approvals.sh`: un solo ganador, rechazo y evento observable.
+- `tests/e2e_opencode_approval.sh`: smoke real opt-in con `once` y `reject`.
+- P1.1 y smoke real de OpenCode sin regresiones; detalle en [`P2_RESULTS.md`](P2_RESULTS.md).
+
 ## Criterios de aceptación por historia
 
 - Cada historia vertical tiene una prueba que cruza **cliente SDK → Fleet API → SessionManager → Driver → respuesta/eventos → cliente**.

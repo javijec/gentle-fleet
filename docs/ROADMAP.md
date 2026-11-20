@@ -14,7 +14,9 @@
 
 ## P2: persistencia y aprobación
 
-**Salida**: SQLite única con sesiones, operaciones y eventos, idempotencia antes de efecto, ack y timeline reconstruible; solicita/aprueba/deniega permiso; el cliente puede cerrarse, reiniciarse y leer eventos con cursor. Probar cortes antes/después de commit, doble decisión, gap y colas llenas. No prometer supervivencia al daemon crash todavía.
+**Salida**: SQLite única con sesiones, turnos, operaciones, eventos y aprobaciones; idempotencia antes de efecto y timeline reconstruible por cursor; aprobaciones de OpenCode con una sola decisión ganadora. El cliente puede cerrarse, reiniciarse y leer eventos con cursor. No prometer supervivencia al daemon crash todavía.
+
+**Estado (20/11/2026): CERRADO.** Ver [`P2_RESULTS.md`](P2_RESULTS.md): WAL y migraciones, `ReadTimeline`, `GetOperation`, aprobaciones (`once`/`reject`) y e2e de persistencia, reinicio, carreras y backpressure en verde. Windows sigue sin validar; P3 incorporará el runner independiente.
 
 ## P3: runner persistente y reconexión de daemon
 

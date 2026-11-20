@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0 CERRADO**, **P1 CERRADO** y **P1.1 CERRADO** (20/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Primer driver real: OpenCode; Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md` y `docs/P1_1_RESULTS.md`.
+**Estado:** **P0, P1, P1.1 y P2 CERRADOS** (20/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Persistencia SQLite y aprobaciones operativas con OpenCode. Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md` y `docs/P2_RESULTS.md`.
 
 ## Regla de avance
 
@@ -11,7 +11,7 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P0 — Compatibilidad real ✅ **CERRADO** | Spikes de Gentle Shell, Codex y OpenCode en versiones fijadas; fixtures de chat, herramientas, permisos y recuperación | Cumplido: 3 probes con `PASS`, capturas anonimizadas, `docs/P0_FINDINGS.md` y `docs/research/`; P0-D1…D6 ratificadas |
 | P1 — Un chat local con OpenCode ✅ **CERRADO** | Un CLI registra workspace, crea sesión con `provider_id=opencode`, envía prompt y recibe texto y herramientas mediante Fleet API | Cumplido: FakeDriver + smoke real con OpenCode, dos clientes con la misma secuencia `seq`, fmt/clippy/test y e2e en verde; ver `docs/P1_RESULTS.md` |
 | P1.1 — Estabilización y concurrencia ✅ **CERRADO** | Sesiones y eventos aislados, un turno activo por sesión, idempotencia atómica, stop acotado, transporte local por usuario y colas acotadas | Cumplido: 15 tests unitarios, e2e de aislamiento/carrera/backpressure/ACL y smoke real con OpenCode; ver `docs/P1_1_RESULTS.md` |
-| P2 — Permisos y timeline | Requests de permiso resueltos una sola vez, timeline durable y replay por cursor | Tests de carrera, desconexión, lag y reinicio de cliente |
+| P2 — Permisos y timeline ✅ **CERRADO** | SQLite WAL con migraciones, timeline paginada por cursor, operaciones idempotentes y aprobaciones de OpenCode | Cumplido: 25 tests unitarios, e2e de persistencia/reinicio, aprobaciones con un ganador y smoke real con `once`/`reject`; ver `docs/P2_RESULTS.md` |
 | P3 — Persistencia de procesos | Runner independiente permite reconectar después de caída del daemon | SIGKILL de daemon no pierde runner; reattach+replay sin duplicación; prueba Linux y Windows |
 | P4 — Drivers adicionales | Codex y después Gentle Shell/Pi integrados usando la interfaz de capacidades, sin cambiar el gestor de sesiones | Misma suite de contrato para los tres drivers; funciones no soportadas visibles; resume declarado por versión |
 | P5 — Cliente remoto | Cliente local conecta a Fleet en otro host vía SSH autenticado, misma API | Caída de SSH y reconexión; no se inicia worker duplicado; sin TCP abierto |

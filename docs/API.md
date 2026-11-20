@@ -27,11 +27,23 @@ Un único protocolo cliente/servidor independientemente de local (Unix socket / 
 | InterruptTurn | Pedir interrupción; no promete abort instantáneo | Sí |
 | StopSession | Cierre explícito; debe producir resultado observable | Sí |
 | GetSession / ListSessions | Estado observable, no inferido de caches de cliente | No |
-| SubscribeTimeline | Snapshot consistente + eventos live desde cursor, sin agujero entre ambos | No |
-| ReadTimeline | Leer páginas de eventos desde cursor (fallback/recovery) | No |
-| GetOperation | Estado de una operación aceptada, incluida incertidumbre | No |
+| SubscribeTimeline | Snapshot durable paginado + eventos live desde cursor, sin agujero entre ambos | No |
+| ReadTimeline | Leer páginas de hasta 256 eventos desde `since_seq` (fallback/recovery) | No |
+| GetOperation | Estado durable de una operación: `reserved`, `accepted`, `completed`, `failed` o `uncertain` | No |
+| ListApprovals / GetApproval | Listar o consultar solicitudes de aprobación por sesión | No |
+| AnswerApproval | Registrar la decisión ganadora de una aprobación; `once`/`always`/`reject` según el proveedor | Sí |
 
 Los nombres son propuestos, no un wire publicado. Mantener separado protocolo de API y mensaje nativo de agente.
+
+**P2:** los eventos se persisten en SQLite antes de publicarse; `seq` sigue siendo
+propiedad de Fleet y monotónico por sesión. `ApprovalRequested` y
+`ApprovalResolved` son eventos tipados; `native_request_id` permanece dentro del
+driver. Dos clientes pueden ver la misma aprobación, pero solo la primera
+decisión `AnswerApproval` se registra; las demás devuelven `Conflict`. Una
+aprobación sin respuesta nunca se autoaprueba. Si la entrega al proveedor es
+incierta, la aprobación y la operación pasan a `uncertain` y no se reintentan.
+`GetOperation` consulta el estado durable; `ReadTimeline` pagina desde un cursor
+sin cargar la timeline completa en RAM.
 
 ## Modelo mínimo de eventos tipados
 

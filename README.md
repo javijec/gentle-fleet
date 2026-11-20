@@ -1,6 +1,6 @@
 # Gentle Fleet 2.0 — proyecto reiniciado desde cero
 
-**Estado: P0 cerrado; P1 implementado y validado (primer driver real: OpenCode).** Fecha: 20 de noviembre de 2026.
+**Estado: P0, P1, P1.1 y P2 cerrados; persistencia SQLite y aprobaciones operativas con OpenCode.** Fecha: 20 de noviembre de 2026.
 
 Este es un **inicio limpio**: no se portan ni heredan los módulos de los repositorios anteriores. El historial de GitHub antiguo puede quedar archivado, pero sus decisiones y su código no son la base de esta versión. No se promete compatibilidad de bases SQLite ni del wire anterior; la compatibilidad comienza en el primer contrato publicado de v2.
 
@@ -54,6 +54,7 @@ Orquestación autónoma multiagente, worktrees automáticos, CI/CD, navegador, s
 
 - [Resultados reales de P1](docs/P1_RESULTS.md)
 - [Estabilización y concurrencia P1.1](docs/P1_1_RESULTS.md)
+- [Persistencia y aprobaciones P2](docs/P2_RESULTS.md)
 - [Código de los crates](crates/)
 - [Pruebas de proceso](tests/)
 

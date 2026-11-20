@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** proyecto nuevo en fase de diseño. Ninguna capacidad está implementada ni validada todavía.
+**Estado:** P0 ejecutado con los tres motores reales y listo para cierre (20/11/2026). No hay daemon, API ni esquema implementado todavía. Ver `docs/P0_FINDINGS.md` y `spikes/p0/`.
 
 ## Regla de avance
 
@@ -8,7 +8,7 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 
 | Etapa | Resultado observable | Condición para cerrarla |
 |---|---|---|
-| P0 — Compatibilidad real | Spikes de Gentle Shell, Codex y OpenCode en versiones fijadas; fixtures de chat, herramientas, permisos y recuperación | Documentación comprobada y tests de proceso ejecutables, sin credenciales en fixtures |
+| P0 — Compatibilidad real ✅ listo para cierre | Spikes de Gentle Shell, Codex y OpenCode en versiones fijadas; fixtures de chat, herramientas, permisos y recuperación | Cumplido: `spikes/p0/` (3 probes con `PASS`), `spikes/p0/fixtures/` (capturas anonimizadas), `docs/P0_FINDINGS.md`. Pendiente: ratificar P0-D1…D6 antes de iniciar P1 |
 | P1 — Un chat local | Un CLI crea sesión, escribe prompt y recibe respuestas del primer proveedor, mediante Fleet API | Smoke real + simulador; dos clientes ven la misma secuencia; CI verde |
 | P2 — Permisos y timeline | Requests de permiso resueltos una sola vez, timeline durable y replay por cursor | Tests de carrera, desconexión, lag y reinicio de cliente |
 | P3 — Persistencia de procesos | Runner independiente permite reconectar después de caída del daemon | SIGKILL de daemon no pierde runner; reattach+replay sin duplicación; prueba Linux y Windows |

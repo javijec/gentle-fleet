@@ -1,6 +1,6 @@
 # Decisiones arquitectónicas — baseline nuevo
 
-**Todas las decisiones están propuestas hasta que los spikes P0 confirmen protocolos y restricciones reales.** No trasladan automáticamente los ADR antiguos.
+**Todas las decisiones están propuestas.** Los spikes P0 ya se ejecutaron con los tres motores reales (20/11/2026, ver [`P0_FINDINGS.md`](P0_FINDINGS.md)); sus propuestas de concreción para P1 están en la sección 7 de ese documento y requieren ratificación explícita. No se trasladan automáticamente los ADR antiguos.
 
 | ID | Decisión | Motivo | Alternativa rechazada por ahora |
 |---|---|---|---|
@@ -16,6 +16,15 @@
 | D10 | Linux/Windows por interfaz de plataforma desde P1 | Evitar reescritura de Unix-only runtime | Codificar /proc, flock y setsid en domain/core |
 | D11 | Pruebas verticales antes de blindar subsistemas | Encontrar incompatibilidades reales temprano | Completar módulos horizontales con 100+ tests aislados antes del chat |
 | D12 | Versionar wire después del primer smoke | Evitar un Protocol que impide la función central | Publicar v1 inmutable sin mensajes de conversación ni subscribe |
+
+## Concreciones propuestas tras P0 (pendientes de ratificación)
+
+- P0-D1: primer driver real para P1 = OpenCode (attach al servicio de usuario); el candidato inicial era Gentle Shell, pero OpenCode necesita menos traducción y permite smoke sin credenciales.
+- P0-D2: D04 se mantiene; el registro de capacidades nace de la tabla de diferencias de `P0_FINDINGS.md`.
+- P0-D3: D05 se matiza; el Runner posee el proceso para Pi y puede adjuntarse para OpenCode.
+- P0-D4: D09 se refuerza; reconciliar aprobaciones pendientes y cursor antes de cualquier reenvío.
+- P0-D5: versión fijada por driver y fixtures regenerados al cambiarla.
+- P0-D6: cursor Fleet propio; no reutilizar IDs nativos como secuencia pública.
 
 ## Deudas de arquitectura aceptadas temporalmente
 

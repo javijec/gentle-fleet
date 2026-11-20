@@ -16,11 +16,22 @@ Las siguientes fuentes informan la propuesta, **no** certifican que Gentle Fleet
 
 Paseo separa módulos de protocolo, cliente y server, y usa proveedores que reportan funciones/capacidades; incluye agentes nativos y una vía ACP genérica. Orca documenta agentes locales/remotos y un runtime en la máquina de trabajo. Herdr utiliza SSH para enlazar con el servidor persistente remoto, pero es principalmente un multiplexor terminal. Codex ofrece app-server estructurado con requests interactivas del servidor; OpenCode cuenta con arquitectura cliente-servidor y API de sesiones. **Estos modelos son inspiración, no componentes copiables ni garantía de APIs idénticas entre versiones.**
 
-## Huecos a resolver mediante spikes P0
+## Resultado de los spikes P0 (20/11/2026)
 
-- Gentle Shell: identificar las estructuras RPC exactas, los eventos/errores, cómo pide permisos y si hay resume nativo.
-- Codex: confirmar en el binario instalado versiones, métodos, notificaciones, permisos y reattach de threads.
-- OpenCode: confirmar modalidad de server, API de sesiones, eventos SSE/stream y resolución de permisos en la versión elegida.
-- Windows: comprobar que runner detached realmente sobrevive a cierre de daemon, bajo Job Objects/handles propios.
+Los tres primeros huecos quedaron resueltos con binarios reales; el detalle y las
+capturas anonimizadas están en [`P0_FINDINGS.md`](P0_FINDINGS.md) y
+`spikes/p0/fixtures/`:
 
-No completar estos huecos mediante suposiciones en el driver.
+- Gentle Shell: RPC JSONL, eventos `message_update`/`tool_execution_*`, permisos
+  de la extensión vía `extension_ui_request`, resume con `switch_session` y
+  muerte del proceso al cerrar stdin.
+- Codex: handshake `initialize`/`initialized`, `thread/*` y `turn/*`, requests
+  de aprobación del servidor, `thread/resume` entre procesos y esquema
+  experimental dependiente de versión.
+- OpenCode: `opencode serve` con password Basic, `/api/event` SSE, sesiones y
+  permisos REST, persistencia tras reinicio y servicio de usuario compartido.
+
+Sigue abierto, y no se resolverá por suposición: comprobar en Windows que un
+runner detached sobrevive al cierre del daemon (Job Objects/handles propios).
+También quedan sin probar la cancelación real, la paginación avanzada y el
+comportamiento ante SIGKILL del daemon; esas pruebas pertenecen a P2/P3.

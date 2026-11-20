@@ -4,6 +4,8 @@
 
 **Salida**: tres programas de prueba y fixtures anonimizados, que ejercitan sesiones y permisos reales en Gentle Shell, Codex y OpenCode. Medir capacidades disponibles, IDs nativos, tipos de mensajes, cambios de versión y capacidad de recuperación. Verificar qué proveedores necesitan proceso propio o pueden conectarse a servidor de usuario. Elegir el driver más viable para P1. Ningún servicio persistente ni esquema definitivo todavía.
 
+**Estado (20/11/2026)**: ejecutado y listo para cierre. Programas en `spikes/p0/`, capturas en `spikes/p0/fixtures/` y resultados en `docs/P0_FINDINGS.md`. Los tres probes pasan con los binarios instalados. Se recomienda OpenCode como primer driver real de P1 (P0-D1), pendiente de ratificación. No se creó ningún servicio persistente ni esquema definitivo.
+
 ## P1: primera conversación completa desde CLI
 
 **Salida**: un solo proceso fleetd, un runner y un driver (primero FakeDriver, después proveedor real). El CLI puede registrar workspace, iniciar sesión en cwd correcto, enviar texto, observar respuesta y terminar turno. Dos conexiones reciben el mismo timeline en vivo. Event schema se congela solo después del smoke real. No agregar soporte remoto aquí.

@@ -4,7 +4,7 @@
 //! conservan aquí: nunca aparecen en `AgentEvent` ni en el wire Fleet. El
 //! SessionManager no importa este crate.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -48,6 +48,12 @@ pub struct OpenCodeDriver {
     current_turn: Option<String>,
     last_tool: Option<String>,
     turn_finished: bool,
+    // Evidencia nativa por ejecución: evita asignar eventos viejos al turno
+    // nuevo basándose únicamente en un current_turn mutable.
+    execution_started: bool,
+    execution_start_seq: Option<u64>,
+    last_terminal_seq: Option<u64>,
+    active_assistant_messages: HashSet<String>,
 }
 
 impl Default for OpenCodeDriver {
@@ -89,6 +95,10 @@ impl OpenCodeDriver {
             current_turn: None,
             last_tool: None,
             turn_finished: false,
+            execution_started: false,
+            execution_start_seq: None,
+            last_terminal_seq: None,
+            active_assistant_messages: HashSet::new(),
         }
     }
 
@@ -544,6 +554,10 @@ impl AgentDriver for OpenCodeDriver {
         }
         self.current_turn = Some(input.turn_id.clone());
         self.turn_finished = false;
+        self.execution_started = false;
+        self.execution_start_seq = None;
+        self.active_assistant_messages.clear();
+        self.last_tool = None;
         Ok(SendReceipt { accepted: true })
     }
 
@@ -573,6 +587,80 @@ impl AgentDriver for OpenCodeDriver {
                 }
             };
             let native = self.native_session_id.clone().unwrap_or_default();
+            let kind = raw.get("type").and_then(Value::as_str).unwrap_or("");
+            let data = raw.get("data").unwrap_or(&Value::Null);
+            let native_seq = raw
+                .get("durable")
+                .and_then(|durable| durable.get("seq"))
+                .and_then(Value::as_u64);
+
+            // Para esta sesión, cada ejecución debe comenzar después del
+            // último terminal nativo conocido. No usar un step como inicio.
+            if kind == "session.execution.started" {
+                if self.current_turn.is_some()
+                    && !self.execution_started
+                    && native_seq
+                        .zip(self.last_terminal_seq)
+                        .is_none_or(|(seq, previous)| seq > previous)
+                    && data.get("sessionID").and_then(Value::as_str) == Some(native.as_str())
+                {
+                    self.execution_started = true;
+                    self.execution_start_seq = native_seq;
+                }
+                return Ok(None);
+            }
+            if kind == "session.step.started" {
+                if self.execution_started
+                    && data.get("sessionID").and_then(Value::as_str) == Some(native.as_str())
+                {
+                    if let Some(message_id) =
+                        data.get("assistantMessageID").and_then(Value::as_str)
+                    {
+                        self.active_assistant_messages.insert(message_id.to_string());
+                    }
+                }
+                return Ok(None);
+            }
+
+            if kind != "fleet.stream_error" {
+                if !self.execution_started || self.current_turn.is_none() {
+                    return Ok(None);
+                }
+                if let Some(seq) = native_seq {
+                    if self.last_terminal_seq.is_some_and(|previous| seq <= previous)
+                        || self.execution_start_seq.is_some_and(|start| seq < start)
+                    {
+                        return Ok(None);
+                    }
+                }
+                // Deltas y herramientas llevan assistantMessageID. No atribuir
+                // a este turno los mensajes de una ejecución anterior.
+                if kind.starts_with("session.text.") || kind.starts_with("session.tool.") {
+                    let belongs = data
+                        .get("assistantMessageID")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| self.active_assistant_messages.contains(id));
+                    if !belongs {
+                        return Ok(None);
+                    }
+                }
+                if matches!(
+                    kind,
+                    "session.execution.succeeded"
+                        | "session.execution.failed"
+                        | "session.execution.interrupted"
+                ) {
+                    // Sin frontera nativa verificable no fingimos correlación.
+                    if self
+                        .execution_start_seq
+                        .zip(native_seq)
+                        .is_none_or(|(start, end)| end <= start)
+                    {
+                        return Ok(None);
+                    }
+                    self.last_terminal_seq = native_seq;
+                }
+            }
             if let Some(events) = map_stream_event(&raw, &native) {
                 self.stream_pending.extend(events);
             }
@@ -633,25 +721,52 @@ impl AgentDriver for OpenCodeDriver {
         }
         if terminal {
             self.current_turn = None;
+            self.execution_started = false;
+            self.execution_start_seq = None;
+            self.active_assistant_messages.clear();
         }
         Ok(Some(event))
     }
 
     fn close(&mut self) -> Result<(), AgentError> {
         self.stop.store(true, Ordering::Relaxed);
-        if let (Some(base), Some(auth), Some(native)) =
-            (&self.base_url, self.auth().ok(), &self.native_session_id)
-        {
-            let _ = self
-                .client()
-                .delete(format!("{base}/api/session/{native}"))
-                .header("Authorization", &auth)
-                .send();
+        let mut failure = None;
+        if let (Some(base), Some(native)) = (&self.base_url, &self.native_session_id) {
+            match self.auth() {
+                Ok(auth) => match self
+                    .client()
+                    .delete(format!("{base}/api/session/{native}"))
+                    .header("Authorization", &auth)
+                    .send()
+                {
+                    Ok(response)
+                        if response.status().is_success()
+                            || response.status() == reqwest::StatusCode::NOT_FOUND => {}
+                    Ok(response) => failure = Some(format!("DELETE session returned {}", response.status())),
+                    Err(error) => failure = Some(format!("DELETE session failed: {error}")),
+                },
+                Err(error) => failure = Some(error.to_string()),
+            }
+        } else {
+            failure = Some("native OpenCode session was not known".into());
         }
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+
+        // Owned y Attached son distintos: nunca matar el servicio compartido.
+        if let Some(mut child) = self.child.take() {
+            if let Err(error) = child.kill() {
+                failure.get_or_insert(format!("owned server kill failed: {error}"));
+            }
+            if let Err(error) = child.wait() {
+                failure.get_or_insert(format!("owned server wait failed: {error}"));
+            }
         }
+        if let Some(message) = failure {
+            return Err(AgentError {
+                code: "StopUnconfirmed".into(),
+                message,
+            });
+        }
+        self.native_session_id = None;
         Ok(())
     }
 
@@ -716,6 +831,45 @@ impl DriverFactory for OpenCodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_events_do_not_switch_to_the_next_turn() {
+        let mut driver = OpenCodeDriver::new();
+        driver.native_session_id = Some("ses_one".into());
+        driver.current_turn = Some("turn-new".into());
+        driver.last_terminal_seq = Some(20);
+        let (tx, rx) = mpsc::channel();
+        driver.events_rx = Some(rx);
+        let event = |kind: &str, seq: u64, data: Value| {
+            json!({"type": kind, "data": data, "durable": {"seq": seq}})
+        };
+        // Replay de un comienzo anterior, anterior al terminal conocido.
+        tx.send(event("session.execution.started", 10, json!({"sessionID":"ses_one"}))).unwrap();
+        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        assert!(!driver.execution_started);
+        tx.send(event("session.execution.started", 21, json!({"sessionID":"ses_one"}))).unwrap();
+        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        assert!(driver.execution_started);
+        tx.send(event("session.step.started", 22, json!({
+            "sessionID":"ses_one", "assistantMessageID":"msg_new"
+        }))).unwrap();
+        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        tx.send(event("session.text.delta", 23, json!({
+            "sessionID":"ses_one", "assistantMessageID":"msg_old", "delta":"wrong"
+        }))).unwrap();
+        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        tx.send(event("session.text.delta", 24, json!({
+            "sessionID":"ses_one", "assistantMessageID":"msg_new", "delta":"right"
+        }))).unwrap();
+        let right = driver.next_event(Duration::from_millis(5)).unwrap().unwrap();
+        assert!(matches!(right.kind, DomainEvent::AssistantDelta { ref turn_id, ref text }
+            if turn_id == "turn-new" && text == "right"));
+        tx.send(event("session.execution.succeeded", 25, json!({"sessionID":"ses_one"}))).unwrap();
+        let done = driver.next_event(Duration::from_millis(5)).unwrap().unwrap();
+        assert!(matches!(done.kind, DomainEvent::TurnCompleted { ref turn_id, .. }
+            if turn_id == "turn-new"));
+        assert!(driver.current_turn.is_none());
+    }
 
     #[test]
     fn maps_stream_events_and_keeps_native_ids_private() {

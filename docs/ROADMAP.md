@@ -10,6 +10,8 @@
 
 **Salida**: un solo proceso `fleetd`, un Runner con modalidad propia/adjunta, `FakeDriver` y **`OpenCodeDriver` como primer proveedor real**. `fleetctl` registra workspace, crea sesión con `provider_id`, envía texto, observa respuesta y fin de turno. Dos conexiones reciben el mismo timeline en vivo con `seq` asignado por Fleet. Se congela el esquema de eventos P1 tras el smoke real. No agregar persistencia durable, remoto, aprobaciones ni GPUI aquí.
 
+**Estado (20/11/2026): CERRADO.** Ver [`P1_RESULTS.md`](P1_RESULTS.md): fmt, clippy y tests en verde; e2e con FakeDriver y e2e real con OpenCode 2.3.2 pasan con dos clientes y secuencias idénticas.
+
 ## P2: persistencia y aprobación
 
 **Salida**: SQLite única con sesiones, operaciones y eventos, idempotencia antes de efecto, ack y timeline reconstruible; solicita/aprueba/deniega permiso; el cliente puede cerrarse, reiniciarse y leer eventos con cursor. Probar cortes antes/después de commit, doble decisión, gap y colas llenas. No prometer supervivencia al daemon crash todavía.

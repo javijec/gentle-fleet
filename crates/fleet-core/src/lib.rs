@@ -59,8 +59,13 @@ struct OperationRecord {
 }
 
 enum DriverCommand {
-    Prompt { text: String, turn_id: String },
-    Close { done: Sender<Result<(), AgentError>> },
+    Prompt {
+        text: String,
+        turn_id: String,
+    },
+    Close {
+        done: Sender<Result<(), AgentError>>,
+    },
 }
 
 struct DriverHandle {
@@ -855,7 +860,8 @@ impl SessionManager {
                 Ok(result) => result,
                 Err(_) => Err(AgentError {
                     code: "StopUnconfirmed".into(),
-                    message: "driver has not confirmed close within 500ms; execution may continue".into(),
+                    message: "driver has not confirmed close within 500ms; execution may continue"
+                        .into(),
                 }),
             },
             Err(_) => Err(AgentError {
@@ -1137,7 +1143,10 @@ mod tests {
         let error = manager.stop_session(&session.id).unwrap_err();
         assert_eq!(error.code, "StopUnconfirmed");
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert_eq!(manager.list_sessions()[0].state, SessionState::StopUnconfirmed);
+        assert_eq!(
+            manager.list_sessions()[0].state,
+            SessionState::StopUnconfirmed
+        );
     }
 
     #[test]

@@ -613,10 +613,10 @@ impl AgentDriver for OpenCodeDriver {
                 if self.execution_started
                     && data.get("sessionID").and_then(Value::as_str) == Some(native.as_str())
                 {
-                    if let Some(message_id) =
-                        data.get("assistantMessageID").and_then(Value::as_str)
+                    if let Some(message_id) = data.get("assistantMessageID").and_then(Value::as_str)
                     {
-                        self.active_assistant_messages.insert(message_id.to_string());
+                        self.active_assistant_messages
+                            .insert(message_id.to_string());
                     }
                 }
                 return Ok(None);
@@ -627,7 +627,9 @@ impl AgentDriver for OpenCodeDriver {
                     return Ok(None);
                 }
                 if let Some(seq) = native_seq {
-                    if self.last_terminal_seq.is_some_and(|previous| seq <= previous)
+                    if self
+                        .last_terminal_seq
+                        .is_some_and(|previous| seq <= previous)
                         || self.execution_start_seq.is_some_and(|start| seq < start)
                     {
                         return Ok(None);
@@ -742,7 +744,9 @@ impl AgentDriver for OpenCodeDriver {
                     Ok(response)
                         if response.status().is_success()
                             || response.status() == reqwest::StatusCode::NOT_FOUND => {}
-                    Ok(response) => failure = Some(format!("DELETE session returned {}", response.status())),
+                    Ok(response) => {
+                        failure = Some(format!("DELETE session returned {}", response.status()))
+                    }
                     Err(error) => failure = Some(format!("DELETE session failed: {error}")),
                 },
                 Err(error) => failure = Some(error.to_string()),
@@ -840,34 +844,84 @@ mod tests {
         driver.last_terminal_seq = Some(20);
         let (tx, rx) = mpsc::channel();
         driver.events_rx = Some(rx);
-        let event = |kind: &str, seq: u64, data: Value| {
-            json!({"type": kind, "data": data, "durable": {"seq": seq}})
-        };
+        let event = |kind: &str, seq: u64, data: Value| json!({"type": kind, "data": data, "durable": {"seq": seq}});
         // Replay de un comienzo anterior, anterior al terminal conocido.
-        tx.send(event("session.execution.started", 10, json!({"sessionID":"ses_one"}))).unwrap();
-        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        tx.send(event(
+            "session.execution.started",
+            10,
+            json!({"sessionID":"ses_one"}),
+        ))
+        .unwrap();
+        assert!(driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .is_none());
         assert!(!driver.execution_started);
-        tx.send(event("session.execution.started", 21, json!({"sessionID":"ses_one"}))).unwrap();
-        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
+        tx.send(event(
+            "session.execution.started",
+            21,
+            json!({"sessionID":"ses_one"}),
+        ))
+        .unwrap();
+        assert!(driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .is_none());
         assert!(driver.execution_started);
-        tx.send(event("session.step.started", 22, json!({
-            "sessionID":"ses_one", "assistantMessageID":"msg_new"
-        }))).unwrap();
-        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
-        tx.send(event("session.text.delta", 23, json!({
-            "sessionID":"ses_one", "assistantMessageID":"msg_old", "delta":"wrong"
-        }))).unwrap();
-        assert!(driver.next_event(Duration::from_millis(5)).unwrap().is_none());
-        tx.send(event("session.text.delta", 24, json!({
-            "sessionID":"ses_one", "assistantMessageID":"msg_new", "delta":"right"
-        }))).unwrap();
-        let right = driver.next_event(Duration::from_millis(5)).unwrap().unwrap();
-        assert!(matches!(right.kind, DomainEvent::AssistantDelta { ref turn_id, ref text }
-            if turn_id == "turn-new" && text == "right"));
-        tx.send(event("session.execution.succeeded", 25, json!({"sessionID":"ses_one"}))).unwrap();
-        let done = driver.next_event(Duration::from_millis(5)).unwrap().unwrap();
-        assert!(matches!(done.kind, DomainEvent::TurnCompleted { ref turn_id, .. }
-            if turn_id == "turn-new"));
+        tx.send(event(
+            "session.step.started",
+            22,
+            json!({
+                "sessionID":"ses_one", "assistantMessageID":"msg_new"
+            }),
+        ))
+        .unwrap();
+        assert!(driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .is_none());
+        tx.send(event(
+            "session.text.delta",
+            23,
+            json!({
+                "sessionID":"ses_one", "assistantMessageID":"msg_old", "delta":"wrong"
+            }),
+        ))
+        .unwrap();
+        assert!(driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .is_none());
+        tx.send(event(
+            "session.text.delta",
+            24,
+            json!({
+                "sessionID":"ses_one", "assistantMessageID":"msg_new", "delta":"right"
+            }),
+        ))
+        .unwrap();
+        let right = driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(right.kind, DomainEvent::AssistantDelta { ref turn_id, ref text }
+            if turn_id == "turn-new" && text == "right")
+        );
+        tx.send(event(
+            "session.execution.succeeded",
+            25,
+            json!({"sessionID":"ses_one"}),
+        ))
+        .unwrap();
+        let done = driver
+            .next_event(Duration::from_millis(5))
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(done.kind, DomainEvent::TurnCompleted { ref turn_id, .. }
+            if turn_id == "turn-new")
+        );
         assert!(driver.current_turn.is_none());
     }
 

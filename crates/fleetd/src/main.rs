@@ -265,11 +265,12 @@ fn forward_events(
             subscription.recv_signal(Duration::from_millis(1)),
             Ok(Some(fleet_core::SubscriberSignal::Overflow))
         );
-        if overflow || (subscription.cancelled.load(Ordering::SeqCst)
-            && matches!(
-                subscription.recv_signal(Duration::from_millis(1)),
-                Ok(Some(fleet_core::SubscriberSignal::Overflow))
-            ))
+        if overflow
+            || (subscription.cancelled.load(Ordering::SeqCst)
+                && matches!(
+                    subscription.recv_signal(Duration::from_millis(1)),
+                    Ok(Some(fleet_core::SubscriberSignal::Overflow))
+                ))
         {
             let _ = write_frame(
                 &mut *writer.lock().expect("writer poisoned"),

@@ -15,6 +15,24 @@ Session: Created → Starting → Running → Stopping → Stopped. Ramas de fal
 
 Turn: Queued → Running → WaitingApproval ↔ Running → Completed / Failed / Cancelled / OutcomeUnknown.
 
+### Máquina implementada en P1.1
+
+`SessionManager` es la única autoridad del turno: `Idle` → `Running` →
+`Completed`/`Failed`/`Interrupted`, con `AwaitingApproval` reservado para P2 y
+`Uncertain` cuando no hay evidencia terminal (por ejemplo, stop con turno
+activo). Solo un turno activo por sesión: un segundo prompt devuelve
+`TurnAlreadyRunning`. No hay colas automáticas. Los eventos de herramientas o
+errores informativos no cambian el estado; un `AgentError` nunca se convierte en
+`TurnCompleted`. Los eventos con `turn_id` distinto del activo se descartan para
+evitar asociar un turno anterior al siguiente.
+
+La reserva de `operation_key` (incluye `session_id` y payload) es atómica y
+precede al despacho; si el despacho falla, la operación queda registrada como
+fallida y se publica un resultado terminal. No hay reenvío automático tras
+timeout. `StopSession` tiene plazo acotado (500 ms de ack del driver): si el
+driver no responde, se publica `SessionStateChanged(Stopped)` y un aviso, y el
+hilo se suelta sin bloquear al cliente.
+
 Operation: Prepared → Dispatched → Confirmed / Rejected / OutcomeUnknown → Reconciled. Un resultado confirmado es durable y se puede consultar después de reiniciar.
 
 ## Algoritmo de StartSession

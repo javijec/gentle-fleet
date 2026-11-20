@@ -1,5 +1,10 @@
 # P1 — resultados reales (20/11/2026)
 
+> Nota P1.1: este documento describe el corte P1 original. P1.1 corrigió el
+> transporte (ya no es TCP loopback sin autenticación), particionó el EventBus
+> por sesión, añadió la máquina de turnos y colas acotadas. La fuente de verdad
+> actual es [`P1_1_RESULTS.md`](P1_1_RESULTS.md).
+
 Estado: **P1 implementado y validado**. Un CLI (`fleetctl`) crea workspace y
 sesión, envía prompt y observa texto y herramientas a través de la API compartida
 de `fleetd`. Dos clientes reciben la misma secuencia de eventos. No hay

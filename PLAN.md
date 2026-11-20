@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0 CERRADO** y **P1 implementado y validado** (20/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Primer driver real: OpenCode; Codex y Gentle Shell/Pi quedan para P4. Resultados reales en `docs/P1_RESULTS.md`.
+**Estado:** **P0 CERRADO**, **P1 CERRADO** y **P1.1 CERRADO** (20/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Primer driver real: OpenCode; Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md` y `docs/P1_1_RESULTS.md`.
 
 ## Regla de avance
 
@@ -10,6 +10,7 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 |---|---|---|
 | P0 — Compatibilidad real ✅ **CERRADO** | Spikes de Gentle Shell, Codex y OpenCode en versiones fijadas; fixtures de chat, herramientas, permisos y recuperación | Cumplido: 3 probes con `PASS`, capturas anonimizadas, `docs/P0_FINDINGS.md` y `docs/research/`; P0-D1…D6 ratificadas |
 | P1 — Un chat local con OpenCode ✅ **CERRADO** | Un CLI registra workspace, crea sesión con `provider_id=opencode`, envía prompt y recibe texto y herramientas mediante Fleet API | Cumplido: FakeDriver + smoke real con OpenCode, dos clientes con la misma secuencia `seq`, fmt/clippy/test y e2e en verde; ver `docs/P1_RESULTS.md` |
+| P1.1 — Estabilización y concurrencia ✅ **CERRADO** | Sesiones y eventos aislados, un turno activo por sesión, idempotencia atómica, stop acotado, transporte local por usuario y colas acotadas | Cumplido: 15 tests unitarios, e2e de aislamiento/carrera/backpressure/ACL y smoke real con OpenCode; ver `docs/P1_1_RESULTS.md` |
 | P2 — Permisos y timeline | Requests de permiso resueltos una sola vez, timeline durable y replay por cursor | Tests de carrera, desconexión, lag y reinicio de cliente |
 | P3 — Persistencia de procesos | Runner independiente permite reconectar después de caída del daemon | SIGKILL de daemon no pierde runner; reattach+replay sin duplicación; prueba Linux y Windows |
 | P4 — Drivers adicionales | Codex y después Gentle Shell/Pi integrados usando la interfaz de capacidades, sin cambiar el gestor de sesiones | Misma suite de contrato para los tres drivers; funciones no soportadas visibles; resume declarado por versión |

@@ -53,6 +53,7 @@ Orquestación autónoma multiagente, worktrees automáticos, CI/CD, navegador, s
 ### Implementación P1
 
 - [Resultados reales de P1](docs/P1_RESULTS.md)
+- [Estabilización y concurrencia P1.1](docs/P1_1_RESULTS.md)
 - [Código de los crates](crates/)
 - [Pruebas de proceso](tests/)
 

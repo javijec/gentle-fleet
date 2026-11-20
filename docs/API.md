@@ -7,7 +7,8 @@ Un único protocolo cliente/servidor independientemente de local (Unix socket / 
 ## Transporte y framing
 
 - En la fase P1: JSONL con un frame por línea; UTF-8; máximo 1 MiB por frame con error explícito. Ampliar tamaño solo con tests.
-- Una conexión se negocia con Hello{major,minor,features}; el servidor responde Welcome{major,minor,host_id,features,limits} o UnsupportedVersion. Autenticación ocurre en el transporte.
+- Una conexión se negocia con `Hello{client_id, token?}`; en Unix el socket 0600 del directorio 0700 es la garantía de usuario; en Windows `token` se lee de un fichero privado (plataforma no validada en P1.1). Cualquier request anterior a `Hello` devuelve `Unauthorized`.
+- Transporte P1.1: Unix Domain Socket en Linux; TCP loopback + token en Windows (`UNTESTED`). Los envelopes no cambian para P5.
 - Frames etiquetados con kind=request|response|event, id de correlación y, para eventos, sesión y secuencia. Jamás se asume que una notificación push es respuesta de otra petición.
 - Un request tiene request_id para correlación **y** operation_key para idempotencia de efectos; no confundirlos.
 - Operaciones asíncronas devuelven Accepted{operation_id} solo cuando una intención queda durable; la finalización llega como eventos y GetOperation.
@@ -17,11 +18,11 @@ Un único protocolo cliente/servidor independientemente de local (Unix socket / 
 | Operación | Semántica | Mutación |
 |---|---|---|
 | GetHost / ListHosts | Identidad y capacidades del host conectado | No |
-| ListAgents | Drivers presentes, versiones y capacidades efectivas | No |
+| ListAgents | `id`, versión detectada (`null` si no disponible), `availability` (`Available`/`Unavailable`), `capabilities` efectivas y `mode` (`Owned`/`Attached`/`Auto`) del registro real | No |
 | ListWorkspaces / RegisterWorkspace | Directorios autorizados del host; no inferir identidad por ruta | Sí, registro |
 | CreateSession | Crear identidad Fleet y vincular workspace/proveedor | Sí |
 | StartSession | Iniciar/reanudar runner cuando haya garantía posible | Sí |
-| SendPrompt | Crear turno y enviar entrada; distinguir aceptación de finalización | Sí |
+| SendPrompt | Reservar `operation_key`, crear turno y despachar una sola vez; `TurnAlreadyRunning` si hay turno activo, `Conflict` si la clave cambia de payload/sesión | Sí |
 | AnswerApproval | Responder una única solicitud pendiente vinculada a sesión/turno | Sí |
 | InterruptTurn | Pedir interrupción; no promete abort instantáneo | Sí |
 | StopSession | Cierre explícito; debe producir resultado observable | Sí |
@@ -41,8 +42,10 @@ Envelope: event_id, session_id, seq, timestamp, kind, payload, turn_id? y operat
 - ToolStarted / ToolOutput / ToolCompleted
 - ApprovalRequested / ApprovalResolved / ApprovalExpired
 - AgentNotice / AgentError / RecoveryNotice
+- TurnUncertain (turno sin resultado terminal observable; nunca se reenvía)
+- Backpressure (el suscriptor lento se desconecta; también existe `Notice{code:"Backpressure"}` fuera de la secuencia de eventos)
 
-Delatas, tokens y eventos de herramientas se emiten en límites configurables. Los payloads privados no se envían tal cual. Las capacidades del driver determinan qué eventos existen: si el proveedor solo da mensajes completos, no fabricar deltas falsos.
+Las suscripciones están ligadas a un `SessionId`; cada sesión tiene su propio `seq` desde 1. Snapshot y streaming se registran bajo el mismo lock para evitar huecos; el cliente deduplica por `seq`. `AgentError` es informativo y **no** cierra un turno: solo `TurnCompleted`/`TurnUncertain` son resultados de turno. Delatas, tokens y eventos de herramientas se emiten en límites configurables. Los payloads privados no se envían tal cual. Las capacidades del driver determinan qué eventos existen: si el proveedor solo da mensajes completos, no fabricar deltas falsos.
 
 ## Cursores y suscripción
 

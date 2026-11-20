@@ -4,6 +4,18 @@
 
 **La sesión es la unidad de orquestación.** Una autoridad (SessionManager) decide y registra qué debe ocurrir; una entidad ejecutora (Runner) se encarga del proceso agente; un driver conoce el protocolo específico; una timeline estable permite observar y reconectar. Los clientes no conocen SQLite, PID ni protocolo del agente.
 
+## Estado implementado tras P1.1
+
+El diagrama y el árbol siguiente describen el destino arquitectónico. Lo implementado en P1.1 respeta estos límites:
+
+- `EventBus` está particionado por `SessionId`: publicar en una sesión nunca entrega a suscriptores de otra. Cada sesión mantiene su propio `seq` monotónico asignado por `SessionManager`.
+- `SessionManager` posee la máquina de estados del turno (`Idle`, `Running`, `AwaitingApproval`, `Completed`, `Failed`, `Interrupted`, `Uncertain`). El driver nunca decide el estado público del turno; un evento tardío con otro `turn_id` se descarta.
+- La reserva de `operation_key` es atómica e incluye `session_id` + payload; un mismo parámetro devuelve el recibo existente, un payload distinto devuelve `Conflict`. El registro precede al despacho.
+- Las suscripciones tienen cola acotada (256 por defecto). Un suscriptor lento se desconecta con un `Notice{code:"Backpressure"}`; nunca se acumula memoria sin límite ni se pierde silenciosamente.
+- Transporte local: Unix Domain Socket en directorio 0700 con socket 0600 en Linux (VERIFIED); en Windows, TCP loopback + token privado, **plataforma no validada** en P1.1. No se confía en loopback como autenticación.
+- `RunnerMode::{Owned, Attached, Auto}` vive en el `LaunchContext` del driver; el runner como proceso independiente sigue siendo P3.
+- `SessionManager` no importa `fleet-driver-opencode` ni ningún driver concreto: `ProviderRegistry` es el único punto de extensión.
+
 ## Diagrama de componentes
 
 ~~~mermaid

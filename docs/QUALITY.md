@@ -34,6 +34,17 @@ T10 Reinicio del host se diferencia claramente de reinicio de daemon; si el driv
 T11 Ruta inválida o no autorizada no lanza un proceso.
 T12 CLI remoto sobre SSH (P5) produce los mismos eventos/errores que local.
 
+### P1.1 — ejecutadas y en verde
+
+- `tests/e2e_fake.sh`: dos clientes, secuencia idéntica.
+- `tests/e2e_concurrency.sh`: dos sesiones aisladas, segundo prompt rechazado con `TurnAlreadyRunning`, clave duplicada bajo concurrencia, stop con driver bloqueado en <2 s.
+- `tests/e2e_backpressure.sh`: cola acotada, desconexión con `Backpressure`.
+- `tests/e2e_unix_permissions.sh`: socket 0600, directorio 0700 y rechazo de otro usuario local (Linux).
+- `tests/e2e_opencode.sh`: smoke real opt-in con dos clientes.
+- 15 tests unitarios (`cargo test --workspace`), `cargo fmt --check` y `cargo clippy -D warnings`.
+
+Detalle en [`P1_1_RESULTS.md`](P1_1_RESULTS.md). Windows sigue sin validar.
+
 ## Criterios de aceptación por historia
 
 - Cada historia vertical tiene una prueba que cruza **cliente SDK → Fleet API → SessionManager → Driver → respuesta/eventos → cliente**.

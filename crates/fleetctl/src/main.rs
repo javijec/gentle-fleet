@@ -88,6 +88,11 @@ fn run() -> Result<(), String> {
         "prompt" => prompt(&args[1..]),
         "watch" => watch(&args[1..]),
         "stop" => stop(&args[1..]),
+        "timeline" => timeline(&args[1..]),
+        "operation" => operation(&args[1..]),
+        "approvals" => approvals(&args[1..]),
+        "approval" => approval(&args[1..]),
+        "answer" => answer(&args[1..]),
         "agents" => {
             let mut client = Client::connect()?;
             client.call(Client::hello())?;
@@ -113,7 +118,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl agents"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
         .into()
 }
 
@@ -304,6 +309,140 @@ fn describe(kind: &EventKind) -> String {
             format!("turn_uncertain\t{turn_id}\t{reason}")
         }
         EventKind::Backpressure { limit } => format!("backpressure\t{limit}"),
+        EventKind::ApprovalRequested {
+            approval_id,
+            kind,
+            resources,
+            allowed_decisions,
+            ..
+        } => format!(
+            "approval_requested\t{approval_id}\t{kind}\t{}\t{}",
+            resources.join(","),
+            allowed_decisions.join(",")
+        ),
+        EventKind::ApprovalResolved {
+            approval_id,
+            decision,
+            ..
+        } => format!("approval_resolved\t{approval_id}\t{decision}"),
+    }
+}
+
+fn timeline(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let since = flag(args, "--since")
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|e| format!("invalid --since: {e}"))?
+        .unwrap_or(0);
+    let limit = flag(args, "--limit")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|e| format!("invalid --limit: {e}"))?
+        .unwrap_or(256);
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::ReadTimeline {
+        session_id,
+        since_seq: since,
+        limit,
+    })? {
+        Response::Timeline { events, .. } => {
+            for event in events {
+                println!(
+                    "{}\t{}\t{}",
+                    event.seq,
+                    event.event_id,
+                    describe(&event.kind)
+                );
+            }
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn operation(args: &[String]) -> Result<(), String> {
+    let key = args.first().ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::GetOperation { operation_key: key })? {
+        Response::Operation { operation } => {
+            println!(
+                "{}\t{}\t{:?}\t{:?}\t{}",
+                operation.operation_id,
+                operation.operation_key,
+                operation.kind,
+                operation.status,
+                operation.message.unwrap_or_default()
+            );
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn approvals(args: &[String]) -> Result<(), String> {
+    let session_id = flag(args, "--session");
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::ListApprovals { session_id })? {
+        Response::Approvals { approvals } => {
+            for approval in approvals {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    approval.approval_id,
+                    approval.session_id,
+                    approval.kind,
+                    approval.status_text(),
+                    approval.allowed_decisions.join(",")
+                );
+            }
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn approval(args: &[String]) -> Result<(), String> {
+    let approval_id = args.first().ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::GetApproval { approval_id })? {
+        Response::Approval { approval } => {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                approval.approval_id,
+                approval.session_id,
+                approval.kind,
+                approval.status_text(),
+                approval.message
+            );
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn answer(args: &[String]) -> Result<(), String> {
+    let approval_id = args.first().ok_or_else(usage)?.clone();
+    let decision = args.get(1).ok_or_else(usage)?.clone();
+    let operation_key = std::env::var("FLEET_OPERATION_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::AnswerApproval {
+        approval_id,
+        decision,
+        operation_key,
+    })? {
+        Response::ApprovalResolved { approval } => {
+            println!("{}\t{}", approval.approval_id, approval.status_text());
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
     }
 }
 

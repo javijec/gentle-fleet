@@ -24,3 +24,7 @@ jobs:
         run: tests/e2e_backpressure.sh
       - name: e2e permisos de socket sin root
         run: tests/e2e_unix_permissions.sh
+      - name: e2e persistencia y reinicio de fleetd
+        run: tests/e2e_persistence.sh
+      - name: e2e aprobaciones deterministas
+        run: tests/e2e_approvals.sh

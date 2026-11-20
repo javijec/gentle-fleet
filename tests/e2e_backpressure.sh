@@ -14,6 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 export FLEET_RUNTIME_DIR="$RUNTIME"
+export FLEET_DB_PATH="$RUNTIME/fleet.sqlite"
 export FLEET_SUBSCRIBER_LIMIT=1
 export FLEET_TEST_FORWARD_DELAY_MS=250
 "$BIN/fleetd" >"$RUNTIME/daemon.out" 2>"$RUNTIME/daemon.err" &

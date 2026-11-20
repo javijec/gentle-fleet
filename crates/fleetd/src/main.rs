@@ -11,12 +11,26 @@ use fleet_core::{SessionManager, Subscription, SubscriptionHandle, SUBSCRIBER_LI
 use fleet_driver_opencode::OpenCodeFactory;
 use fleet_protocol::transport::{expected_token, LocalListener, LocalStream};
 use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response, WIRE};
+use fleet_store_sqlite::SqliteStore;
 
 fn to_api_error(error: fleet_agent::AgentError) -> fleet_protocol::ApiError {
     fleet_protocol::ApiError {
         code: error.code,
         message: error.message,
     }
+}
+
+fn database_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("FLEET_DB_PATH") {
+        return std::path::PathBuf::from(path);
+    }
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/share"))
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("gentle-fleet").join("fleet.sqlite")
 }
 
 fn main() -> std::io::Result<()> {
@@ -27,10 +41,20 @@ fn main() -> std::io::Result<()> {
         fail_send: std::env::var("FLEET_FAKE_FAIL_SEND").is_ok(),
         emit_provider_error: std::env::var("FLEET_FAKE_PROVIDER_ERROR").is_ok(),
         emit_terminal_failure: std::env::var("FLEET_FAKE_TERMINAL_FAILURE").is_ok(),
+        emit_approval: std::env::var("FLEET_FAKE_APPROVAL").is_ok(),
     };
     registry.register(Box::new(FakeFactory::with_config(fake_config)));
-    registry.register(Box::new(OpenCodeFactory));
-    let manager = Arc::new(SessionManager::new(registry));
+    registry.register(Box::new(OpenCodeFactory::with_ask_shell(
+        std::env::var("FLEET_OPENCODE_ASK_SHELL").is_ok(),
+    )));
+    let store = Arc::new(
+        SqliteStore::open(database_path())
+            .map_err(|e| std::io::Error::other(format!("{}: {}", e.code, e.message)))?,
+    );
+    let manager =
+        Arc::new(SessionManager::new(registry, store).map_err(|error| {
+            std::io::Error::other(format!("{}: {}", error.code, error.message))
+        })?);
     // bind() crea el token de Windows: no leerlo antes.
     let listener = LocalListener::bind()?;
     let expected = expected_token()?;
@@ -186,6 +210,40 @@ fn handle_client(
             Request::StopSession { session_id } => manager
                 .stop_session(&session_id)
                 .map(|_| Response::Stopped { session_id }),
+            Request::ReadTimeline {
+                session_id,
+                since_seq,
+                limit,
+            } => manager
+                .read_timeline(&session_id, since_seq, limit)
+                .map(|events| Response::Timeline { session_id, events }),
+            Request::GetOperation { operation_key } => {
+                manager.get_operation(&operation_key).and_then(|operation| {
+                    operation
+                        .map(|operation| Response::Operation { operation })
+                        .ok_or_else(|| fleet_agent::AgentError {
+                            code: "not_found".into(),
+                            message: format!("unknown operation key `{operation_key}`"),
+                        })
+                })
+            }
+            Request::ListApprovals { session_id } => Ok(Response::Approvals {
+                approvals: manager.list_approvals(session_id.as_deref()),
+            }),
+            Request::GetApproval { approval_id } => manager
+                .get_approval(&approval_id)
+                .map(|approval| Response::Approval { approval })
+                .ok_or_else(|| fleet_agent::AgentError {
+                    code: "not_found".into(),
+                    message: format!("unknown approval `{approval_id}`"),
+                }),
+            Request::AnswerApproval {
+                approval_id,
+                decision,
+                operation_key,
+            } => manager
+                .answer_approval(&approval_id, decision, &operation_key)
+                .map(|approval| Response::ApprovalResolved { approval }),
             Request::SubscribeTimeline {
                 session_id,
                 since_seq,

@@ -54,6 +54,7 @@ pub struct OpenCodeDriver {
     execution_start_seq: Option<u64>,
     last_terminal_seq: Option<u64>,
     active_assistant_messages: HashSet<String>,
+    ask_shell: bool,
 }
 
 impl Default for OpenCodeDriver {
@@ -67,10 +68,10 @@ impl OpenCodeDriver {
         let capabilities = ProviderCapabilities {
             streaming_text: true,
             tool_events: true,
-            session_history: false,
+            session_history: true,
             native_turn_ids: false,
             cancel_turn: false,
-            approvals: false,
+            approvals: true,
             can_own_process: true,
             can_attach_service: true,
         };
@@ -99,7 +100,14 @@ impl OpenCodeDriver {
             execution_start_seq: None,
             last_terminal_seq: None,
             active_assistant_messages: HashSet::new(),
+            ask_shell: false,
         }
+    }
+
+    /// Configura la regla de permisos `shell: ask` usada en los smokes reales.
+    pub fn with_ask_shell(mut self, ask_shell: bool) -> Self {
+        self.ask_shell = ask_shell;
+        self
     }
 
     /// Construye un driver que levanta su propio `opencode serve` (útil para
@@ -300,8 +308,13 @@ impl OpenCodeDriver {
             .post(format!("{base}/api/session"))
             .header("Authorization", &auth)
             .json(&json!({
-                "title": "gentle-fleet-p1",
-                "location": { "directory": workspace.to_string_lossy() }
+                "title": "gentle-fleet-p2",
+                "location": { "directory": workspace.to_string_lossy() },
+                "permissions": if self.ask_shell {
+                    json!([{"action":"shell","resource":"*","effect":"ask"}])
+                } else {
+                    json!([])
+                }
             }))
             .send()
             .map_err(|e| AgentError {
@@ -473,8 +486,25 @@ fn map_stream_event(value: &Value, native_session_id: &str) -> Option<Vec<AgentE
             turn_id: turn,
             status: TurnStatus::Interrupted,
         }],
-        "permission.asked" => vec![DomainEvent::AgentNotice {
-            message: "provider requested approval; Fleet P1 never auto-approves".into(),
+        "permission.asked" => vec![DomainEvent::ApprovalRequested {
+            native_request_id: text_field("id"),
+            kind: text_field("action"),
+            message: text_field("message"),
+            resources: data
+                .get("resources")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            allowed_decisions: vec!["once".into(), "always".into(), "reject".into()],
+        }],
+        "permission.replied" => vec![DomainEvent::ApprovalResolved {
+            native_request_id: text_field("requestID"),
+            decision: text_field("reply"),
         }],
         _ => return None,
     };
@@ -559,6 +589,43 @@ impl AgentDriver for OpenCodeDriver {
         self.active_assistant_messages.clear();
         self.last_tool = None;
         Ok(SendReceipt { accepted: true })
+    }
+
+    fn answer(&mut self, native_request_id: String, decision: String) -> Result<(), AgentError> {
+        let base = self.base_url.clone().ok_or_else(|| AgentError {
+            code: "not_open".into(),
+            message: "OpenCode driver is not open".into(),
+        })?;
+        let auth = self.auth()?;
+        let native_session = self.native_session_id.clone().ok_or_else(|| AgentError {
+            code: "not_open".into(),
+            message: "OpenCode driver has no native session".into(),
+        })?;
+        let response = self
+            .client()
+            .post(format!(
+                "{base}/api/session/{native_session}/permission/{native_request_id}/reply"
+            ))
+            .header("Authorization", &auth)
+            .json(&json!({ "decision": decision }))
+            .send()
+            .map_err(|e| AgentError {
+                code: "approval_delivery_failed".into(),
+                message: format!("permission reply failed: {e}"),
+            })?;
+        if !response.status().is_success() {
+            return Err(AgentError {
+                code: "approval_delivery_failed".into(),
+                message: format!("permission reply returned {}", response.status()),
+            });
+        }
+        self.local_events.push_back(AgentEvent {
+            kind: DomainEvent::ApprovalResolved {
+                native_request_id,
+                decision,
+            },
+        });
+        Ok(())
     }
 
     fn next_event(&mut self, timeout: Duration) -> Result<Option<AgentEvent>, AgentError> {
@@ -795,7 +862,25 @@ impl AgentDriver for OpenCodeDriver {
     }
 }
 
-pub struct OpenCodeFactory;
+pub struct OpenCodeFactory {
+    ask_shell: bool,
+}
+
+impl OpenCodeFactory {
+    pub fn new() -> Self {
+        Self { ask_shell: false }
+    }
+
+    pub fn with_ask_shell(ask_shell: bool) -> Self {
+        Self { ask_shell }
+    }
+}
+
+impl Default for OpenCodeFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DriverFactory for OpenCodeFactory {
     fn id(&self) -> String {
@@ -805,7 +890,7 @@ impl DriverFactory for OpenCodeFactory {
         COMPATIBILITY
     }
     fn create(&self) -> Box<dyn AgentDriver> {
-        Box::new(OpenCodeDriver::new())
+        Box::new(OpenCodeDriver::new().with_ask_shell(self.ask_shell))
     }
 
     fn metadata(&self) -> ProviderDescriptor {
@@ -815,10 +900,10 @@ impl DriverFactory for OpenCodeFactory {
             capabilities: ProviderCapabilities {
                 streaming_text: true,
                 tool_events: true,
-                session_history: false,
+                session_history: true,
                 native_turn_ids: false,
                 cancel_turn: false,
-                approvals: false,
+                approvals: true,
                 can_own_process: true,
                 can_attach_service: true,
             },
@@ -828,7 +913,7 @@ impl DriverFactory for OpenCodeFactory {
     }
 
     fn probe(&self) -> ProviderDescriptor {
-        OpenCodeDriver::new().probe()
+        OpenCodeDriver::new().with_ask_shell(self.ask_shell).probe()
     }
 }
 
@@ -939,7 +1024,8 @@ mod tests {
             "data": {"sessionID": "ses_other", "delta": "hidden"}
         });
         assert!(map_stream_event(&other, native).is_none());
-        assert!(OpenCodeFactory.supports(&ProviderVersion::parse("2.4.0")));
-        assert!(!OpenCodeFactory.supports(&ProviderVersion::parse("3.0.0")));
+        let factory = OpenCodeFactory::new();
+        assert!(factory.supports(&ProviderVersion::parse("2.4.0")));
+        assert!(!factory.supports(&ProviderVersion::parse("3.0.0")));
     }
 }

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# P2: aprobaciones con un solo ganador, decisión rechazada y evento observable.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$ROOT/target/debug"
+RUNTIME="$(mktemp -d /tmp/gf-p2-appr-XXXXXX)"
+WORKSPACE="$(mktemp -d /tmp/gf-p2-appr-ws-XXXXXX)"
+
+cleanup() {
+  [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
+  rm -rf "$RUNTIME" "$WORKSPACE"
+}
+trap cleanup EXIT
+
+export FLEET_RUNTIME_DIR="$RUNTIME"
+export FLEET_DB_PATH="$RUNTIME/fleet.sqlite"
+export FLEET_FAKE_APPROVAL=1
+
+"$BIN/fleetd" >"$RUNTIME/daemon.out" 2>"$RUNTIME/daemon.err" &
+DAEMON_PID=$!
+for _ in $(seq 1 50); do [[ -f "$RUNTIME/fleetd.addr" ]] && break; sleep 0.1; done
+[[ -f "$RUNTIME/fleetd.addr" ]] || { echo "FAIL: fleetd did not start"; exit 1; }
+
+WS_ID="$("$BIN/fleetctl" workspace add "$WORKSPACE" | cut -f1)"
+SID="$("$BIN/fleetctl" session create --workspace "$WS_ID" --provider fake | cut -f1)"
+
+"$BIN/fleetctl" watch "$SID" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
+WATCH=$!
+for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
+"$BIN/fleetctl" prompt "$SID" "allow this command" >/dev/null
+wait "$WATCH"
+
+APPROVAL_ID="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch.out")"
+[[ -n "$APPROVAL_ID" ]] || { echo "FAIL: no approval request observed"; exit 1; }
+
+set +e
+FLEET_OPERATION_KEY=answer-once "$BIN/fleetctl" answer "$APPROVAL_ID" once >"$RUNTIME/answer1" 2>"$RUNTIME/answer1.err" &
+A1=$!
+sleep 0.05
+FLEET_OPERATION_KEY=answer-reject "$BIN/fleetctl" answer "$APPROVAL_ID" reject >"$RUNTIME/answer2" 2>"$RUNTIME/answer2.err"
+A2=$?
+wait "$A1"
+A1=$?
+set -e
+
+WINS=0
+for f in answer1 answer2; do
+  if grep -qi accepted "$RUNTIME/$f"; then WINS=$((WINS+1)); fi
+done
+[[ "$WINS" == "1" ]] || { echo "FAIL: expected exactly one winning decision"; cat "$RUNTIME/answer1" "$RUNTIME/answer2" "$RUNTIME/answer1.err" "$RUNTIME/answer2.err"; exit 1; }
+echo "PASS: exactly one decision winner"
+
+"$BIN/fleetctl" approval "$APPROVAL_ID" | grep -qiE 'accepted|rejected'
+grep -q approval_resolved "$RUNTIME/watch.out" || "$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 | grep -q approval_resolved
+echo "PASS: approval result observable"
+
+# Un rechazo explícito en otra sesión.
+SID2="$("$BIN/fleetctl" session create --workspace "$WS_ID" --provider fake | cut -f1)"
+"$BIN/fleetctl" watch "$SID2" --until-turn-end >"$RUNTIME/watch2.out" 2>"$RUNTIME/watch2.err" &
+WATCH2=$!
+for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch2.err" 2>/dev/null && break; sleep 0.1; done
+"$BIN/fleetctl" prompt "$SID2" "reject this command" >/dev/null
+wait "$WATCH2"
+APPROVAL2="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch2.out")"
+FLEET_OPERATION_KEY=answer2-key "$BIN/fleetctl" answer "$APPROVAL2" reject | grep -q rejected
+echo "PASS: rejection recorded"

@@ -15,6 +15,7 @@ trap cleanup EXIT
 
 start_daemon() {
   export FLEET_RUNTIME_DIR="$RUNTIME"
+export FLEET_DB_PATH="$RUNTIME/fleet.sqlite"
   "$BIN/fleetd" >"$RUNTIME/daemon.out" 2>"$RUNTIME/daemon.err" &
   DAEMON_PID=$!
   for _ in $(seq 1 50); do

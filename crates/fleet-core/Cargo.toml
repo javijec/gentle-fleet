@@ -9,3 +9,4 @@ fleet-domain = { path = "../fleet-domain" }
 fleet-agent = { path = "../fleet-agent" }
 
 [dev-dependencies]
+fleet-store-sqlite = { path = "../fleet-store-sqlite" }

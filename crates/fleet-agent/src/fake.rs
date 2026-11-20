@@ -21,6 +21,7 @@ pub struct FakeConfig {
     pub block_close: bool,
     pub emit_provider_error: bool,
     pub emit_terminal_failure: bool,
+    pub emit_approval: bool,
 }
 
 pub struct FakeDriver {
@@ -109,6 +110,16 @@ impl AgentDriver for FakeDriver {
         }
         self.turns += 1;
         let turn = input.turn_id;
+        if self.config.emit_approval {
+            self.pending
+                .push_back(Self::event(DomainEvent::ApprovalRequested {
+                    native_request_id: format!("native-{turn}"),
+                    kind: "shell".into(),
+                    message: "allow fake command?".into(),
+                    resources: vec![input.text.clone()],
+                    allowed_decisions: vec!["once".into(), "reject".into()],
+                }));
+        }
         if self.config.emit_provider_error {
             self.pending
                 .push_back(Self::event(DomainEvent::AgentNotice {
@@ -160,6 +171,18 @@ impl AgentDriver for FakeDriver {
                 }));
         }
         Ok(SendReceipt { accepted: true })
+    }
+
+    fn answer(&mut self, native_request_id: String, decision: String) -> Result<(), AgentError> {
+        if self.config.block_send {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        self.pending
+            .push_back(Self::event(DomainEvent::ApprovalResolved {
+                native_request_id,
+                decision,
+            }));
+        Ok(())
     }
 
     fn next_event(&mut self, timeout: Duration) -> Result<Option<AgentEvent>, AgentError> {

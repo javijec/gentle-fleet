@@ -110,6 +110,19 @@ pub enum DomainEvent {
     AgentError {
         message: String,
     },
+    /// Solicitud interactiva nativa traducida a dominio por el driver.
+    ApprovalRequested {
+        native_request_id: String,
+        kind: String,
+        message: String,
+        resources: Vec<String>,
+        allowed_decisions: Vec<String>,
+    },
+    /// Confirmación nativa de que la decisión fue entregada.
+    ApprovalResolved {
+        native_request_id: String,
+        decision: String,
+    },
 }
 
 /// Contrato mínimo de P1. Las operaciones no soportadas devuelven

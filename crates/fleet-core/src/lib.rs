@@ -15,6 +15,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use fleet_agent::{
     AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent, LaunchContext, ProviderRegistry,
 };
+use fleet_domain::store::{
+    ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord, OperationReservation,
+    OperationStatus, SessionStore, StoreError, TurnRecord,
+};
 use fleet_domain::{
     Event, EventKind, ProviderDescriptor, ProviderId, RunnerMode, SessionId, SessionState,
     TurnState, TurnStatus, WorkspaceId,
@@ -22,6 +26,8 @@ use fleet_domain::{
 
 /// Capacidad por defecto de la cola de cada suscriptor.
 pub const SUBSCRIBER_LIMIT: usize = 256;
+/// Página máxima devuelta por una lectura de timeline.
+pub const TIMELINE_PAGE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSummary {
@@ -45,23 +51,15 @@ pub struct PromptReceipt {
     pub turn_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OperationStatus {
-    Reserved,
-    Succeeded,
-    Failed { code: String, message: String },
-}
-
-struct OperationRecord {
-    receipt: PromptReceipt,
-    fingerprint: String,
-    status: OperationStatus,
-}
-
 enum DriverCommand {
     Prompt {
         text: String,
         turn_id: String,
+    },
+    Answer {
+        approval_id: String,
+        native_request_id: String,
+        decision: String,
     },
     Close {
         done: Sender<Result<(), AgentError>>,
@@ -75,7 +73,6 @@ struct DriverHandle {
 
 struct SessionRecord {
     summary: SessionSummary,
-    timeline: Vec<Event>,
     next_seq: u64,
     driver: Option<DriverHandle>,
     active_turn: Option<String>,
@@ -235,23 +232,92 @@ impl EventBus {
 struct ManagerState {
     workspaces: Vec<WorkspaceSummary>,
     sessions: HashMap<SessionId, SessionRecord>,
-    operations: HashMap<String, OperationRecord>,
+    approvals: HashMap<String, ApprovalRequest>,
     next_ids: u64,
 }
 
 pub struct SessionManager {
     registry: ProviderRegistry,
+    store: Arc<dyn SessionStore>,
     bus: EventBus,
     state: Mutex<ManagerState>,
 }
 
 impl SessionManager {
-    pub fn new(registry: ProviderRegistry) -> Self {
-        Self {
+    pub fn new(
+        registry: ProviderRegistry,
+        store: Arc<dyn SessionStore>,
+    ) -> Result<Self, AgentError> {
+        let manager = Self {
             registry,
+            store,
             bus: EventBus::default(),
-            state: Mutex::new(ManagerState::default()),
+            state: Mutex::new(ManagerState {
+                workspaces: Vec::new(),
+                sessions: HashMap::new(),
+                approvals: HashMap::new(),
+                next_ids: 0,
+            }),
+        };
+        manager.load_from_store()?;
+        Ok(manager)
+    }
+
+    fn load_from_store(&self) -> Result<(), AgentError> {
+        let workspaces = self.store.list_workspaces().map_err(to_agent_error)?;
+        let sessions = self.store.list_sessions().map_err(to_agent_error)?;
+        let approvals = self.store.list_approvals(None).map_err(to_agent_error)?;
+        let mut state = self.state.lock().expect("manager poisoned");
+        // Tras reinicio, continuar en 0 colisionaría con IDs ya persistidos.
+        if !sessions.is_empty() {
+            state.next_ids = now_ms().saturating_mul(1000);
         }
+        state.workspaces = workspaces
+            .into_iter()
+            .map(|workspace| WorkspaceSummary {
+                id: workspace.id,
+                path: PathBuf::from(workspace.path),
+            })
+            .collect();
+        for stored in sessions {
+            let next_seq = self
+                .store
+                .max_seq(&stored.session_id)
+                .map_err(to_agent_error)?
+                + 1;
+            // Sin runner verificado, una sesión antigua no puede fingir que sigue ejecutándose.
+            let (session_state, turn_state) = match stored.state {
+                SessionState::Running | SessionState::Stopping | SessionState::StopUnconfirmed => {
+                    (SessionState::NeedsReconciliation, TurnState::Uncertain)
+                }
+                other => (other, stored.turn_state),
+            };
+            state.sessions.insert(
+                stored.session_id.clone(),
+                SessionRecord {
+                    summary: SessionSummary {
+                        id: stored.session_id,
+                        workspace_id: stored.workspace_id,
+                        provider_id: stored.provider_id,
+                        state: session_state,
+                        turn_state,
+                    },
+                    next_seq,
+                    driver: None,
+                    active_turn: None,
+                    current_operation: None,
+                },
+            );
+        }
+        state.approvals = approvals
+            .into_iter()
+            .map(|approval| (approval.approval_id.clone(), approval))
+            .collect();
+        Ok(())
+    }
+
+    pub fn store_health(&self) -> Result<fleet_domain::store::StoreHealth, AgentError> {
+        self.store.health().map_err(to_agent_error)
     }
 
     pub fn bus(&self) -> &EventBus {
@@ -264,6 +330,11 @@ impl SessionManager {
 
     pub fn provider_descriptors(&self) -> Vec<ProviderDescriptor> {
         self.registry.descriptors()
+    }
+
+    fn next_id(&self, prefix: &str) -> String {
+        let mut state = self.state.lock().expect("manager poisoned");
+        Self::next_id_locked(&mut state, prefix)
     }
 
     fn next_id_locked(state: &mut ManagerState, prefix: &str) -> String {
@@ -298,6 +369,12 @@ impl SessionManager {
             id: Self::next_id_locked(&mut state, "ws"),
             path,
         };
+        self.store
+            .save_workspace(&fleet_domain::store::WorkspaceRecord {
+                id: workspace.id.clone(),
+                path: workspace.path.to_string_lossy().into_owned(),
+            })
+            .map_err(to_agent_error)?;
         state.workspaces.push(workspace.clone());
         Ok(workspace)
     }
@@ -351,14 +428,25 @@ impl SessionManager {
                 state: SessionState::Running,
                 turn_state: TurnState::Idle,
             };
+            let next_seq = self.store.max_seq(&session_id).map_err(to_agent_error)? + 1;
+            self.store
+                .save_session(&fleet_domain::store::SessionRecord {
+                    session_id: session_id.clone(),
+                    workspace_id: workspace.id.clone(),
+                    provider_id: provider_id.to_string(),
+                    state: SessionState::Running,
+                    turn_state: TurnState::Idle,
+                    created_at_ms: now_ms(),
+                    updated_at_ms: now_ms(),
+                })
+                .map_err(to_agent_error)?;
             let (commands, rx) = mpsc::channel();
             let join = self.spawn_driver(session_id.clone(), driver, rx);
             state.sessions.insert(
                 session_id.clone(),
                 SessionRecord {
                     summary: summary.clone(),
-                    timeline: Vec::new(),
-                    next_seq: 1,
+                    next_seq,
                     driver: Some(DriverHandle {
                         commands,
                         join: Some(join),
@@ -374,14 +462,14 @@ impl SessionManager {
                     provider_id: provider_id.to_string(),
                     workspace_id: workspace.id,
                 },
-            );
+            )?;
             self.publish_locked(
                 &mut state,
                 &session_id,
                 EventKind::SessionStateChanged {
                     state: SessionState::Running,
                 },
-            );
+            )?;
             summary
         };
         Ok(summary)
@@ -404,6 +492,15 @@ impl SessionManager {
                         manager.fail_turn(&session_id, &turn_id, &error);
                     }
                 }
+                Ok(DriverCommand::Answer {
+                    approval_id,
+                    native_request_id,
+                    decision,
+                }) => {
+                    if let Err(error) = driver.answer(native_request_id, decision) {
+                        manager.mark_approval_uncertain(&session_id, &approval_id, &error);
+                    }
+                }
                 Ok(DriverCommand::Close { done }) => {
                     let outcome = driver.close();
                     manager.finish_stop(&session_id, &outcome);
@@ -414,19 +511,31 @@ impl SessionManager {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             match driver.next_event(Duration::from_millis(50)) {
-                Ok(Some(event)) => manager.publish_agent(&session_id, event),
+                Ok(Some(event)) => {
+                    if let Err(error) = manager.publish_agent(&session_id, event) {
+                        eprintln!("agent event could not be persisted: {error}");
+                    }
+                }
                 Ok(None) => {}
-                Err(error) => manager.publish_local(
-                    &session_id,
-                    EventKind::AgentError {
-                        message: error.to_string(),
-                    },
-                ),
+                Err(error) => {
+                    let _ = manager.publish_local(
+                        &session_id,
+                        EventKind::AgentError {
+                            message: error.to_string(),
+                        },
+                    );
+                }
             }
         })
     }
 
-    fn publish_locked(&self, state: &mut ManagerState, session_id: &str, kind: EventKind) {
+    /// Persiste antes de publicar. Si el store falla, el evento no sale.
+    fn publish_locked(
+        &self,
+        state: &mut ManagerState,
+        session_id: &str,
+        kind: EventKind,
+    ) -> Result<(), AgentError> {
         let record = state
             .sessions
             .get_mut(session_id)
@@ -440,15 +549,16 @@ impl SessionManager {
             created_at_ms: now_ms(),
             kind,
         };
-        record.timeline.push(event.clone());
+        self.store.append_event(&event).map_err(to_agent_error)?;
         // El bus se publica con el lock de sesión tomado: snapshot y streaming
         // no pueden perder ni duplicar eventos (P1.1).
         self.bus.publish(&event);
+        Ok(())
     }
 
-    fn publish_local(&self, session_id: &str, kind: EventKind) {
+    fn publish_local(&self, session_id: &str, kind: EventKind) -> Result<(), AgentError> {
         let mut state = self.state.lock().expect("manager poisoned");
-        self.publish_locked(&mut state, session_id, kind);
+        self.publish_locked(&mut state, session_id, kind)
     }
 
     fn fail_turn(&self, session_id: &str, turn_id: &str, error: &AgentError) {
@@ -464,7 +574,7 @@ impl SessionManager {
             record.summary.turn_state = TurnState::Failed;
             record.current_operation.take()
         };
-        self.publish_locked(
+        let _ = self.publish_locked(
             &mut state,
             session_id,
             EventKind::TurnCompleted {
@@ -472,43 +582,46 @@ impl SessionManager {
                 status: TurnStatus::Failed,
             },
         );
-        self.publish_locked(
+        let _ = self.publish_locked(
             &mut state,
             session_id,
             EventKind::AgentError {
                 message: error.to_string(),
             },
         );
+        drop(state);
         if let Some(operation_id) = operation_id {
-            if let Some(operation) = state.operations.get_mut(&operation_id) {
-                operation.status = OperationStatus::Failed {
-                    code: error.code.clone(),
-                    message: error.message.clone(),
-                };
-            }
+            let _ = self.store.update_operation(
+                &operation_id,
+                OperationStatus::Failed,
+                Some(error.message.clone()),
+            );
         }
     }
 
-    fn publish_agent(&self, session_id: &str, event: AgentEvent) {
-        let mut state = self.state.lock().expect("manager poisoned");
-        let (kind, operation_update) = {
+    fn publish_agent(&self, session_id: &str, event: AgentEvent) -> Result<(), AgentError> {
+        let next_approval_id = self.next_id("appr");
+        let (kind, operation_update, new_approval, approval_update) = {
+            let mut state = self.state.lock().expect("manager poisoned");
             let Some(record) = state.sessions.get_mut(session_id) else {
-                return;
+                return Ok(());
             };
             let active = record.active_turn.clone();
-            let mut update = None;
+            let mut operation_update = None;
+            let mut new_approval = None;
+            let mut approval_update = None;
+            let scoped_turn = |turn_id: &str| -> bool { active.as_deref() == Some(turn_id) };
             let kind = match event.kind {
-                // El turno lo inicia el SessionManager al reservar la operación.
-                DomainEvent::TurnStarted { .. } => return,
+                DomainEvent::TurnStarted { .. } => return Ok(()),
                 DomainEvent::AssistantDelta { turn_id, text } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     EventKind::AssistantDelta { turn_id, text }
                 }
                 DomainEvent::AssistantMessage { turn_id, text } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     EventKind::AssistantMessage { turn_id, text }
                 }
@@ -517,8 +630,8 @@ impl SessionManager {
                     name,
                     input,
                 } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     EventKind::ToolStarted {
                         turn_id,
@@ -531,8 +644,8 @@ impl SessionManager {
                     name,
                     output,
                 } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     EventKind::ToolOutput {
                         turn_id,
@@ -545,8 +658,8 @@ impl SessionManager {
                     name,
                     success,
                 } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     EventKind::ToolCompleted {
                         turn_id,
@@ -555,45 +668,37 @@ impl SessionManager {
                     }
                 }
                 DomainEvent::TurnCompleted { turn_id, status } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
                     let terminal = match status {
                         TurnStatus::Completed => TurnState::Completed,
                         TurnStatus::Failed => TurnState::Failed,
                         TurnStatus::Interrupted => TurnState::Interrupted,
                     };
-                    let operation_id = record.current_operation.take();
-                    update = operation_id.map(|id| {
-                        (
-                            id,
-                            if terminal == TurnState::Completed {
-                                OperationStatus::Succeeded
-                            } else {
-                                OperationStatus::Failed {
-                                    code: "turn_not_completed".into(),
-                                    message: format!("turn ended as {terminal:?}"),
-                                }
-                            },
-                        )
+                    operation_update = record.current_operation.take().map(|id| {
+                        if terminal == TurnState::Completed {
+                            (id, OperationStatus::Completed, None)
+                        } else {
+                            (
+                                id,
+                                OperationStatus::Failed,
+                                Some(format!("turn ended as {terminal:?}")),
+                            )
+                        }
                     });
                     record.active_turn = None;
                     record.summary.turn_state = terminal;
                     EventKind::TurnCompleted { turn_id, status }
                 }
                 DomainEvent::TurnFailed { turn_id, message } => {
-                    if active.as_deref() != Some(&turn_id) {
-                        return;
+                    if !scoped_turn(&turn_id) {
+                        return Ok(());
                     }
-                    update = record.current_operation.take().map(|id| {
-                        (
-                            id,
-                            OperationStatus::Failed {
-                                code: "turn_failed".into(),
-                                message: message.clone(),
-                            },
-                        )
-                    });
+                    operation_update = record
+                        .current_operation
+                        .take()
+                        .map(|id| (id, OperationStatus::Failed, Some(message.clone())));
                     record.active_turn = None;
                     record.summary.turn_state = TurnState::Failed;
                     EventKind::TurnCompleted {
@@ -601,116 +706,447 @@ impl SessionManager {
                         status: TurnStatus::Failed,
                     }
                 }
+                DomainEvent::ApprovalRequested {
+                    native_request_id,
+                    kind,
+                    message,
+                    resources,
+                    allowed_decisions,
+                } => {
+                    let Some(turn_id) = active.clone() else {
+                        return Ok(());
+                    };
+                    let approval_id = next_approval_id;
+                    new_approval = Some(ApprovalRequest {
+                        approval_id: approval_id.clone(),
+                        session_id: session_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        kind: kind.clone(),
+                        message: message.clone(),
+                        resources: resources.clone(),
+                        allowed_decisions: allowed_decisions.clone(),
+                        status: ApprovalStatus::Pending,
+                        native_request_id,
+                        decision: None,
+                        created_at_ms: now_ms(),
+                        resolved_at_ms: None,
+                    });
+                    record.summary.turn_state = TurnState::AwaitingApproval;
+                    EventKind::ApprovalRequested {
+                        approval_id,
+                        turn_id,
+                        kind,
+                        message,
+                        resources,
+                        allowed_decisions,
+                    }
+                }
+                DomainEvent::ApprovalResolved {
+                    native_request_id,
+                    decision,
+                } => {
+                    let Some(approval) = state
+                        .approvals
+                        .values()
+                        .find(|a| a.native_request_id == native_request_id)
+                        .cloned()
+                    else {
+                        return Ok(());
+                    };
+                    if !matches!(
+                        approval.status,
+                        ApprovalStatus::Pending | ApprovalStatus::Delivered
+                    ) {
+                        return Ok(());
+                    }
+                    let status = if decision == "reject" {
+                        ApprovalStatus::Rejected
+                    } else {
+                        ApprovalStatus::Accepted
+                    };
+                    approval_update = Some((approval.clone(), status));
+                    EventKind::ApprovalResolved {
+                        approval_id: approval.approval_id,
+                        turn_id: approval.turn_id,
+                        decision,
+                    }
+                }
                 DomainEvent::AgentNotice { message } => EventKind::AgentNotice { message },
                 DomainEvent::AgentError { message } => EventKind::AgentError { message },
             };
-            (kind, update)
+            (kind, operation_update, new_approval, approval_update)
         };
-        self.publish_locked(&mut state, session_id, kind);
-        if let Some((operation_id, status)) = operation_update {
-            if let Some(operation) = state.operations.get_mut(&operation_id) {
-                operation.status = status;
-            }
+
+        if let Some(approval) = new_approval {
+            self.store
+                .save_approval(&approval)
+                .map_err(to_agent_error)?;
+            self.state
+                .lock()
+                .expect("manager poisoned")
+                .approvals
+                .insert(approval.approval_id.clone(), approval);
         }
+        if let Some((approval, status)) = approval_update {
+            self.store
+                .update_approval_status(&approval.approval_id, status)
+                .map_err(to_agent_error)?;
+            let mut resolved = approval;
+            resolved.status = status;
+            resolved.decision = match &kind {
+                EventKind::ApprovalResolved { decision, .. } => Some(decision.clone()),
+                _ => None,
+            };
+            resolved.resolved_at_ms = Some(now_ms());
+            self.state
+                .lock()
+                .expect("manager poisoned")
+                .approvals
+                .insert(resolved.approval_id.clone(), resolved);
+        }
+        self.publish_local(session_id, kind)?;
+        if let Some((operation_id, status, message)) = operation_update {
+            let _ = self.store.update_operation(&operation_id, status, message);
+        }
+        Ok(())
     }
 
-    /// Reserva la operación, valida el estado del turno y despacha una sola vez.
+    pub fn list_approvals(&self, session_id: Option<&str>) -> Vec<ApprovalRequest> {
+        let state = self.state.lock().expect("manager poisoned");
+        state
+            .approvals
+            .values()
+            .filter(|approval| session_id.is_none_or(|id| approval.session_id == id))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_approval(&self, approval_id: &str) -> Option<ApprovalRequest> {
+        self.state
+            .lock()
+            .expect("manager poisoned")
+            .approvals
+            .get(approval_id)
+            .cloned()
+    }
+
+    pub fn get_operation(
+        &self,
+        operation_key: &str,
+    ) -> Result<Option<OperationRecord>, AgentError> {
+        self.store
+            .get_operation(operation_key)
+            .map_err(to_agent_error)
+    }
+
+    /// Página durable desde un cursor; no carga la timeline completa en RAM.
+    pub fn read_timeline(
+        &self,
+        session_id: &str,
+        since_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<Event>, AgentError> {
+        let limit = limit.clamp(1, TIMELINE_PAGE);
+        self.store
+            .read_events(session_id, since_seq, limit)
+            .map_err(to_agent_error)
+    }
+
+    /// Responde una aprobación: solo la primera decisión ganadora se registra.
+    pub fn answer_approval(
+        &self,
+        approval_id: &str,
+        decision: String,
+        operation_key: &str,
+    ) -> Result<ApprovalRequest, AgentError> {
+        let (session_id, native_request_id, fingerprint) = {
+            let state = self.state.lock().expect("manager poisoned");
+            let approval = state.approvals.get(approval_id).ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: format!("unknown approval `{approval_id}`"),
+            })?;
+            if !approval.allowed_decisions.contains(&decision) {
+                return Err(AgentError {
+                    code: "InvalidDecision".into(),
+                    message: format!("`{decision}` is not allowed for `{approval_id}`"),
+                });
+            }
+            if !matches!(
+                approval.status,
+                ApprovalStatus::Pending | ApprovalStatus::Delivered
+            ) {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: format!(
+                        "approval `{approval_id}` is already {}",
+                        approval.status_text()
+                    ),
+                });
+            }
+            let fingerprint = format!("{}\0{}\0{}", approval.session_id, approval_id, decision);
+            (
+                approval.session_id.clone(),
+                approval.native_request_id.clone(),
+                fingerprint,
+            )
+        };
+
+        let operation = OperationRecord {
+            operation_id: self.next_id("op"),
+            operation_key: operation_key.to_string(),
+            kind: OperationKind::AnswerApproval,
+            session_id: session_id.clone(),
+            target_id: Some(approval_id.to_string()),
+            fingerprint: fingerprint.clone(),
+            status: OperationStatus::Reserved,
+            message: None,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        match self
+            .store
+            .reserve_operation(&operation)
+            .map_err(to_agent_error)?
+        {
+            OperationReservation::Conflict => {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key was used with different arguments".into(),
+                })
+            }
+            OperationReservation::Existing(existing)
+                if existing.status == OperationStatus::Uncertain =>
+            {
+                return Err(AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "approval decision delivery is uncertain; no automatic retry".into(),
+                })
+            }
+            OperationReservation::Existing(_) => {}
+            OperationReservation::Created(_) => {}
+        }
+
+        let status = if decision == "reject" {
+            ApprovalStatus::Rejected
+        } else {
+            ApprovalStatus::Accepted
+        };
+        let won = self
+            .store
+            .resolve_approval(approval_id, &decision, status)
+            .map_err(to_agent_error)?;
+        if !won {
+            let _ = self.store.update_operation(
+                &operation.operation_id,
+                OperationStatus::Failed,
+                Some("another client won the decision".into()),
+            );
+            return Err(AgentError {
+                code: "Conflict".into(),
+                message: "another client already resolved this approval".into(),
+            });
+        }
+        let _ =
+            self.store
+                .update_operation(&operation.operation_id, OperationStatus::Completed, None);
+
+        let mut approved = {
+            let mut state = self.state.lock().expect("manager poisoned");
+            let approval = state
+                .approvals
+                .get_mut(approval_id)
+                .expect("approval checked");
+            approval.status = status;
+            approval.decision = Some(decision.clone());
+            approval.resolved_at_ms = Some(now_ms());
+            approval.clone()
+        };
+        self.publish_local(
+            &session_id,
+            EventKind::ApprovalResolved {
+                approval_id: approval_id.to_string(),
+                turn_id: approved.turn_id.clone(),
+                decision: decision.clone(),
+            },
+        )?;
+
+        let command_tx = self
+            .state
+            .lock()
+            .expect("manager poisoned")
+            .sessions
+            .get(&session_id)
+            .and_then(|record| record.driver.as_ref().map(|driver| driver.commands.clone()));
+        match command_tx {
+            Some(tx) => {
+                if tx
+                    .send(DriverCommand::Answer {
+                        approval_id: approval_id.to_string(),
+                        native_request_id,
+                        decision,
+                    })
+                    .is_err()
+                {
+                    approved.status = ApprovalStatus::Uncertain;
+                    let _ = self
+                        .store
+                        .update_approval_status(approval_id, ApprovalStatus::Uncertain);
+                    let _ = self.store.update_operation(
+                        &operation.operation_id,
+                        OperationStatus::Uncertain,
+                        Some("driver channel closed before decision delivery".into()),
+                    );
+                }
+            }
+            None => {
+                approved.status = ApprovalStatus::Uncertain;
+                let _ = self
+                    .store
+                    .update_approval_status(approval_id, ApprovalStatus::Uncertain);
+                let _ = self.store.update_operation(
+                    &operation.operation_id,
+                    OperationStatus::Uncertain,
+                    Some("no live driver to deliver the decision".into()),
+                );
+            }
+        }
+        Ok(approved)
+    }
+
+    pub fn mark_approval_uncertain(&self, session_id: &str, approval_id: &str, error: &AgentError) {
+        let _ = self
+            .store
+            .update_approval_status(approval_id, ApprovalStatus::Uncertain);
+        let _ = self.publish_local(
+            session_id,
+            EventKind::AgentError {
+                message: format!("approval decision delivery uncertain: {error}"),
+            },
+        );
+    }
+
+    /// Reserva la operación de forma durable, valida el turno y despacha una sola vez.
     pub fn send_prompt(
         &self,
         session_id: &str,
         text: String,
         operation_key: &str,
     ) -> Result<PromptReceipt, AgentError> {
-        let text_for_command = text.clone();
+        let turn_id = self.next_id("turn");
+        let operation_id = self.next_id("op");
         let fingerprint = format!("{session_id}\0{text}");
-        let (command_tx, turn_id, operation_id, receipt) = {
-            let mut state = self.state.lock().expect("manager poisoned");
-            if let Some(existing) = state.operations.get(operation_key) {
-                if existing.fingerprint == fingerprint {
-                    return Ok(existing.receipt.clone());
-                }
+        let operation = OperationRecord {
+            operation_id: operation_id.clone(),
+            operation_key: operation_key.to_string(),
+            kind: OperationKind::SendPrompt,
+            session_id: session_id.to_string(),
+            target_id: Some(turn_id.clone()),
+            fingerprint: fingerprint.clone(),
+            status: OperationStatus::Reserved,
+            message: None,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        let reservation = self
+            .store
+            .reserve_operation(&operation)
+            .map_err(to_agent_error)?;
+        let existing = match reservation {
+            OperationReservation::Created(_) => None,
+            OperationReservation::Conflict => {
                 return Err(AgentError {
                     code: "Conflict".into(),
+                    message: "operation key was used with different arguments or session".into(),
+                })
+            }
+            OperationReservation::Existing(record) => Some(record),
+        };
+        if let Some(record) = existing {
+            if record.status == OperationStatus::Uncertain {
+                return Err(AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "previous prompt delivery is uncertain; no automatic resend".into(),
+                });
+            }
+            return Ok(PromptReceipt {
+                operation_id: record.operation_id,
+                session_id: record.session_id,
+                turn_id: record.target_id.unwrap_or_default(),
+            });
+        }
+
+        let command_tx = {
+            let mut state = self.state.lock().expect("manager poisoned");
+            let record = state
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AgentError {
+                    code: "not_found".into(),
+                    message: format!("unknown session `{session_id}`"),
+                })?;
+            if record.driver.is_none() || record.summary.state != SessionState::Running {
+                return Err(AgentError {
+                    code: "session_stopped".into(),
+                    message: format!("session `{session_id}` is not running with a live runner"),
+                });
+            }
+            if !record.summary.turn_state.accepts_prompt() {
+                return Err(AgentError {
+                    code: "TurnAlreadyRunning".into(),
                     message: format!(
-                        "operation key `{operation_key}` was used with different arguments"
+                        "session `{session_id}` has turn in state {:?}",
+                        record.summary.turn_state
                     ),
                 });
             }
-            let turn_id = Self::next_id_locked(&mut state, "turn");
-            let operation_id = Self::next_id_locked(&mut state, "op");
-            let receipt = PromptReceipt {
-                operation_id: operation_id.clone(),
-                session_id: session_id.to_string(),
-                turn_id: turn_id.clone(),
-            };
-            let command_tx = {
-                let record = state
-                    .sessions
-                    .get_mut(session_id)
-                    .ok_or_else(|| AgentError {
-                        code: "not_found".into(),
-                        message: format!("unknown session `{session_id}`"),
-                    })?;
-                if record.driver.is_none() || record.summary.state != SessionState::Running {
-                    return Err(AgentError {
-                        code: "session_stopped".into(),
-                        message: format!("session `{session_id}` is stopped"),
-                    });
-                }
-                if !record.summary.turn_state.accepts_prompt() {
-                    return Err(AgentError {
-                        code: "TurnAlreadyRunning".into(),
-                        message: format!(
-                            "session `{session_id}` has turn in state {:?}",
-                            record.summary.turn_state
-                        ),
-                    });
-                }
-                let command_tx = record
-                    .driver
-                    .as_ref()
-                    .expect("driver checked")
-                    .commands
-                    .clone();
-                record.active_turn = Some(turn_id.clone());
-                record.current_operation = Some(operation_id.clone());
-                record.summary.turn_state = TurnState::Running;
-                command_tx
-            };
-            // Reserva ANTES de despachar.
-            state.operations.insert(
-                operation_key.to_string(),
-                OperationRecord {
-                    receipt: receipt.clone(),
-                    fingerprint,
-                    status: OperationStatus::Reserved,
-                },
-            );
-            self.publish_locked(
-                &mut state,
-                session_id,
-                EventKind::TurnStarted {
-                    turn_id: turn_id.clone(),
-                },
-            );
-            self.publish_locked(
-                &mut state,
-                session_id,
-                EventKind::UserMessage {
-                    turn_id: turn_id.clone(),
-                    text,
-                },
-            );
-            (command_tx, turn_id, operation_id, receipt)
+            let command_tx = record
+                .driver
+                .as_ref()
+                .expect("driver checked")
+                .commands
+                .clone();
+            record.active_turn = Some(turn_id.clone());
+            record.current_operation = Some(operation_id.clone());
+            record.summary.turn_state = TurnState::Running;
+            command_tx
         };
+        self.store
+            .save_turn(&TurnRecord {
+                turn_id: turn_id.clone(),
+                session_id: session_id.to_string(),
+                operation_id: operation_id.clone(),
+                state: TurnState::Running,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+            })
+            .map_err(to_agent_error)?;
+        let _ = self
+            .store
+            .update_operation(&operation_id, OperationStatus::Accepted, None);
+
+        self.publish_locked(
+            &mut self.state.lock().expect("manager poisoned"),
+            session_id,
+            EventKind::TurnStarted {
+                turn_id: turn_id.clone(),
+            },
+        )?;
+        self.publish_locked(
+            &mut self.state.lock().expect("manager poisoned"),
+            session_id,
+            EventKind::UserMessage {
+                turn_id: turn_id.clone(),
+                text: text.clone(),
+            },
+        )?;
 
         if let Err(error) = command_tx.send(DriverCommand::Prompt {
-            text: text_for_command,
-            turn_id,
+            text,
+            turn_id: turn_id.clone(),
         }) {
             self.fail_turn(
                 session_id,
-                &receipt.turn_id,
+                &turn_id,
                 &AgentError {
                     code: "DispatchFailed".into(),
                     message: format!("driver command channel closed: {error}"),
@@ -721,8 +1157,11 @@ impl SessionManager {
                 message: "prompt was not dispatched; no automatic retry will be attempted".into(),
             });
         }
-        let _ = operation_id;
-        Ok(receipt)
+        Ok(PromptReceipt {
+            operation_id,
+            session_id: session_id.to_string(),
+            turn_id,
+        })
     }
 
     /// Suscribe antes de copiar el snapshot; publicaciones concurrentes quedan
@@ -734,18 +1173,45 @@ impl SessionManager {
         limit: usize,
     ) -> Result<(Subscription, Vec<Event>), AgentError> {
         let state = self.state.lock().expect("manager poisoned");
+        if !state.sessions.contains_key(session_id) {
+            return Err(AgentError {
+                code: "not_found".into(),
+                message: format!("unknown session `{session_id}`"),
+            });
+        }
+        let subscription = self.bus.subscribe(session_id, limit);
+        let snapshot = self
+            .store
+            .read_events(session_id, since_seq, TIMELINE_PAGE)
+            .map_err(to_agent_error)?;
+        Ok((subscription, snapshot))
+    }
+
+    fn persist_session_state(&self, session_id: &str) {
+        let state = self.state.lock().expect("manager poisoned");
+        let _ = self.persist_session_state_locked(&state, session_id);
+    }
+
+    fn persist_session_state_locked(
+        &self,
+        state: &ManagerState,
+        session_id: &str,
+    ) -> Result<(), AgentError> {
         let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
             code: "not_found".into(),
             message: format!("unknown session `{session_id}`"),
         })?;
-        let subscription = self.bus.subscribe(session_id, limit);
-        let snapshot = record
-            .timeline
-            .iter()
-            .filter(|event| event.seq > since_seq)
-            .cloned()
-            .collect();
-        Ok((subscription, snapshot))
+        self.store
+            .save_session(&fleet_domain::store::SessionRecord {
+                session_id: session_id.to_string(),
+                workspace_id: record.summary.workspace_id.clone(),
+                provider_id: record.summary.provider_id.clone(),
+                state: record.summary.state,
+                turn_state: record.summary.turn_state,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+            })
+            .map_err(to_agent_error)
     }
 
     /// El worker confirma el cierre real, incluso si el cliente agotó su plazo.
@@ -766,13 +1232,13 @@ impl SessionManager {
             SessionState::StopUnconfirmed
         };
         record.summary.state = new_state;
-        self.publish_locked(
+        let _ = self.publish_locked(
             &mut state,
             session_id,
             EventKind::SessionStateChanged { state: new_state },
         );
         if let Err(error) = result {
-            self.publish_locked(
+            let _ = self.publish_locked(
                 &mut state,
                 session_id,
                 EventKind::AgentError {
@@ -780,6 +1246,8 @@ impl SessionManager {
                 },
             );
         }
+        drop(state);
+        self.persist_session_state(session_id);
     }
 
     fn mark_stop_unconfirmed(&self, session_id: &str, reason: &str) {
@@ -791,20 +1259,22 @@ impl SessionManager {
             return;
         }
         record.summary.state = SessionState::StopUnconfirmed;
-        self.publish_locked(
+        let _ = self.publish_locked(
             &mut state,
             session_id,
             EventKind::SessionStateChanged {
                 state: SessionState::StopUnconfirmed,
             },
         );
-        self.publish_locked(
+        let _ = self.publish_locked(
             &mut state,
             session_id,
             EventKind::AgentNotice {
                 message: reason.to_string(),
             },
         );
+        drop(state);
+        self.persist_session_state(session_id);
     }
 
     /// Cierre acotado: Stopped solo significa cierre confirmado.
@@ -827,7 +1297,7 @@ impl SessionManager {
             record.summary.state = SessionState::Stopping;
             if let Some(turn_id) = &active_turn {
                 record.summary.turn_state = TurnState::Uncertain;
-                self.publish_locked(
+                let _ = self.publish_locked(
                     &mut state,
                     session_id,
                     EventKind::TurnUncertain {
@@ -836,7 +1306,7 @@ impl SessionManager {
                     },
                 );
             }
-            self.publish_locked(
+            let _ = self.publish_locked(
                 &mut state,
                 session_id,
                 EventKind::SessionStateChanged {
@@ -844,15 +1314,15 @@ impl SessionManager {
                 },
             );
             if let Some(operation_id) = operation_id.clone() {
-                if let Some(operation) = state.operations.get_mut(&operation_id) {
-                    operation.status = OperationStatus::Failed {
-                        code: "session_stopped".into(),
-                        message: "session stopped before a terminal turn result".into(),
-                    };
-                }
+                let _ = self.store.update_operation(
+                    &operation_id,
+                    OperationStatus::Uncertain,
+                    Some("session stopped before a terminal turn result".into()),
+                );
             }
             (handle, active_turn, operation_id)
         };
+        self.persist_session_state(session_id);
         let _ = (active_turn, operation_id);
         let (done_tx, done_rx) = mpsc::channel();
         let outcome = match handle.commands.send(DriverCommand::Close { done: done_tx }) {
@@ -875,6 +1345,13 @@ impl SessionManager {
         // El worker puede confirmar Stopped más tarde; no hacemos join bloqueante.
         drop(handle.join);
         outcome
+    }
+}
+
+fn to_agent_error(error: StoreError) -> AgentError {
+    AgentError {
+        code: error.code,
+        message: error.message,
     }
 }
 
@@ -913,10 +1390,26 @@ mod tests {
         }
     }
 
-    fn manager(config: FakeConfig) -> Arc<SessionManager> {
+    fn unique_db_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "gf-p2-core-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+    }
+
+    fn manager_at(config: FakeConfig, path: std::path::PathBuf) -> Arc<SessionManager> {
         let mut registry = ProviderRegistry::new();
         registry.register(Box::new(ConfiguredFactory(config)));
-        Arc::new(SessionManager::new(registry))
+        let store = Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
+        Arc::new(SessionManager::new(registry, store).unwrap())
+    }
+
+    fn manager(config: FakeConfig) -> Arc<SessionManager> {
+        manager_at(config, unique_db_path())
     }
 
     fn workspace(manager: &SessionManager) -> WorkspaceSummary {
@@ -1178,5 +1671,117 @@ mod tests {
                 can_attach_service: false,
             }
         );
+    }
+
+    #[test]
+    fn timeline_and_operations_survive_manager_restart() {
+        let path = unique_db_path();
+        let manager = manager_at(FakeConfig::default(), path.clone());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        let receipt = manager
+            .send_prompt(&ses.id, "remember me".into(), "durable-key")
+            .unwrap();
+        let _ = collect_terminal(&subscription);
+        drop(subscription);
+        drop(manager);
+
+        let reopened = manager_at(FakeConfig::default(), path);
+        let restored = reopened
+            .list_sessions()
+            .into_iter()
+            .find(|item| item.id == ses.id)
+            .expect("session must be restored");
+        assert_eq!(restored.state, SessionState::NeedsReconciliation);
+        assert_eq!(restored.turn_state, TurnState::Uncertain);
+        let events = reopened.read_timeline(&ses.id, 0, 256).unwrap();
+        assert!(events.len() >= 4);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::UserMessage { .. })));
+        let reused = reopened
+            .send_prompt(&ses.id, "remember me".into(), "durable-key")
+            .unwrap();
+        assert_eq!(reused, receipt);
+    }
+
+    #[test]
+    fn approval_is_resolved_once_and_provider_sees_the_decision() {
+        let manager = manager(FakeConfig {
+            emit_approval: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        manager.send_prompt(&ses.id, "run".into(), "op-1").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let approval = loop {
+            match subscription.recv_event(Duration::from_millis(100)) {
+                Ok(Some(event)) => {
+                    if let EventKind::ApprovalRequested { approval_id, .. } = event.kind {
+                        break approval_id;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                other => panic!("unexpected approval wait result: {other:?}"),
+            }
+            assert!(
+                deadline.elapsed() < Duration::from_secs(5),
+                "no approval request"
+            );
+        };
+        let resolved = manager
+            .answer_approval(&approval, "once".into(), "answer-key")
+            .unwrap();
+        assert_eq!(resolved.status_text(), "accepted");
+        let duplicate = manager
+            .answer_approval(&approval, "reject".into(), "answer-key-2")
+            .unwrap_err();
+        assert_eq!(duplicate.code, "Conflict");
+        let saw_confirmation = loop {
+            match subscription.recv_event(Duration::from_millis(200)) {
+                Ok(Some(Event {
+                    kind: EventKind::ApprovalResolved { decision, .. },
+                    ..
+                })) => {
+                    break decision == "once";
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                other => panic!("unexpected confirmation: {other:?}"),
+            }
+        };
+        assert!(saw_confirmation);
+    }
+
+    #[test]
+    fn rejected_approval_does_not_run_the_command() {
+        let manager = manager(FakeConfig {
+            emit_approval: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let (subscription, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        manager.send_prompt(&ses.id, "run".into(), "op-1").unwrap();
+        let approval = loop {
+            match subscription.recv_event(Duration::from_millis(100)) {
+                Ok(Some(Event {
+                    kind: EventKind::ApprovalRequested { approval_id, .. },
+                    ..
+                })) => {
+                    break approval_id;
+                }
+                Ok(Some(_)) | Ok(None) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => panic!("subscription closed"),
+            }
+        };
+        let resolved = manager
+            .answer_approval(&approval, "reject".into(), "answer-key")
+            .unwrap();
+        assert_eq!(resolved.status_text(), "rejected");
+        assert!(!manager.list_approvals(Some(&ses.id)).is_empty());
     }
 }

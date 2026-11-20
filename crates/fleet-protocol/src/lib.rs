@@ -8,7 +8,7 @@ use std::io::{self, BufRead, Write};
 use fleet_domain::{Event, OperationId, ProviderId, SessionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
-pub const WIRE: &str = "fleet-v1-p1.1";
+pub const WIRE: &str = "fleet-v1-p2";
 pub mod transport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +42,25 @@ pub enum Request {
         session_id: SessionId,
     },
     ListAgents,
+    ReadTimeline {
+        session_id: SessionId,
+        since_seq: u64,
+        limit: usize,
+    },
+    GetOperation {
+        operation_key: String,
+    },
+    ListApprovals {
+        session_id: Option<SessionId>,
+    },
+    GetApproval {
+        approval_id: String,
+    },
+    AnswerApproval {
+        approval_id: String,
+        decision: String,
+        operation_key: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +96,22 @@ pub enum Response {
     },
     Agents {
         agents: Vec<AgentSummary>,
+    },
+    Timeline {
+        session_id: SessionId,
+        events: Vec<Event>,
+    },
+    Operation {
+        operation: fleet_domain::store::OperationRecord,
+    },
+    Approvals {
+        approvals: Vec<fleet_domain::store::ApprovalRequest>,
+    },
+    Approval {
+        approval: fleet_domain::store::ApprovalRequest,
+    },
+    ApprovalResolved {
+        approval: fleet_domain::store::ApprovalRequest,
     },
 }
 

@@ -1028,4 +1028,56 @@ mod tests {
         assert!(factory.supports(&ProviderVersion::parse("2.4.0")));
         assert!(!factory.supports(&ProviderVersion::parse("3.0.0")));
     }
+
+    #[test]
+    fn maps_permission_ask_and_native_confirmation() {
+        let native = "ses_permission_session";
+        let asked = json!({
+            "type": "permission.asked",
+            "data": {
+                "sessionID": native,
+                "id": "per_native",
+                "action": "shell",
+                "message": "allow?",
+                "resources": ["echo hi"],
+                "save": ["echo *"]
+            }
+        });
+        let events = map_stream_event(&asked, native).unwrap();
+        match &events[0].kind {
+            DomainEvent::ApprovalRequested {
+                native_request_id,
+                kind,
+                resources,
+                allowed_decisions,
+                ..
+            } => {
+                assert_eq!(native_request_id, "per_native");
+                assert_eq!(kind, "shell");
+                assert_eq!(resources, &vec!["echo hi".to_string()]);
+                assert!(allowed_decisions.contains(&"once".to_string()));
+                assert!(allowed_decisions.contains(&"reject".to_string()));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        let replied = json!({
+            "type": "permission.replied",
+            "data": {
+                "sessionID": native,
+                "requestID": "per_native",
+                "reply": "reject"
+            }
+        });
+        let events = map_stream_event(&replied, native).unwrap();
+        match &events[0].kind {
+            DomainEvent::ApprovalResolved {
+                native_request_id,
+                decision,
+            } => {
+                assert_eq!(native_request_id, "per_native");
+                assert_eq!(decision, "reject");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
 }

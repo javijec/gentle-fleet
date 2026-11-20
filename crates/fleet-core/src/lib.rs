@@ -13,7 +13,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fleet_agent::{
-    AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent, LaunchContext, ProviderRegistry,
+    redact_provider_error, AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent,
+    LaunchContext, ProviderRegistry,
 };
 use fleet_domain::store::{
     ApprovalClaim, ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord,
@@ -541,7 +542,7 @@ impl SessionManager {
                     let _ = manager.publish_local(
                         &session_id,
                         EventKind::AgentError {
-                            message: error.to_string(),
+                            message: redact_provider_error(&error.to_string()),
                         },
                     );
                 }
@@ -635,7 +636,7 @@ impl SessionManager {
             &mut state,
             session_id,
             EventKind::AgentError {
-                message: error.to_string(),
+                message: redact_provider_error(&error.to_string()),
             },
         );
         drop(state);
@@ -797,7 +798,9 @@ impl SessionManager {
                     let Some(approval) = state
                         .approvals
                         .values()
-                        .find(|a| a.native_request_id == native_request_id)
+                        .find(|a| {
+                            a.session_id == session_id && a.native_request_id == native_request_id
+                        })
                         .cloned()
                     else {
                         return Ok(());
@@ -820,8 +823,12 @@ impl SessionManager {
                         decision,
                     }
                 }
-                DomainEvent::AgentNotice { message } => EventKind::AgentNotice { message },
-                DomainEvent::AgentError { message } => EventKind::AgentError { message },
+                DomainEvent::AgentNotice { message } => EventKind::AgentNotice {
+                    message: redact_provider_error(&message),
+                },
+                DomainEvent::AgentError { message } => EventKind::AgentError {
+                    message: redact_provider_error(&message),
+                },
             };
             (kind, operation_update, new_approval, approval_update)
         };
@@ -895,7 +902,6 @@ impl SessionManager {
         operation_key: &str,
     ) -> Result<ApprovalRequest, AgentError> {
         let mut state = self.state.lock().expect("manager poisoned");
-        Self::ensure_writable(&state)?;
         let approval = state
             .approvals
             .get(approval_id)
@@ -910,13 +916,38 @@ impl SessionManager {
                 message: format!("`{decision}` is not allowed for `{approval_id}`"),
             });
         }
+        let fingerprint = format!("{}\0{}\0{}", approval.session_id, approval_id, decision);
+        // Idempotent replay must work even after a storage fault: it does not
+        // dispatch again, so it is not a new provider effect.
+        if let Some(existing) = self
+            .store
+            .get_operation(operation_key)
+            .map_err(to_agent_error)?
+        {
+            if existing.kind != OperationKind::AnswerApproval
+                || existing.session_id != approval.session_id
+                || existing.fingerprint != fingerprint
+            {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key was used with different arguments".into(),
+                });
+            }
+            let stored = self
+                .store
+                .get_approval(approval_id)
+                .map_err(to_agent_error)?
+                .unwrap_or(approval);
+            return Ok(stored);
+        }
+        Self::ensure_writable(&state)?;
         let operation = OperationRecord {
             operation_id: Self::next_id_locked(&mut state, "op"),
             operation_key: operation_key.to_string(),
             kind: OperationKind::AnswerApproval,
             session_id: approval.session_id.clone(),
             target_id: Some(approval_id.to_string()),
-            fingerprint: format!("{}\0{}\0{}", approval.session_id, approval_id, decision),
+            fingerprint,
             status: OperationStatus::Reserved,
             message: None,
             created_at_ms: now_ms(),
@@ -935,6 +966,12 @@ impl SessionManager {
                     });
                 }
                 return Ok(approval); // same operation key: no second dispatch
+            }
+            ApprovalClaim::Uncertain(_) => {
+                return Err(AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "approval delivery is uncertain; no automatic retry".into(),
+                })
             }
             ApprovalClaim::Conflict => {
                 return Err(AgentError {
@@ -980,12 +1017,30 @@ impl SessionManager {
         Ok(updated) // Dispatching: NOT Accepted/Rejected until native confirmation
     }
 
+    fn record_storage_fault(&self, reason: &str) {
+        let mut state = self.state.lock().expect("manager poisoned");
+        if state.storage_fault.is_none() {
+            state.storage_fault = Some(reason.to_string());
+        }
+    }
+
     pub fn mark_approval_uncertain(&self, session_id: &str, approval_id: &str, error: &AgentError) {
-        if let Err(store_error) = self
+        match self
             .store
             .mark_approval_uncertain(approval_id, &error.message)
         {
-            eprintln!("could not persist uncertain approval: {store_error:?}");
+            Ok(()) => {}
+            Err(store_error) if store_error.code == "approval_already_resolved" => {
+                // A native confirmation already won; keep the durable final state.
+                return;
+            }
+            Err(store_error) => {
+                // Fail closed: without a durable uncertainty record no new
+                // provider effect may be started until restart and reconciliation.
+                eprintln!("could not persist uncertain approval: {store_error:?}");
+                self.record_storage_fault(&store_error.message);
+                return;
+            }
         }
         if let Some(approval) = self
             .state
@@ -999,7 +1054,9 @@ impl SessionManager {
         let _ = self.publish_local(
             session_id,
             EventKind::AgentError {
-                message: format!("approval decision delivery uncertain: {error}"),
+                message: redact_provider_error(&format!(
+                    "approval decision delivery uncertain: {error}"
+                )),
             },
         );
     }
@@ -1079,7 +1136,7 @@ impl SessionManager {
             kind: OperationKind::SendPrompt,
             session_id: session_id.to_string(),
             target_id: Some(turn_id.clone()),
-            fingerprint,
+            fingerprint: fingerprint.clone(),
             status: OperationStatus::Reserved,
             message: None,
             created_at_ms: now_ms(),
@@ -1098,6 +1155,32 @@ impl SessionManager {
                 })
             }
             OperationReservation::Existing(existing) => {
+                if existing.kind != OperationKind::SendPrompt
+                    || existing.session_id != session_id
+                    || existing.fingerprint != fingerprint
+                {
+                    return Err(AgentError {
+                        code: "Conflict".into(),
+                        message: "operation key belongs to a different request".into(),
+                    });
+                }
+                if matches!(
+                    existing.status,
+                    OperationStatus::Reserved | OperationStatus::Uncertain
+                ) {
+                    return Err(AgentError {
+                        code: "NeedsReconciliation".into(),
+                        message: "previous prompt outcome is uncertain; no automatic retry".into(),
+                    });
+                }
+                if existing.status == OperationStatus::Failed {
+                    return Err(AgentError {
+                        code: "PreviousOperationFailed".into(),
+                        message: existing
+                            .message
+                            .unwrap_or_else(|| "previous dispatch failed".into()),
+                    });
+                }
                 return Ok(PromptReceipt {
                     operation_id: existing.operation_id,
                     session_id: existing.session_id,
@@ -1199,6 +1282,7 @@ impl SessionManager {
         since_seq: u64,
         limit: usize,
     ) -> Result<(Subscription, Vec<Event>, u64), AgentError> {
+        let limit = limit.max(1);
         let state = self.state.lock().expect("manager poisoned");
         if !state.sessions.contains_key(session_id) {
             return Err(AgentError {
@@ -1877,5 +1961,283 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.status_text(), "dispatching");
         assert!(!manager.list_approvals(Some(&ses.id)).is_empty());
+    }
+
+    /// Store wrapper that fails only the uncertainty write, to prove fail-closed.
+    struct FailingUncertaintyStore {
+        inner: Arc<dyn SessionStore>,
+    }
+
+    impl SessionStore for FailingUncertaintyStore {
+        fn init(&self) -> fleet_domain::store::StoreResult<()> {
+            self.inner.init()
+        }
+        fn health(&self) -> fleet_domain::store::StoreResult<fleet_domain::store::StoreHealth> {
+            self.inner.health()
+        }
+        fn recover_after_restart(&self) -> fleet_domain::store::StoreResult<()> {
+            self.inner.recover_after_restart()
+        }
+        fn save_workspace(
+            &self,
+            workspace: &fleet_domain::store::WorkspaceRecord,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.save_workspace(workspace)
+        }
+        fn list_workspaces(
+            &self,
+        ) -> fleet_domain::store::StoreResult<Vec<fleet_domain::store::WorkspaceRecord>> {
+            self.inner.list_workspaces()
+        }
+        fn save_session(
+            &self,
+            session: &fleet_domain::store::SessionRecord,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.save_session(session)
+        }
+        fn get_session(
+            &self,
+            session_id: &str,
+        ) -> fleet_domain::store::StoreResult<Option<fleet_domain::store::SessionRecord>> {
+            self.inner.get_session(session_id)
+        }
+        fn list_sessions(
+            &self,
+        ) -> fleet_domain::store::StoreResult<Vec<fleet_domain::store::SessionRecord>> {
+            self.inner.list_sessions()
+        }
+        fn max_seq(&self, session_id: &str) -> fleet_domain::store::StoreResult<u64> {
+            self.inner.max_seq(session_id)
+        }
+        fn append_event(&self, event: &Event) -> fleet_domain::store::StoreResult<()> {
+            self.inner.append_event(event)
+        }
+        fn commit_event(
+            &self,
+            event: &Event,
+            session: &fleet_domain::store::SessionRecord,
+            approval: Option<&ApprovalRequest>,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.commit_event(event, session, approval)
+        }
+        fn read_events(
+            &self,
+            session_id: &str,
+            since_seq: u64,
+            limit: usize,
+        ) -> fleet_domain::store::StoreResult<Vec<Event>> {
+            self.inner.read_events(session_id, since_seq, limit)
+        }
+        fn reserve_operation(
+            &self,
+            operation: &OperationRecord,
+        ) -> fleet_domain::store::StoreResult<OperationReservation> {
+            self.inner.reserve_operation(operation)
+        }
+        fn get_operation(
+            &self,
+            operation_key: &str,
+        ) -> fleet_domain::store::StoreResult<Option<OperationRecord>> {
+            self.inner.get_operation(operation_key)
+        }
+        fn update_operation(
+            &self,
+            operation_id: &str,
+            status: OperationStatus,
+            message: Option<String>,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.update_operation(operation_id, status, message)
+        }
+        fn save_turn(&self, turn: &TurnRecord) -> fleet_domain::store::StoreResult<()> {
+            self.inner.save_turn(turn)
+        }
+        fn get_turn(&self, turn_id: &str) -> fleet_domain::store::StoreResult<Option<TurnRecord>> {
+            self.inner.get_turn(turn_id)
+        }
+        fn save_approval(
+            &self,
+            approval: &ApprovalRequest,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.save_approval(approval)
+        }
+        fn claim_approval(
+            &self,
+            approval_id: &str,
+            decision: &str,
+            operation: &OperationRecord,
+        ) -> fleet_domain::store::StoreResult<ApprovalClaim> {
+            self.inner.claim_approval(approval_id, decision, operation)
+        }
+        fn mark_approval_uncertain(
+            &self,
+            _approval_id: &str,
+            _reason: &str,
+        ) -> fleet_domain::store::StoreResult<()> {
+            Err(StoreError::new(
+                "store_write_failed",
+                "injected uncertainty write failure",
+            ))
+        }
+        fn get_approval(
+            &self,
+            approval_id: &str,
+        ) -> fleet_domain::store::StoreResult<Option<ApprovalRequest>> {
+            self.inner.get_approval(approval_id)
+        }
+        fn list_approvals(
+            &self,
+            session_id: Option<&str>,
+        ) -> fleet_domain::store::StoreResult<Vec<ApprovalRequest>> {
+            self.inner.list_approvals(session_id)
+        }
+        fn resolve_approval(
+            &self,
+            approval_id: &str,
+            decision: &str,
+            status: ApprovalStatus,
+        ) -> fleet_domain::store::StoreResult<bool> {
+            self.inner.resolve_approval(approval_id, decision, status)
+        }
+        fn update_approval_status(
+            &self,
+            approval_id: &str,
+            status: ApprovalStatus,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.update_approval_status(approval_id, status)
+        }
+    }
+
+    #[test]
+    fn native_confirmation_is_scoped_to_its_session() {
+        let path = unique_db_path();
+        let manager = manager_at(FakeConfig::default(), path.clone());
+        let store = fleet_store_sqlite::SqliteStore::open(path).unwrap();
+        let ws = workspace(&manager);
+        let a = session(&manager, &ws.id);
+        let b = session(&manager, &ws.id);
+        let approval_a = ApprovalRequest {
+            approval_id: "appr_a".into(),
+            session_id: a.id.clone(),
+            turn_id: "turn_a".into(),
+            kind: "shell".into(),
+            message: "a".into(),
+            resources: vec![],
+            allowed_decisions: vec!["once".into()],
+            status: ApprovalStatus::Dispatching,
+            native_request_id: "same-native-id".into(),
+            decision: Some("once".into()),
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        };
+        let approval_b = ApprovalRequest {
+            approval_id: "appr_b".into(),
+            session_id: b.id.clone(),
+            turn_id: "turn_b".into(),
+            message: "b".into(),
+            ..approval_a.clone()
+        };
+        for (session_id, turn_id) in [(a.id.as_str(), "turn_a"), (b.id.as_str(), "turn_b")] {
+            store
+                .save_turn(&TurnRecord {
+                    turn_id: turn_id.to_string(),
+                    session_id: session_id.to_string(),
+                    operation_id: "op_scoped".into(),
+                    state: TurnState::Running,
+                    created_at_ms: 1,
+                    updated_at_ms: 1,
+                })
+                .unwrap();
+        }
+        store.save_approval(&approval_a).unwrap();
+        store.save_approval(&approval_b).unwrap();
+        {
+            let mut state = manager.state.lock().expect("manager poisoned");
+            state.approvals.insert("appr_a".into(), approval_a.clone());
+            state.approvals.insert("appr_b".into(), approval_b.clone());
+        }
+        manager
+            .publish_agent(
+                &b.id,
+                AgentEvent {
+                    kind: DomainEvent::ApprovalResolved {
+                        native_request_id: "same-native-id".into(),
+                        decision: "once".into(),
+                    },
+                },
+            )
+            .unwrap();
+        let resolved = manager.get_approval("appr_b").unwrap();
+        assert_eq!(resolved.status, ApprovalStatus::Accepted);
+        assert_eq!(
+            manager.get_approval("appr_a").unwrap().status,
+            ApprovalStatus::Dispatching
+        );
+    }
+
+    #[test]
+    fn uncertain_write_failure_latches_storage_fault() {
+        let path = unique_db_path();
+        let inner: Arc<dyn SessionStore> =
+            Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
+        let failing = Arc::new(FailingUncertaintyStore { inner });
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(ConfiguredFactory(FakeConfig::default())));
+        let manager = Arc::new(SessionManager::new(registry, failing).unwrap());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        manager.mark_approval_uncertain(
+            &ses.id,
+            "missing",
+            &AgentError {
+                code: "test".into(),
+                message: "send failed".into(),
+            },
+        );
+        let error = manager
+            .send_prompt(&ses.id, "new".into(), "after-fault")
+            .unwrap_err();
+        assert_eq!(error.code, "StorageUnavailable");
+    }
+
+    #[test]
+    fn answer_replay_survives_storage_fault() {
+        let path = unique_db_path();
+        let store: Arc<dyn SessionStore> =
+            Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(ConfiguredFactory(FakeConfig {
+            emit_approval: true,
+            ..FakeConfig::default()
+        })));
+        let manager = Arc::new(SessionManager::new(registry, store).unwrap());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let (subscription, _, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();
+        manager.send_prompt(&ses.id, "run".into(), "op-1").unwrap();
+        let approval_id = loop {
+            match subscription.recv_event(Duration::from_millis(100)) {
+                Ok(Some(Event {
+                    kind: EventKind::ApprovalRequested { approval_id, .. },
+                    ..
+                })) => break approval_id,
+                Ok(Some(_)) | Ok(None) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => panic!("closed"),
+            }
+        };
+        let first = manager
+            .answer_approval(&approval_id, "once".into(), "answer-key")
+            .unwrap();
+        assert_eq!(first.status, ApprovalStatus::Dispatching);
+        // Simulate a later storage fault from an unrelated event.
+        manager
+            .state
+            .lock()
+            .expect("manager poisoned")
+            .storage_fault = Some("injected".into());
+        let replay = manager
+            .answer_approval(&approval_id, "once".into(), "answer-key")
+            .unwrap();
+        assert_eq!(replay.approval_id, first.approval_id);
     }
 }

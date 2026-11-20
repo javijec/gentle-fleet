@@ -30,6 +30,53 @@ impl AgentError {
     }
 }
 
+/// Quita URLs y IDs nativos de mensajes que van a convertirse en eventos
+/// públicos. Los mensajes de reqwest incluyen la URL completa, que contiene
+/// `ses_*`, `per_*` y otros identificadores opacos del proveedor.
+pub fn redact_provider_error(message: &str) -> String {
+    let mut output = String::with_capacity(message.len());
+    let mut chars = message.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_whitespace() {
+            output.push(ch);
+            continue;
+        }
+        let token_start = output.len();
+        output.push(ch);
+        while let Some(&next) = chars.peek() {
+            if next.is_ascii_whitespace() {
+                break;
+            }
+            output.push(next);
+            chars.next();
+        }
+        let token = &output[token_start..];
+        if token.starts_with("http://") || token.starts_with("https://") {
+            let replacement = "[url redacted]";
+            output.truncate(token_start);
+            output.push_str(replacement);
+        }
+    }
+    let mut redacted = output;
+    for prefix in ["ses_", "msg_", "per_", "call_", "exec_", "evt_", "sh_"] {
+        let mut result = String::with_capacity(redacted.len());
+        let mut rest = redacted.as_str();
+        while let Some(index) = rest.find(prefix) {
+            result.push_str(&rest[..index]);
+            let after = &rest[index + prefix.len()..];
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                .unwrap_or(after.len());
+            result.push_str(prefix);
+            result.push_str("<id>");
+            rest = &after[end..];
+        }
+        result.push_str(rest);
+        redacted = result;
+    }
+    redacted
+}
+
 impl std::fmt::Display for AgentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
@@ -235,6 +282,17 @@ impl ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_errors_do_not_leak_native_ids() {
+        let message =
+            "POST http://127.0.0.1:49374/api/session/ses_secret/permission/per_secret/reply failed";
+        let redacted = redact_provider_error(message);
+        assert!(!redacted.contains("ses_secret"));
+        assert!(!redacted.contains("per_secret"));
+        assert!(!redacted.contains("http://"));
+        assert!(redacted.contains("[url redacted]"));
+    }
 
     #[test]
     fn unknown_provider_is_reported() {

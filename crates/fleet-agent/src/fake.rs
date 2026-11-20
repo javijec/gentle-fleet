@@ -22,6 +22,7 @@ pub struct FakeConfig {
     pub emit_provider_error: bool,
     pub emit_terminal_failure: bool,
     pub emit_approval: bool,
+    pub fail_answer: bool,
 }
 
 pub struct FakeDriver {
@@ -184,6 +185,12 @@ impl AgentDriver for FakeDriver {
     }
 
     fn answer(&mut self, native_request_id: String, decision: String) -> Result<(), AgentError> {
+        if self.config.fail_answer {
+            return Err(AgentError {
+                code: "approval_delivery_failed".into(),
+                message: "injected fake answer failure".into(),
+            });
+        }
         if self.config.block_send {
             std::thread::sleep(Duration::from_secs(60));
         }

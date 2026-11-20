@@ -1,0 +1,26 @@
+name: format-p2-once
+on:
+  push:
+    branches:
+      - feature/p2-persistence-approvals
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format Rust sources in the current feature branch
+        shell: bash
+        run: |
+          cargo fmt --all
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add crates
+            git commit -m "style(p2): rustfmt durable transitions and approvals"
+            git push origin HEAD:feature/p2-persistence-approvals
+          fi

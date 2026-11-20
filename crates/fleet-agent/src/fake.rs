@@ -28,6 +28,7 @@ pub struct FakeDriver {
     descriptor: ProviderDescriptor,
     config: FakeConfig,
     pending: VecDeque<AgentEvent>,
+    deferred: VecDeque<AgentEvent>,
     turns: u64,
     opened: bool,
     closed: bool,
@@ -65,6 +66,7 @@ impl FakeDriver {
             },
             config,
             pending: VecDeque::new(),
+            deferred: VecDeque::new(),
             turns: 0,
             opened: false,
             closed: false,
@@ -170,6 +172,14 @@ impl AgentDriver for FakeDriver {
                     status: TurnStatus::Completed,
                 }));
         }
+        if self.config.emit_approval {
+            // No text, tools or terminal result may occur until the actual
+            // permission decision is received. A premature TurnCompleted would
+            // hide bugs in SessionManager's approval state machine.
+            let request = self.pending.pop_front().expect("approval was queued");
+            self.deferred.append(&mut self.pending);
+            self.pending.push_back(request);
+        }
         Ok(SendReceipt { accepted: true })
     }
 
@@ -179,9 +189,25 @@ impl AgentDriver for FakeDriver {
         }
         self.pending
             .push_back(Self::event(DomainEvent::ApprovalResolved {
-                native_request_id,
-                decision,
+                native_request_id: native_request_id.clone(),
+                decision: decision.clone(),
             }));
+        if decision == "reject" {
+            // Rejection prevents the deferred fake tool command from running.
+            self.deferred.clear();
+            // Native test request identifiers use native-{turn_id}.
+            // Rejection is terminal without running the deferred tool.
+            let turn_id = native_request_id
+                .strip_prefix("native-")
+                .unwrap_or(&native_request_id)
+                .to_string();
+            self.pending.push_back(Self::event(DomainEvent::TurnCompleted {
+                turn_id,
+                status: TurnStatus::Interrupted,
+            }));
+        } else {
+            self.pending.append(&mut self.deferred);
+        }
         Ok(())
     }
 

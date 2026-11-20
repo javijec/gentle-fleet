@@ -29,9 +29,12 @@ SID="$("$BIN/fleetctl" session create --workspace "$WS_ID" --provider fake | cut
 WATCH=$!
 for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
 "$BIN/fleetctl" prompt "$SID" "allow this command" >/dev/null
-wait "$WATCH"
-
-APPROVAL_ID="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch.out")"
+APPROVAL_ID=""
+for _ in $(seq 1 100); do
+  APPROVAL_ID="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch.out" 2>/dev/null || true)"
+  [[ -n "$APPROVAL_ID" ]] && break
+  sleep 0.05
+done
 [[ -n "$APPROVAL_ID" ]] || { echo "FAIL: no approval request observed"; exit 1; }
 
 set +e
@@ -46,11 +49,12 @@ set -e
 
 WINS=0
 for f in answer1 answer2; do
-  if grep -qi accepted "$RUNTIME/$f"; then WINS=$((WINS+1)); fi
+  if grep -qiE 'dispatching|accepted|rejected' "$RUNTIME/$f"; then WINS=$((WINS+1)); fi
 done
 [[ "$WINS" == "1" ]] || { echo "FAIL: expected exactly one winning decision"; cat "$RUNTIME/answer1" "$RUNTIME/answer2" "$RUNTIME/answer1.err" "$RUNTIME/answer2.err"; exit 1; }
 echo "PASS: exactly one decision winner"
 
+wait "$WATCH"
 "$BIN/fleetctl" approval "$APPROVAL_ID" | grep -qiE 'accepted|rejected'
 grep -q approval_resolved "$RUNTIME/watch.out" || "$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 | grep -q approval_resolved
 echo "PASS: approval result observable"
@@ -61,7 +65,14 @@ SID2="$("$BIN/fleetctl" session create --workspace "$WS_ID" --provider fake | cu
 WATCH2=$!
 for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch2.err" 2>/dev/null && break; sleep 0.1; done
 "$BIN/fleetctl" prompt "$SID2" "reject this command" >/dev/null
+APPROVAL2=""
+for _ in $(seq 1 100); do
+  APPROVAL2="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch2.out" 2>/dev/null || true)"
+  [[ -n "$APPROVAL2" ]] && break
+  sleep 0.05
+done
+[[ -n "$APPROVAL2" ]] || { echo "FAIL: second approval never appeared"; exit 1; }
+FLEET_OPERATION_KEY=answer2-key "$BIN/fleetctl" answer "$APPROVAL2" reject | grep -qiE 'dispatching|rejected'
 wait "$WATCH2"
-APPROVAL2="$(awk -F '\t' '$2=="approval_requested" {print $3; exit}' "$RUNTIME/watch2.out")"
-FLEET_OPERATION_KEY=answer2-key "$BIN/fleetctl" answer "$APPROVAL2" reject | grep -q rejected
+"$BIN/fleetctl" approval "$APPROVAL2" | grep -qi rejected
 echo "PASS: rejection recorded"

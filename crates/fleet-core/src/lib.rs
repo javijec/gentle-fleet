@@ -1694,7 +1694,7 @@ mod tests {
         let resolved = manager
             .answer_approval(&approval, "once".into(), "answer-key")
             .unwrap();
-        assert_eq!(resolved.status_text(), "accepted");
+        assert_eq!(resolved.status_text(), "dispatching");
         let duplicate = manager
             .answer_approval(&approval, "reject".into(), "answer-key-2")
             .unwrap_err();
@@ -1712,6 +1712,10 @@ mod tests {
             }
         };
         assert!(saw_confirmation);
+        assert_eq!(
+            manager.get_approval(&approval).unwrap().status_text(),
+            "accepted"
+        );
     }
 
     #[test]
@@ -1740,7 +1744,7 @@ mod tests {
         let resolved = manager
             .answer_approval(&approval, "reject".into(), "answer-key")
             .unwrap();
-        assert_eq!(resolved.status_text(), "rejected");
+        assert_eq!(resolved.status_text(), "dispatching");
         assert!(!manager.list_approvals(Some(&ses.id)).is_empty());
     }
 }

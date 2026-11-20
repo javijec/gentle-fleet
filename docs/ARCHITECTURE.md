@@ -1,0 +1,97 @@
+# Arquitectura de Gentle Fleet v2
+
+## Principio principal
+
+**La sesión es la unidad de orquestación.** Una autoridad (SessionManager) decide y registra qué debe ocurrir; una entidad ejecutora (Runner) se encarga del proceso agente; un driver conoce el protocolo específico; una timeline estable permite observar y reconectar. Los clientes no conocen SQLite, PID ni protocolo del agente.
+
+## Diagrama de componentes
+
+~~~mermaid
+flowchart TB
+    UI[GPUI Desktop] --> SDK[Fleet Client SDK]
+    CLI[fleetctl] --> SDK
+    SDK --> TR[Transporte local o SSH]
+    TR --> API[Fleet API / fleetd]
+    API --> SM[SessionManager - autoridad]
+    SM --> ST[(fleet.sqlite - estado y timeline)]
+    SM --> RM[RunnerManager]
+    RM --> R1[fleet-runner: sesión A]
+    RM --> R2[fleet-runner: sesión B]
+    R1 --> D1[Gentle Shell driver]
+    R2 --> D2[Codex u OpenCode driver]
+    D1 --> P1[Proceso agente]
+    D2 --> P2[Proceso/servidor agente]
+    R1 -. spool y ack .-> SM
+    R2 -. spool y ack .-> SM
+~~~
+
+## Árbol propuesto — monorepo Rust inicial
+
+~~~text
+gentle-fleet/
+  Cargo.toml                     workspace, lock único
+  crates/
+    fleet-domain/                IDs, estados, eventos, capacidades; cero I/O
+    fleet-protocol/              envelopes versionados + codec + contract fixtures
+    fleet-core/                  SessionManager + traits de store/runner
+    fleet-store-sqlite/          migraciones, transacciones, event log
+    fleet-agent/                 trait AgentDriver, modelos nativos y FakeDriver
+    fleet-driver-pi/             Gentle Shell --mode rpc (tras spike)
+    fleet-driver-codex/          Codex app-server (tras spike)
+    fleet-driver-opencode/       OpenCode server/API (tras spike)
+    fleet-runner/                proceso por sesión y spool acotado
+    fleetd/                      daemon por usuario, IPC, runtime
+    fleet-client/                SDK Rust para CLI/GPUI
+    fleetctl/                    cliente CLI y diagnósticos
+    fleet-transport/             IPC Unix/Windows + SSH stdio
+  apps/
+    desktop/                     GPUI en etapa P6, puede residir separado después
+  tests/
+    contract/                    fixtures comunes del wire y los drivers
+    e2e/                         procesos reales/fixtures/crash injection
+  docs/
+~~~
+
+Las carpetas indicadas describen módulos futuros; **no existe código implementado en este reinicio**. Al comienzo P1 puede agrupar varias crates si mantener cada una por separado no aporta un límite efectivo. No crear abstractions en blanco solo por el árbol.
+
+## Dirección de dependencias
+
+1. fleet-domain no conoce DB, sockets, Tokio, clientes ni proveedores.
+2. fleet-protocol importa domain; clientes y servidor consumen exactamente el mismo contrato.
+3. fleet-core conoce traits de Storage, RunnerManager y DriverRegistry, no implementaciones concretas.
+4. fleet-store-sqlite implementa Storage; solo fleetd escribe la base central.
+5. fleet-runner supervisa un proveedor por sesión y entrega mensajes al daemon; no escribe en Fleet DB ni decide autorización pública.
+6. Drivers conocen únicamente la API de su proveedor y la interfaz AgentDriver; no importan fleetd, GPUI ni SQL.
+7. fleetctl y Desktop solo importan fleet-client/protocol; no conocen rutas internas de daemon o runner.
+
+No se usan dependencias circulares. No hay una crate global utils con lógica de negocio.
+
+## Procesos y propiedad
+
+- **fleetd:** servicio local por usuario y host. Expone API, autoriza cliente, gestiona catálogos, idempotencia, sesiones, eventos, permisos y límites. No ejecuta consultas de proveedores desde un proceso cliente.
+- **fleet-runner:** proceso hijo independiente con identidad asignada por fleetd, dueño de la conexión del agente y del buffer temporal de entrega. Solo emite eventos enumerados/acknowledgeables, no decide el ID Fleet.
+- **agente:** subprocess o servidor controlado por driver. La capacidad de mantener el proceso o reanudar su conversación varía entre proveedores.
+- **cliente:** puede ser local o remoto, CLI o GPUI. Sus cierres no matan los runners.
+
+Una sesión puede tener varios observadores, pero **una sola cola serializada de operaciones mutables**. Los lectores no bloquean otras sesiones. No se utiliza lock global durante llamadas de red o al proveedor.
+
+## Ejecución y directorios
+
+- Se registra un workspace por ruta del host. El runner recibe una ruta canonizada y la usa como directorio de trabajo real; antes de iniciar se verifica que el proceso tiene acceso, que es un directorio y que la política del usuario permite su ejecución.
+- El modelo guarda tanto el ID de workspace como el valor de ruta, pero las rutas no son IDs y pueden requerir revalidación si cambian.
+- El proceso del proveedor hereda únicamente entorno explícitamente permitido; la autenticación nativa de cada CLI se mantiene dentro del perfil del usuario.
+- Para worktrees paralelos se crean workspaces separados en una etapa posterior, no se mezclan agentes sobre el mismo árbol sin indicarlo.
+
+## Persistencia y recuperación
+
+fleetd tiene la base Fleet autoritativa. El runner puede conservar un **spool mínimo de mensajes todavía no confirmados por fleetd**, para sobrevivir a una caída del daemon sin afirmar que la base de eventos está replicada dos veces. La ingesta deduplica por (runner_id, runner_seq). No permitir confirmar un evento al runner antes del commit en Fleet DB. Los procesos activos son reconciliados por identidad del runner, no por confiar solo en un PID.
+
+La recuperación exacta después de reinicio de host depende del proveedor, no se promete universalmente. Por ejemplo, recuperar una UI no es lo mismo que recuperar un proceso muerto. Ver LIFECYCLE y PERSISTENCE.
+
+## Límites de escala
+
+En MVP fijar valores configurables moderados: máximo 4 runners activos, 2 operaciones en ejecución por host en el primer driver, colas por cliente y spool con límites explícitos. Cuando se saturen, rechazar o pausar con error estable; no crear un hilo OS por cliente sin control de admisión.
+
+## Puertas de revisión arquitectónica
+
+No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

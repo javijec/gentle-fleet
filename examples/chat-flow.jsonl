@@ -1,0 +1,12 @@
+{"kind":"request","request_id":"req-1","operation_key":"create-001","command":{"type":"create_session","workspace_id":"ws-1","provider_id":"pi"}}
+{"kind":"response","request_id":"req-1","result":{"type":"accepted","operation_id":"op-1"}}
+{"kind":"event","session_id":"s-1","sequence":1,"payload":{"type":"session_created","workspace_id":"ws-1"}}
+{"kind":"request","request_id":"req-2","operation_key":"prompt-001","command":{"type":"send_prompt","session_id":"s-1","text":"Explicá el repositorio"}}
+{"kind":"response","request_id":"req-2","result":{"type":"accepted","operation_id":"op-2"}}
+{"kind":"event","session_id":"s-1","sequence":2,"payload":{"type":"turn_started","turn_id":"t-1"}}
+{"kind":"event","session_id":"s-1","sequence":3,"payload":{"type":"assistant_delta","turn_id":"t-1","text":"El proyecto..."}}
+{"kind":"event","session_id":"s-1","sequence":4,"payload":{"type":"approval_requested","turn_id":"t-1","approval_id":"a-1","choices":["allow","deny"]}}
+{"kind":"request","request_id":"req-3","operation_key":"answer-001","command":{"type":"answer_approval","session_id":"s-1","approval_id":"a-1","decision":"allow"}}
+{"kind":"response","request_id":"req-3","result":{"type":"accepted","operation_id":"op-3"}}
+{"kind":"event","session_id":"s-1","sequence":5,"payload":{"type":"approval_resolved","approval_id":"a-1","decision":"allow"}}
+{"kind":"event","session_id":"s-1","sequence":6,"payload":{"type":"turn_completed","turn_id":"t-1","status":"completed"}}

@@ -250,7 +250,9 @@ impl SessionManager {
         if let Some(reason) = &state.storage_fault {
             return Err(AgentError {
                 code: "StorageUnavailable".into(),
-                message: format!("Fleet storage failed; restart and reconcile before new operations: {reason}"),
+                message: format!(
+                    "Fleet storage failed; restart and reconcile before new operations: {reason}"
+                ),
             });
         }
         Ok(())
@@ -594,7 +596,11 @@ impl SessionManager {
             state.storage_fault = Some(error.message.clone());
             return Err(to_agent_error(error));
         }
-        state.sessions.get_mut(session_id).expect("session checked").next_seq += 1;
+        state
+            .sessions
+            .get_mut(session_id)
+            .expect("session checked")
+            .next_seq += 1;
         self.bus.publish(&event);
         Ok(())
     }
@@ -1718,17 +1724,23 @@ mod tests {
         let store = fleet_store_sqlite::SqliteStore::open(path).unwrap();
         // An unexpected durable event occupies the next Fleet cursor.
         // The subsequent commit must fail without advancing seq or publishing.
-        store.append_event(&Event {
-            event_id: "external-conflict".into(),
-            session_id: ses.id.clone(),
-            seq: 3,
-            created_at_ms: now_ms(),
-            kind: EventKind::AgentNotice { message: "conflict".into() },
-        }).unwrap();
-        let failure = manager.send_prompt(&ses.id, "first".into(), "faulty-key")
+        store
+            .append_event(&Event {
+                event_id: "external-conflict".into(),
+                session_id: ses.id.clone(),
+                seq: 3,
+                created_at_ms: now_ms(),
+                kind: EventKind::AgentNotice {
+                    message: "conflict".into(),
+                },
+            })
+            .unwrap();
+        let failure = manager
+            .send_prompt(&ses.id, "first".into(), "faulty-key")
             .expect_err("durable sequence conflict must reject");
         assert_eq!(failure.code, "sequence_conflict");
-        let second = manager.send_prompt(&ses.id, "second".into(), "another-key")
+        let second = manager
+            .send_prompt(&ses.id, "second".into(), "another-key")
             .expect_err("storage fault must prohibit new provider effects");
         assert_eq!(second.code, "StorageUnavailable");
     }

@@ -22,5 +22,5 @@ jobs:
         run: tests/e2e_concurrency.sh
       - name: e2e backpressure
         run: tests/e2e_backpressure.sh
-      - name: e2e permisos de socket (sin root: solo modo de archivos)
+      - name: e2e permisos de socket sin root
         run: tests/e2e_unix_permissions.sh

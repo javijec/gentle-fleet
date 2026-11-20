@@ -1686,6 +1686,17 @@ mod tests {
     }
 
     #[test]
+    fn rejected_prompt_does_not_reserve_operation_key() {
+        let manager = manager(FakeConfig { block_send: true, ..FakeConfig::default() });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        manager.send_prompt(&ses.id, "first".into(), "first-key").unwrap();
+        let failure = manager.send_prompt(&ses.id, "second".into(), "rejected-key").unwrap_err();
+        assert_eq!(failure.code, "TurnAlreadyRunning");
+        assert!(manager.get_operation("rejected-key").unwrap().is_none());
+    }
+
+    #[test]
     fn timeline_and_operations_survive_manager_restart() {
         let path = unique_db_path();
         let manager = manager_at(FakeConfig::default(), path.clone());

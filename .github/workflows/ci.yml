@@ -28,3 +28,5 @@ jobs:
         run: tests/e2e_persistence.sh
       - name: e2e aprobaciones deterministas
         run: tests/e2e_approvals.sh
+      - name: e2e replay completo con mas de 256 eventos
+        run: tests/e2e_long_replay.sh

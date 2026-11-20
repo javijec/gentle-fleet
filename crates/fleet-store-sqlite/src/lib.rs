@@ -1030,6 +1030,22 @@ mod tests {
     }
 
     #[test]
+    fn foreign_keys_are_enforced_on_each_new_connection() {
+        let (store, _path) = temp_store();
+        let record = SessionRecord {
+            session_id: "invalid-session".into(),
+            workspace_id: "missing-workspace".into(),
+            provider_id: "fake".into(),
+            state: SessionState::Running,
+            turn_state: TurnState::Idle,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        let error = store.save_session(&record).unwrap_err();
+        assert_eq!(error.code, "store_write_failed");
+    }
+
+    #[test]
     fn migration_and_health_are_verified() {
         let (store, path) = temp_store();
         let health = store.health().unwrap();

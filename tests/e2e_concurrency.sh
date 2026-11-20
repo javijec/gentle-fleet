@@ -69,6 +69,10 @@ if ! grep -q "TurnAlreadyRunning" "$RUNTIME/p2.err"; then
   echo "FAIL: second concurrent prompt was not rejected"; cat "$RUNTIME/p2.err"; exit 1
 fi
 echo "PASS: second prompt rejected with TurnAlreadyRunning"
+if "$BIN/fleetctl" operation key-2 >"$RUNTIME/rejected_operation.out" 2>"$RUNTIME/rejected_operation.err"; then
+  echo "FAIL: rejected prompt reserved an operation key"; exit 1
+fi
+echo "PASS: rejected prompt never consumes its idempotency key"
 
 FLEET_OPERATION_KEY=key-1 "$BIN/fleetctl" prompt "$C" "first" >"$RUNTIME/p3.out"
 diff -u "$RUNTIME/p1.out" "$RUNTIME/p3.out"

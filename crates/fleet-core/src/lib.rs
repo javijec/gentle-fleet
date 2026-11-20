@@ -16,8 +16,8 @@ use fleet_agent::{
     AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent, LaunchContext, ProviderRegistry,
 };
 use fleet_domain::store::{
-    ApprovalClaim, ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord, OperationReservation,
-    OperationStatus, SessionStore, StoreError, TurnRecord,
+    ApprovalClaim, ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord,
+    OperationReservation, OperationStatus, SessionStore, StoreError, TurnRecord,
 };
 use fleet_domain::{
     Event, EventKind, ProviderDescriptor, ProviderId, RunnerMode, SessionId, SessionState,
@@ -800,20 +800,19 @@ impl SessionManager {
 
         // Keep the manager lock across the native event transition; no other
         // client may change the approval between checking and committing it.
-        self.publish_locked_with_approval(
-            &mut state,
-            session_id,
-            kind,
-            new_approval.as_ref(),
-        )?;
+        self.publish_locked_with_approval(&mut state, session_id, kind, new_approval.as_ref())?;
         if let Some(approval) = new_approval {
-            state.approvals.insert(approval.approval_id.clone(), approval);
+            state
+                .approvals
+                .insert(approval.approval_id.clone(), approval);
         }
         if let Some((approval, status)) = approval_update {
             let mut resolved = approval;
             resolved.status = status;
             resolved.resolved_at_ms = Some(now_ms());
-            state.approvals.insert(resolved.approval_id.clone(), resolved);
+            state
+                .approvals
+                .insert(resolved.approval_id.clone(), resolved);
         }
         Ok(())
     }
@@ -868,10 +867,14 @@ impl SessionManager {
         operation_key: &str,
     ) -> Result<ApprovalRequest, AgentError> {
         let mut state = self.state.lock().expect("manager poisoned");
-        let approval = state.approvals.get(approval_id).cloned().ok_or_else(|| AgentError {
-            code: "not_found".into(),
-            message: format!("unknown approval `{approval_id}`"),
-        })?;
+        let approval = state
+            .approvals
+            .get(approval_id)
+            .cloned()
+            .ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: format!("unknown approval `{approval_id}`"),
+            })?;
         if !approval.allowed_decisions.contains(&decision) {
             return Err(AgentError {
                 code: "InvalidDecision".into(),
@@ -890,7 +893,8 @@ impl SessionManager {
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        let claimed = self.store
+        let claimed = self
+            .store
             .claim_approval(approval_id, &decision, &operation)
             .map_err(to_agent_error)?;
         let updated = match claimed {
@@ -903,28 +907,40 @@ impl SessionManager {
                 }
                 return Ok(approval); // same operation key: no second dispatch
             }
-            ApprovalClaim::Conflict => return Err(AgentError {
-                code: "Conflict".into(),
-                message: "approval already claimed or operation key has different parameters".into(),
-            }),
+            ApprovalClaim::Conflict => {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "approval already claimed or operation key has different parameters"
+                        .into(),
+                })
+            }
             ApprovalClaim::Created(updated) => updated,
         };
-        state.approvals.insert(approval_id.to_string(), updated.clone());
-        let command_tx = state.sessions.get(&approval.session_id)
+        state
+            .approvals
+            .insert(approval_id.to_string(), updated.clone());
+        let command_tx = state
+            .sessions
+            .get(&approval.session_id)
             .and_then(|record| record.driver.as_ref().map(|d| d.commands.clone()));
         drop(state);
 
-        let result = command_tx.ok_or_else(|| AgentError {
-            code: "driver_unavailable".into(),
-            message: "no live driver to deliver approval".into(),
-        }).and_then(|tx| tx.send(DriverCommand::Answer {
-            approval_id: approval_id.to_string(),
-            native_request_id: approval.native_request_id.clone(),
-            decision: decision.clone(),
-        }).map_err(|error| AgentError {
-            code: "approval_delivery_failed".into(),
-            message: error.to_string(),
-        }));
+        let result = command_tx
+            .ok_or_else(|| AgentError {
+                code: "driver_unavailable".into(),
+                message: "no live driver to deliver approval".into(),
+            })
+            .and_then(|tx| {
+                tx.send(DriverCommand::Answer {
+                    approval_id: approval_id.to_string(),
+                    native_request_id: approval.native_request_id.clone(),
+                    decision: decision.clone(),
+                })
+                .map_err(|error| AgentError {
+                    code: "approval_delivery_failed".into(),
+                    message: error.to_string(),
+                })
+            });
         if let Err(error) = result {
             self.mark_approval_uncertain(&approval.session_id, approval_id, &error);
             return Err(AgentError {
@@ -936,11 +952,18 @@ impl SessionManager {
     }
 
     pub fn mark_approval_uncertain(&self, session_id: &str, approval_id: &str, error: &AgentError) {
-        if let Err(store_error) = self.store.mark_approval_uncertain(approval_id, &error.message) {
+        if let Err(store_error) = self
+            .store
+            .mark_approval_uncertain(approval_id, &error.message)
+        {
             eprintln!("could not persist uncertain approval: {store_error:?}");
         }
-        if let Some(approval) = self.state.lock().expect("manager poisoned")
-            .approvals.get_mut(approval_id)
+        if let Some(approval) = self
+            .state
+            .lock()
+            .expect("manager poisoned")
+            .approvals
+            .get_mut(approval_id)
         {
             approval.status = ApprovalStatus::Uncertain;
         }
@@ -964,7 +987,11 @@ impl SessionManager {
         let fingerprint = format!("{session_id}\0{text}");
         // Idempotent responses must work even after a daemon restart when the
         // session has no runner. They never dispatch the original prompt again.
-        if let Some(existing) = self.store.get_operation(operation_key).map_err(to_agent_error)? {
+        if let Some(existing) = self
+            .store
+            .get_operation(operation_key)
+            .map_err(to_agent_error)?
+        {
             if existing.kind != OperationKind::SendPrompt
                 || existing.session_id != session_id
                 || existing.fingerprint != fingerprint
@@ -985,7 +1012,9 @@ impl SessionManager {
             if existing.status == OperationStatus::Failed {
                 return Err(AgentError {
                     code: "PreviousOperationFailed".into(),
-                    message: existing.message.unwrap_or_else(|| "previous dispatch failed".into()),
+                    message: existing
+                        .message
+                        .unwrap_or_else(|| "previous dispatch failed".into()),
                 });
             }
             return Ok(PromptReceipt {
@@ -1026,12 +1055,18 @@ impl SessionManager {
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        match self.store.reserve_operation(&operation).map_err(to_agent_error)? {
+        match self
+            .store
+            .reserve_operation(&operation)
+            .map_err(to_agent_error)?
+        {
             OperationReservation::Created(_) => {}
-            OperationReservation::Conflict => return Err(AgentError {
-                code: "Conflict".into(),
-                message: "operation key belongs to a different request".into(),
-            }),
+            OperationReservation::Conflict => {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key belongs to a different request".into(),
+                })
+            }
             OperationReservation::Existing(existing) => {
                 return Ok(PromptReceipt {
                     operation_id: existing.operation_id,
@@ -1050,11 +1085,13 @@ impl SessionManager {
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         }) {
-            self.store.update_operation(
-                &operation_id,
-                OperationStatus::Failed,
-                Some("failed to persist turn before dispatch".into()),
-            ).map_err(to_agent_error)?;
+            self.store
+                .update_operation(
+                    &operation_id,
+                    OperationStatus::Failed,
+                    Some("failed to persist turn before dispatch".into()),
+                )
+                .map_err(to_agent_error)?;
             return Err(to_agent_error(error));
         }
         let command_tx = {
@@ -1062,19 +1099,32 @@ impl SessionManager {
             record.active_turn = Some(turn_id.clone());
             record.current_operation = Some(operation_id.clone());
             record.summary.turn_state = TurnState::Running;
-            record.driver.as_ref().expect("driver checked").commands.clone()
+            record
+                .driver
+                .as_ref()
+                .expect("driver checked")
+                .commands
+                .clone()
         };
         // The prompt cannot reach the provider before both startup events are
         // committed. A failure makes the operation uncertain, never replayable.
         for kind in [
-            EventKind::TurnStarted { turn_id: turn_id.clone() },
-            EventKind::UserMessage { turn_id: turn_id.clone(), text: text.clone() },
+            EventKind::TurnStarted {
+                turn_id: turn_id.clone(),
+            },
+            EventKind::UserMessage {
+                turn_id: turn_id.clone(),
+                text: text.clone(),
+            },
         ] {
             if let Err(error) = self.publish_locked(&mut state, session_id, kind) {
-                self.store.update_operation(
-                    &operation_id, OperationStatus::Uncertain,
-                    Some("prompt events were not fully persisted".into()),
-                ).map_err(to_agent_error)?;
+                self.store
+                    .update_operation(
+                        &operation_id,
+                        OperationStatus::Uncertain,
+                        Some("prompt events were not fully persisted".into()),
+                    )
+                    .map_err(to_agent_error)?;
                 if let Some(record) = state.sessions.get_mut(session_id) {
                     record.summary.turn_state = TurnState::Uncertain;
                     record.active_turn = None;
@@ -1083,9 +1133,9 @@ impl SessionManager {
                 return Err(error);
             }
         }
-        self.store.update_operation(
-            &operation_id, OperationStatus::Accepted, None,
-        ).map_err(to_agent_error)?;
+        self.store
+            .update_operation(&operation_id, OperationStatus::Accepted, None)
+            .map_err(to_agent_error)?;
         drop(state);
         if let Err(error) = command_tx.send(DriverCommand::Prompt {
             text,

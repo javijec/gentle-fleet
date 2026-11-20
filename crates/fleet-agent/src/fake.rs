@@ -201,10 +201,11 @@ impl AgentDriver for FakeDriver {
                 .strip_prefix("native-")
                 .unwrap_or(&native_request_id)
                 .to_string();
-            self.pending.push_back(Self::event(DomainEvent::TurnCompleted {
-                turn_id,
-                status: TurnStatus::Interrupted,
-            }));
+            self.pending
+                .push_back(Self::event(DomainEvent::TurnCompleted {
+                    turn_id,
+                    status: TurnStatus::Interrupted,
+                }));
         } else {
             self.pending.append(&mut self.deferred);
         }

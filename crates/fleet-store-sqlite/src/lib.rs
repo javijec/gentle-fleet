@@ -469,14 +469,23 @@ impl SessionStore for SqliteStore {
                 )
                 .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
             }
-            fleet_domain::EventKind::ApprovalResolved { approval_id, decision, .. } => {
-                let status = if decision == "reject" { "rejected" } else { "accepted" };
-                let changed = tx.execute(
-                    "UPDATE approvals SET status=?2, decision=?3, resolved_at=?4
+            fleet_domain::EventKind::ApprovalResolved {
+                approval_id,
+                decision,
+                ..
+            } => {
+                let status = if decision == "reject" {
+                    "rejected"
+                } else {
+                    "accepted"
+                };
+                let changed = tx
+                    .execute(
+                        "UPDATE approvals SET status=?2, decision=?3, resolved_at=?4
                      WHERE approval_id=?1 AND status='dispatching' AND decision=?3",
-                    params![approval_id, status, decision, now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+                        params![approval_id, status, decision, now_ms() as i64],
+                    )
+                    .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
                 if changed != 1 {
                     return Err(StoreError::new(
                         "approval_conflict",
@@ -687,14 +696,15 @@ impl SessionStore for SqliteStore {
             .transaction()
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         if let Some(existing) = load_operation(&tx, &operation.operation_key)? {
-            let current = tx.query_row(
-                "SELECT * FROM approvals WHERE approval_id=?1",
-                params![approval_id],
-                row_to_approval,
-            )
-            .optional()
-            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?
-            .ok_or_else(|| StoreError::new("not_found", "approval no longer exists"))?;
+            let current = tx
+                .query_row(
+                    "SELECT * FROM approvals WHERE approval_id=?1",
+                    params![approval_id],
+                    row_to_approval,
+                )
+                .optional()
+                .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?
+                .ok_or_else(|| StoreError::new("not_found", "approval no longer exists"))?;
             if existing.fingerprint == operation.fingerprint
                 && existing.kind == operation.kind
                 && existing.session_id == operation.session_id
@@ -703,12 +713,13 @@ impl SessionStore for SqliteStore {
             }
             return Ok(ApprovalClaim::Conflict);
         }
-        let changed = tx.execute(
-            "UPDATE approvals SET status='dispatching', decision=?2
+        let changed = tx
+            .execute(
+                "UPDATE approvals SET status='dispatching', decision=?2
              WHERE approval_id=?1 AND status IN ('pending','delivered')",
-            params![approval_id, decision],
-        )
-        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+                params![approval_id, decision],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         if changed != 1 {
             return Ok(ApprovalClaim::Conflict);
         }
@@ -717,19 +728,24 @@ impl SessionStore for SqliteStore {
                 fingerprint,status,message,created_at,updated_at)
              VALUES(?1,?2,?3,?4,?5,?6,'accepted',NULL,?7,?8)",
             params![
-                operation.operation_id, operation.operation_key,
-                operation_kind_text(operation.kind), operation.session_id,
-                operation.target_id, operation.fingerprint,
-                now_ms() as i64, now_ms() as i64
+                operation.operation_id,
+                operation.operation_key,
+                operation_kind_text(operation.kind),
+                operation.session_id,
+                operation.target_id,
+                operation.fingerprint,
+                now_ms() as i64,
+                now_ms() as i64
             ],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        let updated = tx.query_row(
-            "SELECT * FROM approvals WHERE approval_id=?1",
-            params![approval_id],
-            row_to_approval,
-        )
-        .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        let updated = tx
+            .query_row(
+                "SELECT * FROM approvals WHERE approval_id=?1",
+                params![approval_id],
+                row_to_approval,
+            )
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
         tx.commit()
             .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
         Ok(ApprovalClaim::Created(updated))
@@ -751,7 +767,8 @@ impl SessionStore for SqliteStore {
             params![approval_id, reason, now_ms() as i64],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        tx.commit().map_err(|e| StoreError::new("commit_failed", e.to_string()))
+        tx.commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))
     }
 
     fn get_approval(&self, approval_id: &str) -> StoreResult<Option<ApprovalRequest>> {

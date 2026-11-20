@@ -1,37 +1,33 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
 use std::io::{BufReader, BufWriter};
-use std::net::TcpStream;
-use std::path::PathBuf;
 
 use fleet_domain::EventKind;
+use fleet_protocol::transport::{connect, expected_token, LocalStream};
 use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
 
 struct Client {
-    reader: BufReader<TcpStream>,
-    writer: BufWriter<TcpStream>,
+    reader: BufReader<LocalStream>,
+    writer: BufWriter<LocalStream>,
     next_id: u64,
 }
 
 impl Client {
     fn connect() -> Result<Self, String> {
-        let mut path = std::env::var_os("FLEET_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("gentle-fleet"));
-        path.push("fleetd.addr");
-        let address = std::fs::read_to_string(&path).map_err(|e| {
-            format!(
-                "cannot read {:?} (is fleetd running?): {e}",
-                path.file_name()
-            )
-        })?;
-        let stream = TcpStream::connect(address.trim())
-            .map_err(|e| format!("cannot connect to fleetd at {}: {e}", address.trim()))?;
+        let stream =
+            connect().map_err(|e| format!("cannot connect to fleetd (is it running?): {e}"))?;
         Ok(Self {
             reader: BufReader::new(stream.try_clone().map_err(|e| e.to_string())?),
             writer: BufWriter::new(stream),
             next_id: 0,
         })
+    }
+
+    fn hello() -> Request {
+        Request::Hello {
+            client_id: "fleetctl".into(),
+            token: expected_token().ok().flatten(),
+        }
     }
 
     fn send(&mut self, request: Request) -> Result<String, String> {
@@ -65,6 +61,9 @@ impl Client {
                     return result.map_err(|e| format!("{}: {}", e.code, e.message));
                 }
                 Frame::Event { .. } => continue,
+                Frame::Notice { code, message, .. } => {
+                    return Err(format!("{code}: {message}"));
+                }
                 _ => continue,
             }
         }
@@ -91,13 +90,18 @@ fn run() -> Result<(), String> {
         "stop" => stop(&args[1..]),
         "agents" => {
             let mut client = Client::connect()?;
-            client.call(Request::Hello {
-                client_id: "fleetctl".into(),
-            })?;
+            client.call(Client::hello())?;
             match client.call(Request::ListAgents)? {
                 Response::Agents { agents } => {
                     for agent in agents {
-                        println!("{}\t{}\t{}", agent.id, agent.version, agent.mode);
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            agent.id,
+                            agent.version.unwrap_or_else(|| "unknown".into()),
+                            agent.availability,
+                            agent.mode,
+                            agent.capabilities.streaming_text
+                        );
                     }
                     Ok(())
                 }
@@ -115,9 +119,7 @@ fn usage() -> String {
 
 fn workspace(args: &[String]) -> Result<(), String> {
     let mut client = Client::connect()?;
-    client.call(Request::Hello {
-        client_id: "fleetctl".into(),
-    })?;
+    client.call(Client::hello())?;
     match args.first().map(String::as_str) {
         Some("add") => {
             let path = args.get(1).ok_or_else(usage)?;
@@ -144,9 +146,7 @@ fn workspace(args: &[String]) -> Result<(), String> {
 
 fn session(args: &[String]) -> Result<(), String> {
     let mut client = Client::connect()?;
-    client.call(Request::Hello {
-        client_id: "fleetctl".into(),
-    })?;
+    client.call(Client::hello())?;
     match args.first().map(String::as_str) {
         Some("create") => {
             let workspace = flag(args, "--workspace").ok_or_else(usage)?;
@@ -156,7 +156,10 @@ fn session(args: &[String]) -> Result<(), String> {
                 provider_id: provider,
             })? {
                 Response::SessionCreated { session } => {
-                    println!("{}\t{}\t{}", session.id, session.provider_id, session.state);
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        session.id, session.provider_id, session.state, session.turn_state
+                    );
                     Ok(())
                 }
                 other => Err(format!("unexpected response: {other:?}")),
@@ -166,8 +169,12 @@ fn session(args: &[String]) -> Result<(), String> {
             Response::Sessions { sessions } => {
                 for session in sessions {
                     println!(
-                        "{}\t{}\t{}\t{}",
-                        session.id, session.provider_id, session.workspace_id, session.state
+                        "{}\t{}\t{}\t{}\t{}",
+                        session.id,
+                        session.provider_id,
+                        session.workspace_id,
+                        session.state,
+                        session.turn_state
                     );
                 }
                 Ok(())
@@ -184,11 +191,12 @@ fn prompt(args: &[String]) -> Result<(), String> {
     if text.is_empty() {
         return Err(usage());
     }
-    let operation_key = uuid::Uuid::new_v4().to_string();
+    let operation_key = std::env::var("FLEET_OPERATION_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut client = Client::connect()?;
-    client.call(Request::Hello {
-        client_id: "fleetctl".into(),
-    })?;
+    client.call(Client::hello())?;
     match client.call(Request::SendPrompt {
         session_id,
         text,
@@ -209,9 +217,7 @@ fn prompt(args: &[String]) -> Result<(), String> {
 fn stop(args: &[String]) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let mut client = Client::connect()?;
-    client.call(Request::Hello {
-        client_id: "fleetctl".into(),
-    })?;
+    client.call(Client::hello())?;
     match client.call(Request::StopSession { session_id })? {
         Response::Stopped { session_id } => {
             println!("stopped\t{session_id}");
@@ -234,9 +240,7 @@ fn watch(args: &[String]) -> Result<(), String> {
         .transpose()
         .map_err(|e| format!("invalid --count: {e}"))?;
     let mut client = Client::connect()?;
-    client.call(Request::Hello {
-        client_id: "fleetctl".into(),
-    })?;
+    client.call(Client::hello())?;
     let request_id = client.send(Request::SubscribeTimeline {
         session_id: session_id.clone(),
         since_seq: since,
@@ -254,6 +258,12 @@ fn watch(args: &[String]) -> Result<(), String> {
                     other => return Err(format!("unexpected response: {other:?}")),
                 };
                 eprintln!("subscribed\t{session_id}\tlatest={latest}");
+            }
+            Frame::Notice { code, message, .. } => {
+                eprintln!("notice\t{code}\t{message}");
+                if code == "Backpressure" {
+                    return Err("subscription closed by backpressure; use --since to resume".into());
+                }
             }
             Frame::Event { seq, event, .. } => {
                 if seq <= last_seq {
@@ -288,7 +298,12 @@ fn describe(kind: &EventKind) -> String {
             format!("tool_completed\t{name}\t{success}")
         }
         EventKind::TurnCompleted { status, .. } => format!("turn_completed\t{status:?}"),
+        EventKind::AgentNotice { message } => format!("agent_notice\t{message}"),
         EventKind::AgentError { message } => format!("agent_error\t{message}"),
+        EventKind::TurnUncertain { turn_id, reason } => {
+            format!("turn_uncertain\t{turn_id}\t{reason}")
+        }
+        EventKind::Backpressure { limit } => format!("backpressure\t{limit}"),
     }
 }
 

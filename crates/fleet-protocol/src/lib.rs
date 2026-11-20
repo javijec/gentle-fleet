@@ -8,13 +8,17 @@ use std::io::{self, BufRead, Write};
 use fleet_domain::{Event, OperationId, ProviderId, SessionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
-pub const WIRE: &str = "fleet-v1-p1";
+pub const WIRE: &str = "fleet-v1-p1.1";
+pub mod transport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     Hello {
         client_id: String,
+        /// Solo se usa donde el filesystem no puede aislar por usuario (Windows
+        /// en P1.1); en Unix el socket con permisos 0600 es la garantía.
+        token: Option<String>,
     },
     RegisterWorkspace {
         path: String,
@@ -88,14 +92,17 @@ pub struct SessionSummary {
     pub workspace_id: WorkspaceId,
     pub provider_id: ProviderId,
     pub state: String,
+    pub turn_state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSummary {
     pub id: ProviderId,
-    pub version: String,
-    pub mode: String,
+    /// `None` cuando el proveedor está registrado pero no detectado.
+    pub version: Option<String>,
+    pub availability: String,
     pub capabilities: fleet_domain::ProviderCapabilities,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +126,12 @@ pub enum Frame {
         session_id: SessionId,
         seq: u64,
         event: Event,
+    },
+    /// Aviso de transporte/flujo, por ejemplo Backpressure. No consume `seq`.
+    Notice {
+        session_id: Option<SessionId>,
+        code: String,
+        message: String,
     },
 }
 
@@ -151,6 +164,7 @@ mod tests {
             request_id: "r1".into(),
             request: Request::Hello {
                 client_id: "cli".into(),
+                token: None,
             },
         };
         let mut buffer = Vec::new();

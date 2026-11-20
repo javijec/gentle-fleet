@@ -20,8 +20,8 @@ use fleet_agent::{
     RecoveryEvidence, SendReceipt,
 };
 use fleet_domain::{
-    ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode, SessionState,
-    TurnStatus, VersionRange,
+    ProviderAvailability, ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode,
+    SessionState, TurnStatus, VersionRange,
 };
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
@@ -74,6 +74,7 @@ impl OpenCodeDriver {
                 version: ProviderVersion::parse("0.0.0"),
                 capabilities,
                 mode: RunnerMode::Auto,
+                availability: ProviderAvailability::Unknown,
             },
             mode: RunnerMode::Auto,
             workspace: None,
@@ -267,6 +268,7 @@ impl OpenCodeDriver {
             })?;
         self.descriptor.version = ProviderVersion::parse(version);
         if !COMPATIBILITY.compatible(&self.descriptor.version) {
+            self.descriptor.availability = ProviderAvailability::Unavailable;
             return Err(AgentError {
                 code: "incompatible_version".into(),
                 message: format!(
@@ -275,6 +277,7 @@ impl OpenCodeDriver {
                 ),
             });
         }
+        self.descriptor.availability = ProviderAvailability::Available;
         Ok(())
     }
 
@@ -366,7 +369,8 @@ fn map_stream_event(value: &Value, native_session_id: &str) -> Option<Vec<AgentE
     let data = value.get("data")?;
     if kind == "fleet.stream_error" {
         return Some(vec![AgentEvent {
-            kind: DomainEvent::AgentError {
+            kind: DomainEvent::TurnFailed {
+                turn_id: "unknown".into(),
                 message: data
                     .get("message")
                     .and_then(Value::as_str)
@@ -459,12 +463,34 @@ fn map_stream_event(value: &Value, native_session_id: &str) -> Option<Vec<AgentE
             turn_id: turn,
             status: TurnStatus::Interrupted,
         }],
-        "permission.asked" => vec![DomainEvent::AgentError {
+        "permission.asked" => vec![DomainEvent::AgentNotice {
             message: "provider requested approval; Fleet P1 never auto-approves".into(),
         }],
         _ => return None,
     };
     Some(events.into_iter().map(|kind| AgentEvent { kind }).collect())
+}
+
+impl OpenCodeDriver {
+    /// Comprobación barata para `ListAgents`: no crea sesión ni levanta un
+    /// servidor. Detecta versión real cuando el servicio de usuario responde.
+    pub fn probe(&mut self) -> ProviderDescriptor {
+        match self.attach_to_service() {
+            Ok(true) => {
+                if self.check_version().is_err() {
+                    self.descriptor.availability = ProviderAvailability::Unavailable;
+                }
+            }
+            Ok(false) => {
+                self.descriptor.mode = RunnerMode::Auto;
+                self.descriptor.availability = ProviderAvailability::Unavailable;
+            }
+            Err(_) => {
+                self.descriptor.availability = ProviderAvailability::Unavailable;
+            }
+        }
+        self.descriptor.clone()
+    }
 }
 
 impl AgentDriver for OpenCodeDriver {
@@ -518,11 +544,6 @@ impl AgentDriver for OpenCodeDriver {
         }
         self.current_turn = Some(input.turn_id.clone());
         self.turn_finished = false;
-        self.local_events.push_back(AgentEvent {
-            kind: DomainEvent::TurnStarted {
-                turn_id: input.turn_id,
-            },
-        });
         Ok(SendReceipt { accepted: true })
     }
 
@@ -538,10 +559,17 @@ impl AgentDriver for OpenCodeDriver {
                 Ok(value) => value,
                 Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(AgentError {
-                        code: "event_stream_closed".into(),
-                        message: "OpenCode SSE stream closed".into(),
-                    })
+                    if let Some(turn) = self.current_turn.clone() {
+                        self.current_turn = None;
+                        return Ok(Some(AgentEvent {
+                            kind: DomainEvent::TurnFailed {
+                                turn_id: turn,
+                                message: "OpenCode SSE stream closed before a terminal result"
+                                    .into(),
+                            },
+                        }));
+                    }
+                    return Ok(None);
                 }
             };
             let native = self.native_session_id.clone().unwrap_or_default();
@@ -552,10 +580,25 @@ impl AgentDriver for OpenCodeDriver {
         let Some(mut event) = self.stream_pending.pop_front() else {
             return Ok(None);
         };
-        if matches!(
+        let turn_scoped = matches!(
             event.kind,
-            DomainEvent::TurnCompleted { .. } | DomainEvent::AgentError { .. }
-        ) {
+            DomainEvent::TurnStarted { .. }
+                | DomainEvent::AssistantDelta { .. }
+                | DomainEvent::AssistantMessage { .. }
+                | DomainEvent::ToolStarted { .. }
+                | DomainEvent::ToolOutput { .. }
+                | DomainEvent::ToolCompleted { .. }
+                | DomainEvent::TurnCompleted { .. }
+                | DomainEvent::TurnFailed { .. }
+        );
+        if turn_scoped && self.current_turn.is_none() {
+            return Ok(None); // evento tardío de un turno anterior
+        }
+        let terminal = matches!(
+            event.kind,
+            DomainEvent::TurnCompleted { .. } | DomainEvent::TurnFailed { .. }
+        );
+        if terminal {
             if self.turn_finished {
                 return Ok(None);
             }
@@ -568,7 +611,9 @@ impl AgentDriver for OpenCodeDriver {
                 | DomainEvent::ToolStarted { turn_id, .. }
                 | DomainEvent::ToolOutput { turn_id, .. }
                 | DomainEvent::ToolCompleted { turn_id, .. }
-                | DomainEvent::TurnCompleted { turn_id, .. } => *turn_id = turn,
+                | DomainEvent::TurnCompleted { turn_id, .. }
+                | DomainEvent::TurnFailed { turn_id, .. }
+                | DomainEvent::TurnStarted { turn_id, .. } => *turn_id = turn,
                 _ => {}
             }
         }
@@ -585,6 +630,9 @@ impl AgentDriver for OpenCodeDriver {
         }
         if let DomainEvent::ToolStarted { name, .. } = &event.kind {
             self.last_tool = Some(name.clone());
+        }
+        if terminal {
+            self.current_turn = None;
         }
         Ok(Some(event))
     }
@@ -639,6 +687,29 @@ impl DriverFactory for OpenCodeFactory {
     }
     fn create(&self) -> Box<dyn AgentDriver> {
         Box::new(OpenCodeDriver::new())
+    }
+
+    fn metadata(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: "opencode".into(),
+            version: ProviderVersion::parse("0.0.0"),
+            capabilities: ProviderCapabilities {
+                streaming_text: true,
+                tool_events: true,
+                session_history: false,
+                native_turn_ids: false,
+                cancel_turn: false,
+                approvals: false,
+                can_own_process: true,
+                can_attach_service: true,
+            },
+            mode: RunnerMode::Auto,
+            availability: ProviderAvailability::Unknown,
+        }
+    }
+
+    fn probe(&self) -> ProviderDescriptor {
+        OpenCodeDriver::new().probe()
     }
 }
 

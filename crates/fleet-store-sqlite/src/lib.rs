@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use fleet_domain::store::OperationStatus;
 use fleet_domain::store::*;
 use fleet_domain::{Event, SessionState, TurnState};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -69,6 +69,32 @@ CREATE TABLE IF NOT EXISTS approvals (
     resolved_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(session_id, status);
+"#;
+
+const MIGRATION_V2: &str = r#"
+DROP INDEX IF EXISTS idx_approvals_session;
+ALTER TABLE approvals RENAME TO approvals_v1;
+CREATE TABLE approvals (
+    approval_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+    turn_id TEXT NOT NULL REFERENCES turns(turn_id),
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    resources TEXT NOT NULL,
+    allowed_decisions TEXT NOT NULL,
+    status TEXT NOT NULL,
+    native_request_id TEXT NOT NULL,
+    decision TEXT,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+);
+INSERT INTO approvals(approval_id, session_id, turn_id, kind, message, resources,
+                      allowed_decisions, status, native_request_id, decision, created_at, resolved_at)
+SELECT approval_id, session_id, turn_id, kind, message, resources,
+       allowed_decisions, status, native_request_id, decision, created_at, resolved_at
+FROM approvals_v1;
+DROP TABLE approvals_v1;
+CREATE INDEX idx_approvals_session ON approvals(session_id, status);
 "#;
 
 pub struct SqliteStore {
@@ -263,12 +289,12 @@ impl SessionStore for SqliteStore {
                 "integrity_check failed",
             ));
         }
-        let version: u32 = connection
+        let mut version: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
         if version == 0 {
             let transaction = connection
-                .transaction()
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
             transaction
                 .execute_batch(MIGRATION_V1)
@@ -279,6 +305,44 @@ impl SessionStore for SqliteStore {
             transaction
                 .commit()
                 .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+            version = 1;
+        }
+        if version == 1 {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+            let orphans: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM approvals a
+                     LEFT JOIN sessions s ON s.session_id=a.session_id
+                     LEFT JOIN turns t ON t.turn_id=a.turn_id
+                     WHERE s.session_id IS NULL OR t.turn_id IS NULL",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            if orphans > 0 {
+                return Err(StoreError::new(
+                    "migration_failed",
+                    format!("{orphans} orphan approvals block the foreign-key migration"),
+                ));
+            }
+            transaction
+                .execute_batch(MIGRATION_V2)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .pragma_update(None, "user_version", 2)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .commit()
+                .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+            version = 2;
+        }
+        if version != 2 {
+            return Err(StoreError::new(
+                "unsupported_schema_version",
+                format!("unsupported SQLite schema version {version}; upgrade Fleet instead of guessing"),
+            ));
         }
         Ok(())
     }
@@ -286,7 +350,7 @@ impl SessionStore for SqliteStore {
     fn recover_after_restart(&self) -> StoreResult<()> {
         let mut connection = self.connection()?;
         let tx = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         // All prior runner handles were process-local. Classify rather than
         // re-send effects whose delivery or final result cannot be proven.
@@ -442,7 +506,7 @@ impl SessionStore for SqliteStore {
     fn append_event(&self, event: &Event) -> StoreResult<()> {
         let mut connection = self.connection()?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         append_event_tx(&transaction, event)?;
         transaction
@@ -458,8 +522,28 @@ impl SessionStore for SqliteStore {
     ) -> StoreResult<()> {
         let mut connection = self.connection()?;
         let tx = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+        // Redelivery of the same durable event is a no-op. Check BEFORE any
+        // projection: re-running approval INSERT or ApprovalResolved UPDATE
+        // would fail and poison a healthy manager with StorageUnavailable.
+        let existing_event: Option<String> = tx
+            .query_row(
+                "SELECT event_id FROM events WHERE session_id=?1 AND seq=?2",
+                params![event.session_id, event.seq as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        if let Some(event_id) = existing_event {
+            if event_id == event.event_id {
+                return Ok(()); // transaction drops without writes
+            }
+            return Err(StoreError::new(
+                "sequence_conflict",
+                format!("seq {} already used in {}", event.seq, event.session_id),
+            ));
+        }
         // The projections and the visible event have one durability boundary.
         if let Some(approval) = approval {
             tx.execute(
@@ -608,7 +692,7 @@ impl SessionStore for SqliteStore {
     fn reserve_operation(&self, operation: &OperationRecord) -> StoreResult<OperationReservation> {
         let mut connection = self.connection()?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         let existing: Option<(String, String, String, Option<String>)> = transaction
             .query_row(
@@ -765,7 +849,7 @@ impl SessionStore for SqliteStore {
     ) -> StoreResult<ApprovalClaim> {
         let mut connection = self.connection()?;
         let tx = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         if let Some(existing) = load_operation(&tx, &operation.operation_key)? {
             let current = tx
@@ -781,9 +865,24 @@ impl SessionStore for SqliteStore {
                 && existing.kind == operation.kind
                 && existing.session_id == operation.session_id
             {
+                if existing.status == OperationStatus::Uncertain
+                    || current.status == ApprovalStatus::Uncertain
+                {
+                    return Ok(ApprovalClaim::Uncertain(current));
+                }
                 return Ok(ApprovalClaim::Existing(existing, current));
             }
             return Ok(ApprovalClaim::Conflict);
+        }
+        let current: ApprovalRequest = tx
+            .query_row(
+                "SELECT * FROM approvals WHERE approval_id=?1",
+                params![approval_id],
+                row_to_approval,
+            )
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        if current.status == ApprovalStatus::Uncertain {
+            return Ok(ApprovalClaim::Uncertain(current));
         }
         let changed = tx
             .execute(
@@ -826,13 +925,21 @@ impl SessionStore for SqliteStore {
     fn mark_approval_uncertain(&self, approval_id: &str, reason: &str) -> StoreResult<()> {
         let mut connection = self.connection()?;
         let tx = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE approvals SET status='uncertain' WHERE approval_id=?1 AND status='dispatching'",
             params![approval_id],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        if changed != 1 {
+            // A native confirmation may already have won. Report it so the
+            // manager does not overwrite a final state with Uncertain.
+            return Err(StoreError::new(
+                "approval_already_resolved",
+                format!("approval {approval_id} is no longer dispatching"),
+            ));
+        }
         tx.execute(
             "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
              WHERE kind='answer_approval' AND target_id=?1 AND status='accepted'",
@@ -1077,12 +1184,12 @@ mod tests {
     fn migration_and_health_are_verified() {
         let (store, path) = temp_store();
         let health = store.health().unwrap();
-        assert_eq!(health.schema_version, 1);
+        assert_eq!(health.schema_version, 2);
         assert!(health.integrity_ok);
         // Reabrir no vuelve a ejecutar la migración.
         drop(store);
         let reopened = SqliteStore::open(path).unwrap();
-        assert_eq!(reopened.health().unwrap().schema_version, 1);
+        assert_eq!(reopened.health().unwrap().schema_version, 2);
     }
 
     #[test]
@@ -1138,6 +1245,33 @@ mod tests {
     #[test]
     fn approval_decision_has_a_single_winner() {
         let (store, _) = temp_store();
+        store
+            .save_workspace(&WorkspaceRecord {
+                id: "ws_1".into(),
+                path: "/tmp/workspace".into(),
+            })
+            .unwrap();
+        store
+            .save_session(&SessionRecord {
+                session_id: "ses_1".into(),
+                workspace_id: "ws_1".into(),
+                provider_id: "fake".into(),
+                state: SessionState::Running,
+                turn_state: TurnState::Running,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+        store
+            .save_turn(&TurnRecord {
+                turn_id: "turn_1".into(),
+                session_id: "ses_1".into(),
+                operation_id: "op_1".into(),
+                state: TurnState::Running,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
         let approval = ApprovalRequest {
             approval_id: "appr_1".into(),
             session_id: "ses_1".into(),
@@ -1162,6 +1296,184 @@ mod tests {
         assert_eq!(
             store.get_approval("appr_1").unwrap().unwrap().decision,
             Some("once".into())
+        );
+    }
+
+    fn seed_session(store: &SqliteStore) {
+        store
+            .save_workspace(&WorkspaceRecord {
+                id: "ws_1".into(),
+                path: "/tmp/workspace".into(),
+            })
+            .unwrap();
+        store
+            .save_session(&SessionRecord {
+                session_id: "ses_1".into(),
+                workspace_id: "ws_1".into(),
+                provider_id: "fake".into(),
+                state: SessionState::Running,
+                turn_state: TurnState::Running,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+        store
+            .save_turn(&TurnRecord {
+                turn_id: "turn_1".into(),
+                session_id: "ses_1".into(),
+                operation_id: "op_1".into(),
+                state: TurnState::Running,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn commit_event_redelivery_is_idempotent() {
+        let (store, _) = temp_store();
+        seed_session(&store);
+        let approval = ApprovalRequest {
+            approval_id: "appr_1".into(),
+            session_id: "ses_1".into(),
+            turn_id: "turn_1".into(),
+            kind: "shell".into(),
+            message: "allow?".into(),
+            resources: vec!["echo hi".into()],
+            allowed_decisions: vec!["once".into()],
+            status: ApprovalStatus::Pending,
+            native_request_id: "per_native".into(),
+            decision: None,
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        };
+        let event = Event {
+            event_id: "ses_1-e3".into(),
+            session_id: "ses_1".into(),
+            seq: 3,
+            created_at_ms: 1,
+            kind: EventKind::ApprovalRequested {
+                approval_id: "appr_1".into(),
+                turn_id: "turn_1".into(),
+                kind: "shell".into(),
+                message: "allow?".into(),
+                resources: vec!["echo hi".into()],
+                allowed_decisions: vec!["once".into()],
+            },
+        };
+        let projection = SessionRecord {
+            session_id: "ses_1".into(),
+            workspace_id: "ws_1".into(),
+            provider_id: "fake".into(),
+            state: SessionState::Running,
+            turn_state: TurnState::AwaitingApproval,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        store
+            .commit_event(&event, &projection, Some(&approval))
+            .unwrap();
+        store
+            .commit_event(&event, &projection, Some(&approval))
+            .unwrap();
+        assert_eq!(store.read_events("ses_1", 0, 10).unwrap().len(), 1);
+        assert!(store.get_approval("appr_1").unwrap().is_some());
+        let mut conflicting = event.clone();
+        conflicting.event_id = "ses_1-other".into();
+        let error = store
+            .commit_event(&conflicting, &projection, None)
+            .unwrap_err();
+        assert_eq!(error.code, "sequence_conflict");
+    }
+
+    #[test]
+    fn approvals_require_existing_session_and_turn() {
+        let (store, _) = temp_store();
+        let approval = ApprovalRequest {
+            approval_id: "appr_orphan".into(),
+            session_id: "ghost_session".into(),
+            turn_id: "ghost_turn".into(),
+            kind: "shell".into(),
+            message: "allow?".into(),
+            resources: vec![],
+            allowed_decisions: vec!["once".into()],
+            status: ApprovalStatus::Pending,
+            native_request_id: "per_x".into(),
+            decision: None,
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        };
+        let error = store.save_approval(&approval).unwrap_err();
+        assert_eq!(error.code, "store_write_failed");
+        assert!(store.get_approval("appr_orphan").unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_reservation_is_idempotent() {
+        let (first, path) = temp_store();
+        let second = SqliteStore::open(path).unwrap();
+        let operation = OperationRecord {
+            operation_id: "op_race".into(),
+            operation_key: "race-key".into(),
+            kind: OperationKind::SendPrompt,
+            session_id: "ses_1".into(),
+            target_id: Some("turn_1".into()),
+            fingerprint: "ses_1\0hello".into(),
+            status: OperationStatus::Reserved,
+            message: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        let for_a = operation.clone();
+        let for_b = operation;
+        let a = std::thread::spawn(move || first.reserve_operation(&for_a).unwrap());
+        let b = std::thread::spawn(move || second.reserve_operation(&for_b).unwrap());
+        let results = [a.join().unwrap(), b.join().unwrap()];
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| matches!(r, OperationReservation::Created(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| matches!(r, OperationReservation::Existing(..)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn uncertain_after_native_confirmation_is_rejected() {
+        let (store, _) = temp_store();
+        seed_session(&store);
+        let approval = ApprovalRequest {
+            approval_id: "appr_1".into(),
+            session_id: "ses_1".into(),
+            turn_id: "turn_1".into(),
+            kind: "shell".into(),
+            message: "allow?".into(),
+            resources: vec![],
+            allowed_decisions: vec!["once".into()],
+            status: ApprovalStatus::Pending,
+            native_request_id: "per_native".into(),
+            decision: None,
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        };
+        store.save_approval(&approval).unwrap();
+        store
+            .resolve_approval("appr_1", "once", ApprovalStatus::Accepted)
+            .unwrap();
+        let error = store
+            .mark_approval_uncertain("appr_1", "late failure")
+            .unwrap_err();
+        assert_eq!(error.code, "approval_already_resolved");
+        assert_eq!(
+            store.get_approval("appr_1").unwrap().unwrap().status,
+            ApprovalStatus::Accepted
         );
     }
 }

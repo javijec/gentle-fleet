@@ -88,6 +88,8 @@ pub enum OperationReservation {
 pub enum ApprovalClaim {
     Created(ApprovalRequest),
     Existing(OperationRecord, ApprovalRequest),
+    /// La decisión anterior quedó incierta: requiere reconciliación, no reintento.
+    Uncertain(ApprovalRequest),
     Conflict,
 }
 

@@ -1029,11 +1029,13 @@ mod tests {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_store() -> (SqliteStore, PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "gf-p2-store-{}-{}.sqlite",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::SeqCst)
-        ));
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gf-p2-store-{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::SeqCst)
+            ))
+            .join("fleet.sqlite");
         let store = SqliteStore::open(path.clone()).unwrap();
         (store, path)
     }

@@ -194,6 +194,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn approval_wire_never_leaks_native_request_id() {
+        let approval = fleet_domain::store::ApprovalRequest {
+            approval_id: "appr-1".into(),
+            session_id: "ses-1".into(),
+            turn_id: "turn-1".into(),
+            kind: "shell".into(),
+            message: "test".into(),
+            resources: vec![],
+            allowed_decisions: vec!["once".into()],
+            status: fleet_domain::store::ApprovalStatus::Pending,
+            native_request_id: "native-sensitive-secret".into(),
+            decision: None,
+            created_at_ms: 1,
+            resolved_at_ms: None,
+        };
+        let frame = Frame::Response {
+            request_id: "req-1".into(),
+            result: Ok(Response::Approval { approval }),
+        };
+        let text = serde_json::to_string(&frame).unwrap();
+        assert!(!text.contains("native_request_id"));
+        assert!(!text.contains("native-sensitive-secret"));
+    }
+
+    #[test]
     fn frame_roundtrip() {
         let frame = Frame::Request {
             request_id: "r1".into(),

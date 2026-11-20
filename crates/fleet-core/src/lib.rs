@@ -1404,13 +1404,13 @@ mod tests {
 
     fn unique_db_path() -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "gf-p2-core-{}-{}.sqlite",
+            "gf-p2-core-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos()
-        ))
+        )).join("fleet.sqlite")
     }
 
     fn manager_at(config: FakeConfig, path: std::path::PathBuf) -> Arc<SessionManager> {

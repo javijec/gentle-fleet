@@ -260,6 +260,15 @@ fn forward_events(
     writer: Arc<Mutex<BufWriter<LocalStream>>>,
     last_seq: Arc<AtomicU64>,
 ) {
+    // Solo para builds de desarrollo: pausa determinista del consumidor
+    // utilizada por tests/e2e_backpressure.sh.
+    #[cfg(debug_assertions)]
+    if let Some(delay) = std::env::var("FLEET_TEST_FORWARD_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        std::thread::sleep(Duration::from_millis(delay.min(5_000)));
+    }
     loop {
         let overflow = matches!(
             subscription.recv_signal(Duration::from_millis(1)),

@@ -15,6 +15,7 @@ trap cleanup EXIT
 
 export FLEET_RUNTIME_DIR="$RUNTIME"
 export FLEET_SUBSCRIBER_LIMIT=1
+export FLEET_TEST_FORWARD_DELAY_MS=250
 "$BIN/fleetd" >"$RUNTIME/daemon.out" 2>"$RUNTIME/daemon.err" &
 DAEMON_PID=$!
 for _ in $(seq 1 50); do
@@ -27,7 +28,7 @@ WORKSPACE_ID="$("$BIN/fleetctl" workspace add "$WORKSPACE" | cut -f1)"
 SESSION_ID="$("$BIN/fleetctl" session create --workspace "$WORKSPACE_ID" --provider fake | cut -f1)"
 
 set +e
-"$BIN/fleetctl" watch "$SESSION_ID" --count 50 >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
+timeout 15s "$BIN/fleetctl" watch "$SESSION_ID" --count 50 >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
 WATCH_PID=$!
 for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
 "$BIN/fleetctl" prompt "$SESSION_ID" "flood" >/dev/null

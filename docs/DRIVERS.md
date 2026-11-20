@@ -30,7 +30,7 @@ supports_resume, streaming_text, tool_events, approvals, cancel_turn, attach_fil
 
 ## Gentle Shell / Pi
 
-Primer candidato investigado: `gentle-shell --mode rpc`. P0 capturó handshake, disposición del prompt, `message_update`, `tool_execution_*`, solicitudes `select/confirm/input/editor`, resolución, cierre, persistencia y resume con `switch_session`; ver `P0_FINDINGS.md` y `spikes/p0/fixtures/gentle-shell-pi.jsonl`. El cerrar stdin mata al proceso, por lo que este driver exige que el Runner lo posea. Para P1 se recomienda empezar con OpenCode por evidencia (P0-D1), sin cambiar esta interfaz de driver.
+Primer candidato investigado: `gentle-shell --mode rpc`. P0 capturó handshake, disposición del prompt, `message_update`, `tool_execution_*`, solicitudes `select/confirm/input/editor`, resolución, cierre, persistencia y resume con `switch_session`; detalle en [`research/PI.md`](research/PI.md) y captura en `spikes/p0/fixtures/gentle-shell-pi.jsonl`. El cerrar stdin mata al proceso, por lo que este driver exige que el Runner lo posea. Para P1 se recomienda empezar con OpenCode por evidencia (P0-D1, pendiente de ratificación), sin cambiar esta interfaz de driver.
 
 No asumir que Pi devuelve recibos idempotentes de prompt o resume entre procesos: inspeccionar y probar. Si no soporta recuperación exacta del turno, Fleet reporta OutcomeUnknown y no reenvía.
 
@@ -38,7 +38,7 @@ No asumir que Pi devuelve recibos idempotentes de prompt o resume entre procesos
 
 Preferir su app-server estructurado (JSONL/JSON-RPC, threads/turns/items, server-initiated approval requests). El driver traduce threadId→NativeSessionId, turnId→NativeTurnId e ítems a mensajes/herramientas Fleet, sin convertir los IDs nativos en IDs Fleet. Respetar las decisiones permitidas y políticas de aprobación del servidor. La compatibilidad se verifica contra la versión real y fixtures de App Server.
 
-P0 confirmó `thread/start`, `turn/start`, aprobaciones como requests JSON-RPC del servidor, `thread/resume` entre procesos y el requisito de paginar con `thread/turns/list` en vez de `thread/read includeTurns`. El esquema generado depende de la versión (292 tipos v2 en 0.171.0) y aislar `CODEX_HOME` sin `auth.json` rompe el turno con 401.
+P0 confirmó `thread/start`, `turn/start`, aprobaciones como requests JSON-RPC del servidor, `thread/resume` entre procesos y el requisito de paginar con `thread/turns/list` en vez de `thread/read includeTurns`. El esquema generado depende de la versión (714 definiciones v2 en 0.171.0) y aislar `CODEX_HOME` sin `auth.json` rompe el turno con 401. Detalle y evidencia en [`research/CODEX.md`](research/CODEX.md).
 
 Referencia: https://learn.chatgpt.com/docs/app-server
 
@@ -46,7 +46,7 @@ Referencia: https://learn.chatgpt.com/docs/app-server
 
 Priorizar su API/servidor soportado por la versión instalada, no analizar salida TUI. Detectar si el proveedor dispone ya de un servidor por usuario y evitar iniciar instancias duplicadas sin necesidad. Mapear session IDs, eventos, prompts, permissions e historial a la misma interfaz AgentDriver. El proceso dueño real de la sesión podría ser el propio servidor OpenCode; la entidad Runner maneja el attach, no debe suponer un hijo exclusivamente suyo.
 
-P0 confirmó en 2.3.2: attach al servicio de usuario con password de `service.json`, SSE en `/api/event`, `permission.asked` + `POST .../reply` con `once|always|reject`, persistencia tras reinicio y store global que exige filtrar por `location.directory`. Es el candidato recomendado para el primer driver real de P1 (P0-D1).
+P0 confirmó en 2.3.2: attach al servicio de usuario con password de `service.json`, SSE en `/api/event`, `permission.asked` + `POST .../reply` con `once|always|reject`, persistencia tras reinicio y store global que exige filtrar por `location.directory`. Detalle y evidencia en [`research/OPENCODE.md`](research/OPENCODE.md). Es el candidato recomendado para el primer driver real de P1 (P0-D1, pendiente de ratificación).
 
 Referencias: https://opencode.ai/docs/cli y https://opencode.ai/docs/api
 

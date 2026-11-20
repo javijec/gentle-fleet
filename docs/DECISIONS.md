@@ -1,6 +1,6 @@
 # Decisiones arquitectónicas — baseline nuevo
 
-**Todas las decisiones están propuestas.** Los spikes P0 ya se ejecutaron con los tres motores reales (20/11/2026, ver [`P0_FINDINGS.md`](P0_FINDINGS.md)); sus propuestas de concreción para P1 están en la sección 7 de ese documento y requieren ratificación explícita. No se trasladan automáticamente los ADR antiguos.
+**Todas las decisiones están propuestas.** Los spikes P0 ya se ejecutaron con los tres motores reales (20/11/2026, ver [`P0_FINDINGS.md`](P0_FINDINGS.md) y [`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md)); las propuestas P0-D1…D6 requieren ratificación explícita. No se trasladan automáticamente los ADR antiguos.
 
 | ID | Decisión | Motivo | Alternativa rechazada por ahora |
 |---|---|---|---|
@@ -19,12 +19,13 @@
 
 ## Concreciones propuestas tras P0 (pendientes de ratificación)
 
-- P0-D1: primer driver real para P1 = OpenCode (attach al servicio de usuario); el candidato inicial era Gentle Shell, pero OpenCode necesita menos traducción y permite smoke sin credenciales.
-- P0-D2: D04 se mantiene; el registro de capacidades nace de la tabla de diferencias de `P0_FINDINGS.md`.
-- P0-D3: D05 se matiza; el Runner posee el proceso para Pi y puede adjuntarse para OpenCode.
-- P0-D4: D09 se refuerza; reconciliar aprobaciones pendientes y cursor antes de cualquier reenvío.
-- P0-D5: versión fijada por driver y fixtures regenerados al cambiarla.
-- P0-D6: cursor Fleet propio; no reutilizar IDs nativos como secuencia pública.
+Los IDs, la justificación, las alternativas y las consecuencias de P0-D1…D6 están
+desarrollados en
+[`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md#propuestas-p0-d1d6--pendientes-de-ratificación).
+Resumen: P0-D1 OpenCode como primer driver real; P0-D2 mantener D04 con
+capacidades por versión; P0-D3 Runner que posee o se adjunta; P0-D4 reconciliar
+antes de reenviar; P0-D5 fixtures por versión; P0-D6 cursor Fleet propio.
+**Ninguna está ratificada.**
 
 ## Deudas de arquitectura aceptadas temporalmente
 

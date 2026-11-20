@@ -8,7 +8,7 @@ producto: no hay daemon, base de datos ni crates aquí.
 
 | Motor | Comando | Versión |
 |---|---|---|
-| Gentle Shell | `gentle-shell --version` | 4.8.0-main.652552becbb6 (envuelve `pi 1.5.2`) |
+| Gentle Shell | `gentle-shell --version` | `gentle-shell 4.8.0` + `pi 1.5.2` (paquete `gentle-pi 4.8.0-main.652552becbb6`) |
 | Codex | `codex --version` | codex-cli 0.171.0 |
 | OpenCode | `opencode --version` | 2.3.2 |
 
@@ -49,8 +49,9 @@ el workspace temporal), `XDG_STATE_HOME` (para `--attach`).
 
 ## Qué se comprobó
 
-Ver [`docs/P0_FINDINGS.md`](../../docs/P0_FINDINGS.md) para el detalle y las
-decisiones pendientes de P1. Resumen:
+Ver [`docs/P0_FINDINGS.md`](../../docs/P0_FINDINGS.md) para el resumen y
+[`docs/research/`](../../docs/research/) para el detalle por motor con etiquetas
+de evidencia. Resumen:
 
 | Capacidad | Gentle Shell / Pi | Codex app-server | OpenCode v2 API |
 |---|---|---|---|
@@ -68,5 +69,8 @@ decisiones pendientes de P1. Resumen:
 ## Fixtures
 
 [`fixtures/`](fixtures/) contiene las capturas anonimizadas de las ejecuciones
-reales. Se regeneran con `--capture`. No sustituyen a una prueba contra el motor
-real; al cambiar de versión hay que volver a ejecutar los probes.
+reales: tres capturas de probe, dos capturas manuales complementarias, un
+subconjunto de esquemas y la salida anonimizada de los comandos de versión. Se
+regeneran con `--capture` o con el comando indicado en cada documento de
+`docs/research/`. No sustituyen a una prueba contra el motor real; al cambiar de
+versión hay que volver a ejecutar los probes.

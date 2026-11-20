@@ -40,6 +40,18 @@ Orquestación autónoma multiagente, worktrees automáticos, CI/CD, navegador, s
 - [Referencias investigadas](docs/REFERENCES.md)
 - [Ejemplo conceptual de flujo](examples/chat-flow.jsonl)
 
+### Investigación P0 (evidencia de motores reales)
+
+- [Resumen ejecutivo y cierre](docs/P0_FINDINGS.md)
+- [Gentle Shell / Pi](docs/research/PI.md)
+- [Codex](docs/research/CODEX.md)
+- [OpenCode](docs/research/OPENCODE.md)
+- [Comparación y contratos de `AgentDriver`](docs/research/PROVIDER_COMPARISON.md)
+- [Limitaciones conocidas](docs/research/KNOWN_LIMITATIONS.md)
+- [Programas y fixtures de los spikes](spikes/p0/README.md)
+
+Las propuestas P0-D1…D6 siguen **pendientes de ratificación**; no hay P1 implementado.
+
 ## Política de código heredado
 
 Los repositorios y ramas previos **no son dependencias**. No copiar clases, módulos, protocolos, migraciones o patrones de recuperación sin una decisión explícita respaldada por un test vertical. El desarrollo nuevo empieza sobre un repositorio o rama de árbol limpio. **Nunca eliminar historiales antiguos por fuerza ni mezclar automáticamente las ramas anteriores**.

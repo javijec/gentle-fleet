@@ -18,9 +18,14 @@ Paseo separa módulos de protocolo, cliente y server, y usa proveedores que repo
 
 ## Resultado de los spikes P0 (20/11/2026)
 
-Los tres primeros huecos quedaron resueltos con binarios reales; el detalle y las
-capturas anonimizadas están en [`P0_FINDINGS.md`](P0_FINDINGS.md) y
-`spikes/p0/fixtures/`:
+Los tres primeros huecos quedaron resueltos con binarios reales. El resumen está
+en [`P0_FINDINGS.md`](P0_FINDINGS.md); el detalle con etiquetas de evidencia y
+referencias a cada captura está en
+[`research/PI.md`](research/PI.md), [`research/CODEX.md`](research/CODEX.md) y
+[`research/OPENCODE.md`](research/OPENCODE.md). La comparación y las limitaciones
+están en [`research/PROVIDER_COMPARISON.md`](research/PROVIDER_COMPARISON.md) y
+[`research/KNOWN_LIMITATIONS.md`](research/KNOWN_LIMITATIONS.md). Las capturas
+anonimizadas están en `spikes/p0/fixtures/`:
 
 - Gentle Shell: RPC JSONL, eventos `message_update`/`tool_execution_*`, permisos
   de la extensión vía `extension_ui_request`, resume con `switch_session` y

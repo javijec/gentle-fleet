@@ -135,7 +135,8 @@ pub struct ApprovalRequest {
     pub resources: Vec<String>,
     pub allowed_decisions: Vec<String>,
     pub status: ApprovalStatus,
-    /// Identificador nativo opaco; se guarda pero nunca se publica al cliente.
+    /// Identificador nativo opaco; SQLite lo conserva, la API nunca lo expone.
+    #[serde(skip)]
     pub native_request_id: String,
     pub decision: Option<String>,
     pub created_at_ms: u64,

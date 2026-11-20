@@ -79,6 +79,7 @@ impl SqliteStore {
     pub fn open(path: impl Into<PathBuf>) -> StoreResult<Self> {
         let path = path.into();
         if let Some(parent) = path.parent() {
+            let existed = parent.exists();
             std::fs::create_dir_all(parent).map_err(|e| {
                 StoreError::new(
                     "store_dir_unavailable",
@@ -88,11 +89,32 @@ impl SqliteStore {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+                if !existed {
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                        .map_err(|e| StoreError::new("store_dir_unavailable", e.to_string()))?;
+                } else {
+                    let mode = std::fs::metadata(parent)
+                        .map_err(|e| StoreError::new("store_dir_unavailable", e.to_string()))?
+                        .permissions().mode();
+                    if mode & 0o077 != 0 {
+                        return Err(StoreError::new(
+                            "insecure_store_dir",
+                            format!("{} is accessible by other users; use a private directory", parent.display()),
+                        ));
+                    }
+                }
             }
+            #[cfg(not(unix))]
+            let _ = existed;
         }
         let store = Self { path };
         store.init()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&store.path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| StoreError::new("store_file_permissions", e.to_string()))?;
+        }
         Ok(store)
     }
 

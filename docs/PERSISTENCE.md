@@ -14,7 +14,7 @@ sessions(session_id PK, workspace_id FK, provider_id, native_session_id NULL,
 operations(operation_id PK, principal_id, operation_key, kind, session_id NULL,
            request_hash, status, result NULL, created_at, expires_at)
 turns(turn_id PK, session_id FK, provider_turn_id NULL, status, operation_id FK)
-approvals(approval_id PK, session_id FK, turn_id NULL, native_request_id,
+approvals(approval_id PK, session_id FK, turn_id FK NOT NULL, native_request_id,
           status, decision NULL, operation_id NULL)
 events(session_id, seq, event_id, kind, payload_json, timestamp,
        runner_id NULL, runner_seq NULL,
@@ -45,7 +45,7 @@ Configurar límites para eventos, imágenes, tool output y spool. Las entradas e
 
 ## Integridad y recuperación
 
-- Migrations y `PRAGMA integrity_check` en tests de upgrade; backup/restore en pruebas de corte de proceso.
+- Migrations y `PRAGMA integrity_check` en tests de upgrade; backup/restore en pruebas de corte de proceso. `user_version=2` añade foreign keys en `approvals`; una DB con aprobaciones huérfanas bloquea la migración en lugar de descartar datos silenciosamente.
 - SQLite WAL requiere manejo correcto de -wal/-shm, fsync y directorio privado; no inventar identity fingerprint inode ni crear VFS propio.
 - No considerar la modificación por un proceso malicioso del mismo usuario como frontera de aislamiento. Sí defender contra datos corruptos, permisos accidentales y bugs normales.
 - Los vínculos de runner a sesión se validan al reconectar con secreto/identity de runtime y generación; PID por sí solo no es prueba de ownership.

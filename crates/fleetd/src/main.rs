@@ -42,6 +42,7 @@ fn main() -> std::io::Result<()> {
         emit_provider_error: std::env::var("FLEET_FAKE_PROVIDER_ERROR").is_ok(),
         emit_terminal_failure: std::env::var("FLEET_FAKE_TERMINAL_FAILURE").is_ok(),
         emit_approval: std::env::var("FLEET_FAKE_APPROVAL").is_ok(),
+        fail_answer: std::env::var("FLEET_FAKE_FAIL_ANSWER").is_ok(),
     };
     registry.register(Box::new(FakeFactory::with_config(fake_config)));
     registry.register(Box::new(OpenCodeFactory::with_ask_shell(

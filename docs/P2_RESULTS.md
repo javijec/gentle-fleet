@@ -34,7 +34,7 @@ mismo `(session_id, seq, event_id)` es idempotente; un `seq` distinto con otro
 
 ## 2. Migraciones y transacciones
 
-- `PRAGMA user_version`: 0 → 1 aplica `MIGRATION_V1` dentro de una transacción.
+- `PRAGMA user_version`: 0 → 1 aplica `MIGRATION_V1`; 1 → 2 aplica `MIGRATION_V2` (foreign keys en `approvals`) dentro de transacciones separadas.
 - `init()` ejecuta `PRAGMA integrity_check`; una DB corrupta devuelve
   `corrupt_database` y no se usa.
 - `reserve_operation` y `append_event` usan transacciones explícitas. Un evento
@@ -112,14 +112,14 @@ runner desaparecido (P3).
 |---|---|
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |
-| `cargo test --workspace --locked` | PASS — 25 tests unitarios |
+| `cargo test --workspace --locked` | PASS — 38 tests unitarios |
 | `cargo build --workspace --locked` | PASS |
 | `tests/e2e_fake.sh` | PASS |
 | `tests/e2e_concurrency.sh` | PASS |
 | `tests/e2e_backpressure.sh` | PASS |
-| `tests/e2e_unix_permissions.sh` | MODOS VERIFIED (0600/0700); cruce con otro usuario **UNTESTED** en este entorno |
+| `tests/e2e_unix_permissions.sh` | MODOS VERIFIED (0600/0700); cruce con otro usuario **UNTESTED** en este entorno (la plataforma no permite `runuser` aquí) |
 | `tests/e2e_persistence.sh` | PASS — timeline idéntica antes/después de reiniciar `fleetd`, operación reutilizada sin reenvío |
-| `tests/e2e_approvals.sh` | PASS — un solo ganador, rechazo y evento observable |
+| `tests/e2e_approvals.sh` | PASS — un solo ganador, rechazo, entrega incierta durable y sin reintento |
 | `tests/e2e_opencode.sh` | PASS — smoke real con dos clientes |
 | `tests/e2e_opencode_approval.sh` (`GF_E2E_REAL=1`) | PASS — `once` y `reject` reales, sin sesiones nativas residuales |
 
@@ -187,3 +187,36 @@ de ejecuciones históricas.
 5. Windows y el aislamiento entre UIDs no fueron verificados en esta revisión.
 
 No se modifica `main` ni se implementa P3, P4, SSH o GPUI aquí.
+
+
+## P2.2 — revisión independiente y correcciones
+
+Revisión del código real contra `f56b578`, sin conformarse con documentos ni
+con CI verde. Defectos reproducibles encontrados y corregidos en esta rama:
+
+| # | Defecto | Corrección | Regresión |
+|---|---|---|---|
+| 1 | `commit_event` reejecutaba proyecciones en una redelivery del mismo evento: insert de aprobación duplicado o `approval_conflict` convertía un reintento benigno en `StorageUnavailable` | Comprobación idempotente de `(session_id, seq, event_id)` antes de cualquier proyección; `seq` distinto sigue siendo `sequence_conflict` | `commit_event_redelivery_is_idempotent` |
+| 2 | `approvals` no tenía foreign keys: aprobaciones huérfanas eran durables | Migración `user_version=2` reconstruye la tabla con FKs a `sessions`/`turns`; huérfanos bloquean la migración | `approvals_require_existing_session_and_turn` |
+| 3 | `reserve_operation` y `append_event_tx` usaban `BEGIN DEFERRED`: dos conexiones podían both-read-absent y una fallar con `database is locked` en vez de devolver `Existing` | Todas las transacciones de escritura usan `BEGIN IMMEDIATE` | `concurrent_reservation_is_idempotent` |
+| 4 | Fallar al persistir el diagnóstico `Uncertain` sólo imprimía por stderr y el daemon seguía aceptando efectos | `mark_approval_uncertain` fija `storage_fault` y bloquea nuevas operaciones hasta reinicio | `uncertain_write_failure_latches_storage_fault` |
+| 5 | `mark_approval_uncertain` no comprobaba filas afectadas: si la confirmación nativa ya ganó, memoria y SQLite divergían | Devuelve `approval_already_resolved`; el manager conserva el estado final durable | `uncertain_after_native_confirmation_is_rejected` |
+| 6 | La confirmación nativa buscaba `native_request_id` sin limitar por sesión; IDs opacos pueden repetirse entre proveedores/sesiones | La búsqueda incluye `session_id` | `native_confirmation_is_scoped_to_its_session` |
+| 7 | `answer_approval` no permitía replay idempotente tras `storage_fault`, a diferencia de `send_prompt` | Consulta de operación antes de `ensure_writable`; replay no despacha | `answer_replay_survives_storage_fault` |
+| 8 | `reserve_operation::Existing` devolvía recibo sin validar estado; `subscribe` aceptaba `limit=0` | Misma validación que la ruta temprana; `limit` mínimo 1 | cubierto por tests de idempotencia y suscripción |
+| 9 | Errores de reqwest con URL completa filtraban IDs nativos en eventos `AgentError` | `redact_provider_error` elimina URLs y prefijos `ses_`, `per_`, etc. antes de publicar | `provider_errors_do_not_leak_native_ids` |
+| 10 | La aprobación incierta devolvía `Conflict` en vez de `NeedsReconciliation`; el e2e no cubría el fallo de entrega | `ApprovalClaim::Uncertain` y env `FLEET_FAKE_FAIL_ANSWER` | e2e `e2e_approvals.sh` |
+
+También se reforzaron las pruebas: `e2e_approvals.sh` exige `dispatching` en la
+respuesta ganadora y verifica el estado incierto durable; `e2e_long_replay.sh`
+comprueba páginas de 256 eventos y la cola viva 271..N; hay un test unitario del
+driver que traduce `permission.asked`/`permission.replied` de OpenCode.
+
+### No corregido (documentado)
+
+- La recuperación tras reinicio cambia estados en SQLite sin append de un evento
+  deRecovery: se eligió no inventar eventos; el timeline no explica por sí solo
+  la transición a `NeedsReconciliation` (P3 definirá el evento de recovery).
+- Las sesiones recuperadas sin runner siguen sin ruta para volver a `Running`:
+  es una limitación explícita de P2, no una promesa de P3.
+- Windows y el aislamiento entre UIDs no se verificaron en esta revisión.

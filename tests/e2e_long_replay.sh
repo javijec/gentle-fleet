@@ -43,3 +43,31 @@ awk -F '\t' '
   exit 1
 }
 echo "PASS: long timeline replayed from 1 through 270 without gaps"
+
+
+# ReadTimeline devuelve páginas acotadas: una petición --limit 300 no supera 256.
+"$BIN/fleetctl" timeline "$SID" --since 0 --limit 300 >"$RUNTIME/page1"
+PAGE1="$(wc -l <"$RUNTIME/page1")"
+[[ "$PAGE1" -eq 256 ]] || { echo "FAIL: page cap is $PAGE1, expected 256"; exit 1; }
+[[ "$(head -1 "$RUNTIME/page1" | cut -f1)" == "1" ]]
+[[ "$(tail -1 "$RUNTIME/page1" | cut -f1)" == "256" ]]
+# Recorrer todas las páginas para conocer el total sin cargarlas de una vez.
+TOTAL=0
+CURSOR=0
+while true; do
+  "$BIN/fleetctl" timeline "$SID" --since "$CURSOR" --limit 256 >"$RUNTIME/page"
+  COUNT="$(wc -l <"$RUNTIME/page")"
+  TOTAL=$((TOTAL + COUNT))
+  [[ "$COUNT" -lt 256 ]] && break
+  CURSOR="$(tail -1 "$RUNTIME/page" | cut -f1)"
+done
+[[ "$TOTAL" -gt 256 ]] || { echo "FAIL: timeline is not longer than one page"; exit 1; }
+TAIL_COUNT=$((TOTAL - 270))
+timeout 20s "$BIN/fleetctl" watch "$SID" --since 270 --count "$TAIL_COUNT" >"$RUNTIME/tail.out" 2>"$RUNTIME/tail.err"
+awk -F '\t' -v expected="$TOTAL" '
+  NR == 1 && $1 != 271 { exit 1 }
+  NR > 1 && $1 != previous + 1 { exit 1 }
+  { previous = $1 }
+  END {if (NR != expected - 270 || previous != expected) exit 1}
+' "$RUNTIME/tail.out" || { echo "FAIL: live tail after replay had gaps"; cat "$RUNTIME/tail.err"; exit 1; }
+echo "PASS: paged ReadTimeline and live tail after 256-event cutoff"

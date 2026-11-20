@@ -72,3 +72,10 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 - `tests/e2e_concurrency.sh`: un prompt rechazado por turno ocupado no reserva `operation_key`.
 - Unit tests: claves foráneas en cada nueva conexión, privacidad de ID nativo en el wire, estado de aprobación en `Dispatching` antes del ACK.
 - Verificar los resultados de GitHub Actions sobre el último commit; los smokes de OpenCode real son opt-in.
+
+### P2.2 — ejecutadas y en verde
+
+- 38 tests unitarios, incluyendo redelivery de `commit_event`, FKs de aprobaciones, reserva concurrente, fail-closed ante fallo de diagnóstico, confirmación nativa por sesión y redacción de errores del proveedor.
+- `tests/e2e_approvals.sh`: exige `dispatching` antes de la confirmación, cubre fallo de entrega con `FLEET_FAKE_FAIL_ANSWER` y verifica que el reintento devuelve `NeedsReconciliation`.
+- `tests/e2e_long_replay.sh`: páginas de 256 eventos más la cola viva posterior al cutoff.
+- Smoke real opt-in `tests/e2e_opencode_approval.sh` repetido con `once` y `reject`; pendiente de automatizar en CI con fixture local.

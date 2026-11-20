@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod store;
+
 pub type ProviderId = String;
 pub type WorkspaceId = String;
 pub type SessionId = String;
@@ -93,6 +95,8 @@ pub enum SessionState {
     StopUnconfirmed,
     Stopped,
     Failed,
+    /// Recuperada de SQLite sin runner verificado tras reinicio (P2).
+    NeedsReconciliation,
 }
 
 /// Estado del turno, propiedad del SessionManager.
@@ -206,6 +210,19 @@ pub enum EventKind {
     /// Un suscriptor lento fue desconectado con límite explícito.
     Backpressure {
         limit: usize,
+    },
+    ApprovalRequested {
+        approval_id: String,
+        turn_id: TurnId,
+        kind: String,
+        message: String,
+        resources: Vec<String>,
+        allowed_decisions: Vec<String>,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        turn_id: TurnId,
+        decision: String,
     },
 }
 

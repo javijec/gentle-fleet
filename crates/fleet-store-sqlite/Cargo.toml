@@ -1,0 +1,10 @@
+[package]
+name = "fleet-store-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }
+rusqlite = { version = "=0.43.0", features = ["bundled"] }
+serde_json.workspace = true

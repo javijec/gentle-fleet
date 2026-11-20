@@ -95,11 +95,15 @@ impl SqliteStore {
                 } else {
                     let mode = std::fs::metadata(parent)
                         .map_err(|e| StoreError::new("store_dir_unavailable", e.to_string()))?
-                        .permissions().mode();
+                        .permissions()
+                        .mode();
                     if mode & 0o077 != 0 {
                         return Err(StoreError::new(
                             "insecure_store_dir",
-                            format!("{} is accessible by other users; use a private directory", parent.display()),
+                            format!(
+                                "{} is accessible by other users; use a private directory",
+                                parent.display()
+                            ),
                         ));
                     }
                 }

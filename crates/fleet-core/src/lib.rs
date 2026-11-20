@@ -1403,14 +1403,16 @@ mod tests {
     }
 
     fn unique_db_path() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "gf-p2-core-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        )).join("fleet.sqlite")
+        std::env::temp_dir()
+            .join(format!(
+                "gf-p2-core-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))
+            .join("fleet.sqlite")
     }
 
     fn manager_at(config: FakeConfig, path: std::path::PathBuf) -> Arc<SessionManager> {
@@ -1687,11 +1689,18 @@ mod tests {
 
     #[test]
     fn rejected_prompt_does_not_reserve_operation_key() {
-        let manager = manager(FakeConfig { block_send: true, ..FakeConfig::default() });
+        let manager = manager(FakeConfig {
+            block_send: true,
+            ..FakeConfig::default()
+        });
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
-        manager.send_prompt(&ses.id, "first".into(), "first-key").unwrap();
-        let failure = manager.send_prompt(&ses.id, "second".into(), "rejected-key").unwrap_err();
+        manager
+            .send_prompt(&ses.id, "first".into(), "first-key")
+            .unwrap();
+        let failure = manager
+            .send_prompt(&ses.id, "second".into(), "rejected-key")
+            .unwrap_err();
         assert_eq!(failure.code, "TurnAlreadyRunning");
         assert!(manager.get_operation("rejected-key").unwrap().is_none());
     }

@@ -101,8 +101,17 @@ impl SqliteStore {
     }
 
     fn connection(&self) -> StoreResult<Connection> {
-        Connection::open(&self.path)
-            .map_err(|e| StoreError::new("store_open_failed", e.to_string()))
+        let connection = Connection::open(&self.path)
+            .map_err(|e| StoreError::new("store_open_failed", e.to_string()))?;
+        // Foreign keys, busy_timeout and trusted schema are connection-scoped.
+        // Calling configure() only in init() silently bypassed FK checks.
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .map_err(|e| StoreError::new("store_config_failed", e.to_string()))?;
+        connection
+            .pragma_update(None, "busy_timeout", 5_000)
+            .map_err(|e| StoreError::new("store_config_failed", e.to_string()))?;
+        Ok(connection)
     }
 
     fn configure(connection: &Connection) -> StoreResult<()> {
@@ -196,6 +205,7 @@ fn approval_text(status: ApprovalStatus) -> &'static str {
     match status {
         ApprovalStatus::Pending => "pending",
         ApprovalStatus::Delivered => "delivered",
+        ApprovalStatus::Dispatching => "dispatching",
         ApprovalStatus::Accepted => "accepted",
         ApprovalStatus::Rejected => "rejected",
         ApprovalStatus::Uncertain => "uncertain",
@@ -205,6 +215,7 @@ fn approval_text(status: ApprovalStatus) -> &'static str {
 fn parse_approval(value: &str) -> ApprovalStatus {
     match value {
         "delivered" => ApprovalStatus::Delivered,
+        "dispatching" => ApprovalStatus::Dispatching,
         "accepted" => ApprovalStatus::Accepted,
         "rejected" => ApprovalStatus::Rejected,
         "uncertain" => ApprovalStatus::Uncertain,
@@ -372,6 +383,117 @@ impl SessionStore for SqliteStore {
         append_event_tx(&transaction, event)?;
         transaction
             .commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))
+    }
+
+    fn commit_event(
+        &self,
+        event: &Event,
+        session: &SessionRecord,
+        approval: Option<&ApprovalRequest>,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+        // The projections and the visible event have one durability boundary.
+        if let Some(approval) = approval {
+            tx.execute(
+                "INSERT INTO approvals(approval_id, session_id, turn_id, kind, message, resources,
+                    allowed_decisions, status, native_request_id, decision, created_at, resolved_at)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                params![
+                    approval.approval_id,
+                    approval.session_id,
+                    approval.turn_id,
+                    approval.kind,
+                    approval.message,
+                    serde_json::to_string(&approval.resources)
+                        .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
+                    serde_json::to_string(&approval.allowed_decisions)
+                        .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
+                    approval_text(approval.status),
+                    approval.native_request_id,
+                    approval.decision,
+                    approval.created_at_ms as i64,
+                    approval.resolved_at_ms.map(|x| x as i64),
+                ],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        }
+        // Session state is durable together with the event that announces it.
+        tx.execute(
+            "UPDATE sessions SET state=?2, turn_state=?3, updated_at=?4 WHERE session_id=?1",
+            params![
+                session.session_id,
+                state_text(session.state),
+                turn_text(session.turn_state),
+                now_ms() as i64,
+            ],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        match &event.kind {
+            fleet_domain::EventKind::TurnCompleted { turn_id, status } => {
+                let state = match status {
+                    fleet_domain::TurnStatus::Completed => TurnState::Completed,
+                    fleet_domain::TurnStatus::Failed => TurnState::Failed,
+                    fleet_domain::TurnStatus::Interrupted => TurnState::Interrupted,
+                };
+                tx.execute(
+                    "UPDATE turns SET state=?2, updated_at=?3 WHERE turn_id=?1",
+                    params![turn_id, turn_text(state), now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+                let operation_status = if state == TurnState::Completed {
+                    OperationStatus::Completed
+                } else {
+                    OperationStatus::Failed
+                };
+                tx.execute(
+                    "UPDATE operations SET status=?2, updated_at=?3 WHERE operation_id IN
+                        (SELECT operation_id FROM turns WHERE turn_id=?1)",
+                    params![turn_id, operation_text(operation_status), now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            }
+            fleet_domain::EventKind::TurnUncertain { turn_id, reason } => {
+                tx.execute(
+                    "UPDATE turns SET state='uncertain', updated_at=?2 WHERE turn_id=?1",
+                    params![turn_id, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+                tx.execute(
+                    "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
+                     WHERE operation_id IN (SELECT operation_id FROM turns WHERE turn_id=?1)",
+                    params![turn_id, reason, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            }
+            fleet_domain::EventKind::ApprovalResolved { approval_id, decision, .. } => {
+                let status = if decision == "reject" { "rejected" } else { "accepted" };
+                let changed = tx.execute(
+                    "UPDATE approvals SET status=?2, decision=?3, resolved_at=?4
+                     WHERE approval_id=?1 AND status='dispatching' AND decision=?3",
+                    params![approval_id, status, decision, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+                if changed != 1 {
+                    return Err(StoreError::new(
+                        "approval_conflict",
+                        "approval is not awaiting native delivery confirmation",
+                    ));
+                }
+                tx.execute(
+                    "UPDATE operations SET status='completed', updated_at=?2
+                     WHERE kind='answer_approval' AND target_id=?1 AND status='accepted'",
+                    params![approval_id, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            }
+            _ => {}
+        }
+        append_event_tx(&tx, event)?;
+        tx.commit()
             .map_err(|e| StoreError::new("commit_failed", e.to_string()))
     }
 
@@ -552,6 +674,84 @@ impl SessionStore for SqliteStore {
             )
             .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         Ok(())
+    }
+
+    fn claim_approval(
+        &self,
+        approval_id: &str,
+        decision: &str,
+        operation: &OperationRecord,
+    ) -> StoreResult<ApprovalClaim> {
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+        if let Some(existing) = load_operation(&tx, &operation.operation_key)? {
+            let current = tx.query_row(
+                "SELECT * FROM approvals WHERE approval_id=?1",
+                params![approval_id],
+                row_to_approval,
+            )
+            .optional()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?
+            .ok_or_else(|| StoreError::new("not_found", "approval no longer exists"))?;
+            if existing.fingerprint == operation.fingerprint
+                && existing.kind == operation.kind
+                && existing.session_id == operation.session_id
+            {
+                return Ok(ApprovalClaim::Existing(existing, current));
+            }
+            return Ok(ApprovalClaim::Conflict);
+        }
+        let changed = tx.execute(
+            "UPDATE approvals SET status='dispatching', decision=?2
+             WHERE approval_id=?1 AND status IN ('pending','delivered')",
+            params![approval_id, decision],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        if changed != 1 {
+            return Ok(ApprovalClaim::Conflict);
+        }
+        tx.execute(
+            "INSERT INTO operations(operation_id,operation_key,kind,session_id,target_id,
+                fingerprint,status,message,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,'accepted',NULL,?7,?8)",
+            params![
+                operation.operation_id, operation.operation_key,
+                operation_kind_text(operation.kind), operation.session_id,
+                operation.target_id, operation.fingerprint,
+                now_ms() as i64, now_ms() as i64
+            ],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        let updated = tx.query_row(
+            "SELECT * FROM approvals WHERE approval_id=?1",
+            params![approval_id],
+            row_to_approval,
+        )
+        .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+        Ok(ApprovalClaim::Created(updated))
+    }
+
+    fn mark_approval_uncertain(&self, approval_id: &str, reason: &str) -> StoreResult<()> {
+        let mut connection = self.connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+        tx.execute(
+            "UPDATE approvals SET status='uncertain' WHERE approval_id=?1 AND status='dispatching'",
+            params![approval_id],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.execute(
+            "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
+             WHERE kind='answer_approval' AND target_id=?1 AND status='accepted'",
+            params![approval_id, reason, now_ms() as i64],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.commit().map_err(|e| StoreError::new("commit_failed", e.to_string()))
     }
 
     fn get_approval(&self, approval_id: &str) -> StoreResult<Option<ApprovalRequest>> {

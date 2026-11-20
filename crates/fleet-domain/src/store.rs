@@ -82,6 +82,15 @@ pub enum OperationReservation {
     Conflict,
 }
 
+/// A decision claim includes the idempotency reservation and approval status
+/// in ONE transaction. An existing key must never be dispatched twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalClaim {
+    Created(ApprovalRequest),
+    Existing(OperationRecord, ApprovalRequest),
+    Conflict,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnRecord {
     pub turn_id: TurnId,
@@ -96,6 +105,8 @@ pub struct TurnRecord {
 pub enum ApprovalStatus {
     Pending,
     Delivered,
+    /// Decision durably claimed but not yet confirmed by the native provider.
+    Dispatching,
     Accepted,
     Rejected,
     Uncertain,
@@ -106,6 +117,7 @@ impl ApprovalRequest {
         match self.status {
             ApprovalStatus::Pending => "pending",
             ApprovalStatus::Delivered => "delivered",
+            ApprovalStatus::Dispatching => "dispatching",
             ApprovalStatus::Accepted => "accepted",
             ApprovalStatus::Rejected => "rejected",
             ApprovalStatus::Uncertain => "uncertain",
@@ -145,6 +157,14 @@ pub trait SessionStore: Send + Sync {
 
     fn max_seq(&self, session_id: &str) -> StoreResult<u64>;
     fn append_event(&self, event: &Event) -> StoreResult<()>;
+    /// Commit an event and its session/turn/operation/approval projection atomically.
+    /// The caller publishes to clients ONLY after this succeeds.
+    fn commit_event(
+        &self,
+        event: &Event,
+        session: &SessionRecord,
+        approval: Option<&ApprovalRequest>,
+    ) -> StoreResult<()>;
     fn read_events(
         &self,
         session_id: &str,
@@ -165,6 +185,13 @@ pub trait SessionStore: Send + Sync {
     fn get_turn(&self, turn_id: &str) -> StoreResult<Option<TurnRecord>>;
 
     fn save_approval(&self, approval: &ApprovalRequest) -> StoreResult<()>;
+    fn claim_approval(
+        &self,
+        approval_id: &str,
+        decision: &str,
+        operation: &OperationRecord,
+    ) -> StoreResult<ApprovalClaim>;
+    fn mark_approval_uncertain(&self, approval_id: &str, reason: &str) -> StoreResult<()>;
     fn get_approval(&self, approval_id: &str) -> StoreResult<Option<ApprovalRequest>>;
     fn list_approvals(&self, session_id: Option<&str>) -> StoreResult<Vec<ApprovalRequest>>;
     /// Devuelve `true` solo para la primera decisión ganadora.

@@ -231,7 +231,7 @@ fn parse_state(value: &str) -> SessionState {
         "stop_unconfirmed" => SessionState::StopUnconfirmed,
         "stopped" => SessionState::Stopped,
         "failed" => SessionState::Failed,
-        "needs_reconciliation" => SessionState::NeedsReconciliation,
+        "needs_reconciliation" | "recovering" => SessionState::NeedsReconciliation,
         _ => SessionState::Running,
     }
 }

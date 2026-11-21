@@ -506,9 +506,18 @@ impl SessionManager {
         let runner_id = handle.identity().runner_id.clone();
         thread::spawn(move || {
             let mut last_probe = std::time::Instant::now();
+            let mut seen_notices = std::collections::HashSet::new();
             loop {
                 if last_probe.elapsed() >= Duration::from_secs(2) {
                     last_probe = std::time::Instant::now();
+                    for notice in handle.notices() {
+                        if seen_notices.insert(notice.clone()) {
+                            let _ = manager.publish_local(
+                                &session_id,
+                                EventKind::AgentNotice { message: notice },
+                            );
+                        }
+                    }
                     match handle.provider_alive() {
                         Ok(true) => {}
                         Ok(false) => {
@@ -542,6 +551,17 @@ impl SessionManager {
                             manager.ingest_runner_event(&session_id, &runner_id, runner_seq, event)
                         {
                             eprintln!("runner event could not be ingested: {error}");
+                            if error.code == "ack_failed" {
+                                // The daemon's ACK cursor is now out of sync with the
+                                // runner. Continuing would persist events that can
+                                // never be confirmed, so fail closed and stop reading.
+                                manager.mark_runner_uncertain(
+                                    &session_id,
+                                    &runner_id,
+                                    &format!("runner ACK failed: {error}"),
+                                );
+                                break;
+                            }
                         }
                     }
                     Ok(None) => {}
@@ -628,7 +648,10 @@ impl SessionManager {
             .runner_event_exists(runner_id, runner_seq)
             .map_err(to_agent_error)?
         {
-            let _ = handle.ack(runner_seq);
+            handle.ack(runner_seq).map_err(|error| AgentError {
+                code: "ack_failed".into(),
+                message: error.to_string(),
+            })?;
             return Ok(());
         }
         let event_id =
@@ -640,7 +663,10 @@ impl SessionManager {
                 .record_runner_event(runner_id, runner_seq, "")
                 .map_err(to_agent_error)?;
         }
-        handle.ack(runner_seq)?;
+        handle.ack(runner_seq).map_err(|error| AgentError {
+            code: "ack_failed".into(),
+            message: error.to_string(),
+        })?;
         Ok(())
     }
 
@@ -1771,10 +1797,41 @@ impl SessionManager {
                     code: "not_found".into(),
                     message: format!("unknown session `{session_id}`"),
                 })?;
-            let handle = record.runner.clone().ok_or_else(|| AgentError {
-                code: "session_stopped".into(),
-                message: format!("session `{session_id}` already stopped"),
-            })?;
+            if record.summary.state == SessionState::Stopped {
+                return Err(AgentError {
+                    code: "session_stopped".into(),
+                    message: format!("session `{session_id}` already stopped"),
+                });
+            }
+            let Some(handle) = record.runner.clone() else {
+                // No runner tras un reinicio/reattach fallido: el cierre
+                // explícito debe tener efecto verificable en el estado durable
+                // aunque no haya un proceso al que enviar Shutdown.
+                let runner_id = self
+                    .store
+                    .get_runner(session_id)
+                    .ok()
+                    .flatten()
+                    .map(|record| record.identity.runner_id);
+                record.summary.state = SessionState::Stopped;
+                record.active_turn = None;
+                record.current_operation = None;
+                let _ = self.publish_locked(
+                    &mut state,
+                    session_id,
+                    EventKind::SessionStateChanged {
+                        state: SessionState::Stopped,
+                    },
+                );
+                drop(state);
+                self.persist_session_state(session_id);
+                if let Some(runner_id) = runner_id {
+                    let _ = self
+                        .store
+                        .update_runner_status(&runner_id, RunnerStatus::Stopped);
+                }
+                return Ok(());
+            };
             let active_turn = record.active_turn.take();
             let operation_id = record.current_operation.take();
             record.summary.state = SessionState::Stopping;
@@ -1839,7 +1896,7 @@ mod tests {
     use crate::runner::InProcessRunnerLauncher;
     use fleet_agent::fake::{FakeConfig, FakeDriver, FakeFactory};
     use fleet_agent::{AgentDriver, DriverFactory};
-    use fleet_domain::{ProviderCapabilities, ProviderVersion, VersionRange};
+    use fleet_domain::{ProviderCapabilities, ProviderVersion, RunnerIdentity, VersionRange};
 
     struct ConfiguredFactory(FakeConfig);
 
@@ -2736,6 +2793,112 @@ mod tests {
             recovered.is_empty(),
             "recovery must skip a session that already has a runner and ingress"
         );
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn stop_after_failed_reattach_finalizes_durable_state() {
+        let path = unique_db_path();
+        let manager = manager_at(FakeConfig::default(), path.clone());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        drop(manager);
+
+        let reopened = manager_at(FakeConfig::default(), path);
+        // In-process launcher cannot reattach, so recovery leaves the session
+        // uncertain with no runner. An explicit Stop must still be effective.
+        let _ = reopened.recover_runners().unwrap();
+        let before = reopened
+            .list_sessions()
+            .into_iter()
+            .find(|item| item.id == ses.id)
+            .unwrap();
+        assert_eq!(before.state, SessionState::NeedsReconciliation);
+        reopened.stop_session(&ses.id).unwrap();
+        let after = reopened
+            .list_sessions()
+            .into_iter()
+            .find(|item| item.id == ses.id)
+            .unwrap();
+        assert_eq!(after.state, SessionState::Stopped);
+        assert_eq!(
+            reopened.store.get_runner(&ses.id).unwrap().unwrap().status,
+            RunnerStatus::Stopped
+        );
+    }
+
+    struct FailAckHandle(Box<dyn RunnerHandle>);
+
+    impl RunnerHandle for FailAckHandle {
+        fn identity(&self) -> &RunnerIdentity {
+            self.0.identity()
+        }
+        fn submit(&self, command: RunnerCommand) -> Result<(), AgentError> {
+            self.0.submit(command)
+        }
+        fn recv(&self, timeout: Duration) -> Result<Option<RunnerEvent>, AgentError> {
+            self.0.recv(timeout)
+        }
+        fn ack(&self, _runner_seq: u64) -> Result<(), AgentError> {
+            Err(AgentError {
+                code: "ack_failed".into(),
+                message: "injected runner ACK failure".into(),
+            })
+        }
+        fn close(&self) -> Result<(), AgentError> {
+            self.0.close()
+        }
+    }
+
+    struct FailAckLauncher(InProcessRunnerLauncher);
+
+    impl RunnerLauncher for FailAckLauncher {
+        fn launch(&self, ctx: RunnerLaunchContext) -> Result<Box<dyn RunnerHandle>, AgentError> {
+            Ok(Box::new(FailAckHandle(self.0.launch(ctx)?)))
+        }
+    }
+
+    #[test]
+    fn ack_failure_is_reported_instead_of_silently_replaying() {
+        let path = unique_db_path();
+        let store: Arc<dyn SessionStore> =
+            Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(ConfiguredFactory(FakeConfig::default())));
+        let mut launcher_registry = ProviderRegistry::new();
+        launcher_registry.register(Box::new(ConfiguredFactory(FakeConfig::default())));
+        let launcher = Arc::new(FailAckLauncher(InProcessRunnerLauncher::new(
+            launcher_registry,
+            "host-test".into(),
+        )));
+        let manager =
+            Arc::new(SessionManager::new(registry, store, launcher, "host-test".into()).unwrap());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let receipt = manager
+            .send_prompt(&ses.id, "ack test".into(), "ack-key")
+            .unwrap();
+        let runner_id = manager
+            .store
+            .get_runner(&ses.id)
+            .unwrap()
+            .unwrap()
+            .identity
+            .runner_id;
+        let error = manager
+            .ingest_runner_event(
+                &ses.id,
+                &runner_id,
+                1,
+                AgentEvent {
+                    kind: DomainEvent::AssistantDelta {
+                        turn_id: receipt.turn_id,
+                        text: "x".into(),
+                    },
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "ack_failed");
         manager.stop_session(&ses.id).unwrap();
     }
 }

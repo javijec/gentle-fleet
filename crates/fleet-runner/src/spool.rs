@@ -219,3 +219,84 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fleet_domain::{AgentEvent, DomainEvent};
+    use std::path::PathBuf;
+
+    fn path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("gf-p3-spool-{}-{name}.sqlite", std::process::id()))
+    }
+
+    fn event(seq: u64) -> AgentEvent {
+        AgentEvent {
+            kind: DomainEvent::AssistantDelta {
+                turn_id: format!("turn-{seq}"),
+                text: "payload".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn saturation_never_loses_events_or_hides_backpressure() {
+        let db = path("saturation");
+        let _ = std::fs::remove_file(&db);
+        let spool = Spool::open(&db).unwrap();
+        // Simula daemon caído: nadie hace ACK mientras se produce.
+        for seq in 1..=MAX_SPOOL_EVENTS {
+            assert_eq!(spool.append(&event(seq as u64)).unwrap(), seq as u64);
+        }
+        assert_eq!(spool.pending_count().unwrap(), MAX_SPOOL_EVENTS);
+        let rejected = spool.append(&event(9999));
+        assert_eq!(rejected.unwrap_err(), "spool_full");
+        assert_eq!(spool.pending_count().unwrap(), MAX_SPOOL_EVENTS);
+
+        // La evidencia de saturación se persiste con capacidad propia.
+        spool.record_notice("runner spool full").unwrap();
+        assert_eq!(
+            spool.notices().unwrap(),
+            vec!["runner spool full".to_string()]
+        );
+
+        // Ningún evento sin ACK se elimina al compactar.
+        spool.ack(1).unwrap();
+        assert_eq!(spool.pending_count().unwrap(), MAX_SPOOL_EVENTS - 1);
+        assert_eq!(spool.last_ack().unwrap(), 1);
+        let pending = spool.pending(1, MAX_SPOOL_EVENTS).unwrap();
+        assert_eq!(pending.len(), MAX_SPOOL_EVENTS - 1);
+        assert_eq!(pending.first().unwrap().0, 2);
+        assert_eq!(pending.last().unwrap().0, MAX_SPOOL_EVENTS as u64);
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn byte_limit_is_enforced_without_partial_writes() {
+        let db = path("bytes");
+        let _ = std::fs::remove_file(&db);
+        let spool = Spool::open(&db).unwrap();
+        let big = AgentEvent {
+            kind: DomainEvent::AssistantDelta {
+                turn_id: "turn-big".into(),
+                text: "x".repeat(MAX_SPOOL_BYTES),
+            },
+        };
+        assert_eq!(spool.append(&big).unwrap_err(), "spool_full");
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(spool.last_ack().unwrap(), 0);
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn operation_reservation_is_idempotent() {
+        let db = path("operations");
+        let _ = std::fs::remove_file(&db);
+        let spool = Spool::open(&db).unwrap();
+        assert!(!spool.reserve_operation("key-1", "op-1").unwrap());
+        assert!(spool.reserve_operation("key-1", "op-1").unwrap());
+        assert!(!spool.reserve_operation("key-2", "op-2").unwrap());
+        let _ = std::fs::remove_file(&db);
+    }
+}

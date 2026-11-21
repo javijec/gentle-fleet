@@ -5,7 +5,7 @@ mod spool;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -138,7 +138,7 @@ fn main() -> io::Result<()> {
         protocol_version: RUNNER_WIRE.into(),
         generation: 1,
     };
-    let (commands, command_rx) = mpsc::channel();
+    let (commands, command_rx): (SyncSender<DriverCommand>, _) = mpsc::sync_channel(16);
     let (closed_tx, closed_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::channel();
     let provider_alive = Arc::new(AtomicBool::new(false));
@@ -363,7 +363,7 @@ fn serve_daemon(
     token: String,
     identity: RunnerIdentity,
     shared: Arc<RunnerShared>,
-    commands: Sender<DriverCommand>,
+    commands: SyncSender<DriverCommand>,
     closed_rx: Arc<Mutex<Receiver<()>>>,
 ) -> Result<(), String> {
     let spool = &shared.spool;
@@ -407,10 +407,14 @@ fn serve_daemon(
             }
             authenticated = true;
         }
+        // Un único predicado de salud para Hello y Status: un proveedor muerto
+        // no puede presentarse como activo durante el reattachment.
+        let healthy = provider_alive.load(Ordering::Acquire)
+            && !provider_dead_marker(&identity.runner_id).exists();
         let result: Result<RunnerResponse, String> = match request {
             RunnerRequest::Hello { .. } => Ok(RunnerResponse::Hello {
                 identity: identity.clone(),
-                status: if provider_alive.load(Ordering::Acquire) {
+                status: if healthy {
                     RunnerStatus::Active.as_str()
                 } else {
                     RunnerStatus::Uncertain.as_str()
@@ -421,8 +425,7 @@ fn serve_daemon(
                 protocol_version: RUNNER_WIRE.into(),
             }),
             RunnerRequest::Status => {
-                let alive = provider_alive.load(Ordering::Acquire)
-                    && !provider_dead_marker(&identity.runner_id).exists();
+                let alive = healthy;
                 Ok(RunnerResponse::Status {
                     status: if alive {
                         RunnerStatus::Active
@@ -485,7 +488,12 @@ fn serve_daemon(
                         }
                         RunnerCommand::Stop => (DriverCommand::Stop, None),
                     };
-                    commands.send(native).map_err(|e| e.to_string())?;
+                    commands.try_send(native).map_err(|error| match error {
+                        TrySendError::Full(_) => {
+                            "runner_busy: command queue full (backpressure)".to_string()
+                        }
+                        TrySendError::Disconnected(_) => "runner_gone".to_string(),
+                    })?;
                     if let Some(done) = answer_done {
                         match done.recv_timeout(Duration::from_secs(5)) {
                             Ok(Ok(())) => {}
@@ -523,7 +531,7 @@ fn serve_daemon(
                     .clone(),
             }),
             RunnerRequest::Shutdown => {
-                let _ = commands.send(DriverCommand::Stop);
+                let _ = commands.try_send(DriverCommand::Stop);
                 let received = closed_rx
                     .lock()
                     .expect("closed channel poisoned")

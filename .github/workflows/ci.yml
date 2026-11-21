@@ -36,5 +36,9 @@ jobs:
         run: tests/e2e_p3_identity.sh
       - name: e2e pérdida de salud del proveedor
         run: tests/e2e_p3_provider_health.sh
+      - name: e2e muerte del runner con fail-closed
+        run: tests/e2e_p3_runner_kill.sh
+      - name: e2e dos caídas de daemon con sesiones concurrentes
+        run: tests/e2e_p3_multi_session.sh
       - name: e2e replay completo con mas de 256 eventos
         run: tests/e2e_long_replay.sh

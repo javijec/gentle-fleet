@@ -4,7 +4,7 @@
 //! el contrato y un launcher en proceso para pruebas deterministas.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -50,6 +50,12 @@ pub trait RunnerHandle: Send + Sync {
     fn provider_alive(&self) -> Result<bool, AgentError> {
         Ok(true) // local FakeDriver contract; process runner overrides it
     }
+
+    /// Notas durables del runner (p.ej. saturación del spool). Son eventos
+    /// informativos, nunca decisiones ni respuestas de permiso.
+    fn notices(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn close(&self) -> Result<(), AgentError>;
 }
 
@@ -70,7 +76,7 @@ pub trait RunnerLauncher: Send + Sync {
 
 struct InProcessHandle {
     identity: RunnerIdentity,
-    commands: Sender<RunnerCommand>,
+    commands: SyncSender<RunnerCommand>,
     events: Mutex<Receiver<RunnerEvent>>,
     closed: Mutex<Receiver<()>>,
 }
@@ -81,10 +87,18 @@ impl RunnerHandle for InProcessHandle {
     }
 
     fn submit(&self, command: RunnerCommand) -> Result<(), AgentError> {
-        self.commands.send(command).map_err(|error| AgentError {
-            code: "runner_gone".into(),
-            message: error.to_string(),
-        })
+        self.commands
+            .try_send(command)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => AgentError {
+                    code: "runner_busy".into(),
+                    message: "runner command queue full (backpressure)".into(),
+                },
+                TrySendError::Disconnected(_) => AgentError {
+                    code: "runner_gone".into(),
+                    message: "runner stopped".into(),
+                },
+            })
     }
 
     fn recv(&self, timeout: Duration) -> Result<Option<RunnerEvent>, AgentError> {
@@ -108,7 +122,7 @@ impl RunnerHandle for InProcessHandle {
     }
 
     fn close(&self) -> Result<(), AgentError> {
-        let _ = self.commands.send(RunnerCommand::Stop);
+        let _ = self.commands.try_send(RunnerCommand::Stop);
         match self
             .closed
             .lock()
@@ -150,7 +164,7 @@ impl RunnerLauncher for InProcessRunnerLauncher {
             workspace: ctx.workspace,
             mode: ctx.mode,
         })?;
-        let (commands, command_rx) = mpsc::channel();
+        let (commands, command_rx) = mpsc::sync_channel(16);
         let (events_tx, events_rx) = mpsc::channel();
         let (closed_tx, closed_rx) = mpsc::channel();
         let runner_id = format!("runner-{}", ctx.session_id);

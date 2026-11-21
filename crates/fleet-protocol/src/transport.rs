@@ -172,14 +172,21 @@ pub fn connect_named(name: &str) -> io::Result<LocalStream> {
     }
 }
 
-#[cfg(windows)]
-pub fn expected_token() -> io::Result<String> {
-    std::fs::read_to_string(runtime_dir().join("fleetd.token"))
-}
-
-#[cfg(unix)]
+/// Token esperado en el transporte local. Un `None` en Unix significa que el
+/// filesystem (socket 0600 en directorio 0700) es la garantía de aislamiento.
+/// La firma es idéntica en todas las plataformas para que daemon y cliente
+/// compilen juntos sin `cfg` repartidos.
 pub fn expected_token() -> io::Result<Option<String>> {
-    Ok(None)
+    #[cfg(windows)]
+    {
+        Ok(Some(std::fs::read_to_string(
+            runtime_dir().join("fleetd.token"),
+        )?))
+    }
+    #[cfg(unix)]
+    {
+        Ok(None)
+    }
 }
 
 #[cfg(not(windows))]

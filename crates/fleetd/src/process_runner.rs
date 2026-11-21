@@ -225,6 +225,13 @@ impl RunnerHandle for ProcessHandle {
         Ok(())
     }
 
+    fn notices(&self) -> Vec<String> {
+        match self.rpc(RunnerRequest::Status) {
+            Ok(RunnerResponse::Status { notices, .. }) => notices,
+            _ => Vec::new(),
+        }
+    }
+
     fn provider_alive(&self) -> Result<bool, AgentError> {
         match self.rpc(RunnerRequest::Status)? {
             RunnerResponse::Status {

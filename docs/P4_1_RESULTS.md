@@ -74,7 +74,7 @@
 | `availableDecisions` no está en el esquema generado | Media | El driver lo trata como campo opcional en runtime y ofrece defaults por método |
 | `thread/items/list` devuelve wrappers y `thread/turns/list` devuelve items completos | Media | La importación usa `itemsView:"full"`; los wrappers no se reinterpretan |
 | `session_snapshot`/feed de Gentle no aplica aquí | — | Fuera de P4.1 |
-| Controles deseados en memoria del daemon | Media | No sobreviven a un reinicio de `fleetd`; se documentan como preferencia de turno, no autoridad durable |
+| Persistencia de controles deseados en el daemon | Resuelta en P4.1-H | La preferencia se guarda por sesión en SQLite V4 y sobrevive al reinicio de `fleetd`; su estado efectivo se contrasta por separado con el proveedor |
 | Puerto de transporte/IDs nativos en errores de stop | Media | Corregido en P4.1-A con redacción y test de regresión |
 
 ## 7. Auditoría correctiva previa (contexto)
@@ -148,7 +148,7 @@ Esquema SQLite **V4** (`session_controls`) con `PRAGMA user_version = 4`. El tes
 ### Capacidades soportadas, parciales y no soportadas
 
 - **Soportadas y verificadas:** chat/streaming, herramientas, terminal real por `turn/completed`, aprobaciones parametrizadas con `option_id` y argumentos tipados, `turn/interrupt`, modelos/esfuerzos descubiertos y aplicados por turno, descubrimiento de sesiones, historial con herramientas y procedencia, supervivencia P3, concurrencia.
-- **Parciales:** control dentro de un turno activo (solo `deferred`, se aplica al siguiente); importación interrumpida (prefijo durable, sin atomicidad de lote); paginación de historial (bucle con detección de ciclo, probado con una página en el entorno real).
+- **Parciales:** control dentro de un turno activo (solo `deferred`, se aplica al siguiente); importación interrumpida (prefijo durable, sin atomicidad de lote); paginación de historial (el código recorre cursores y detecta ciclos; el smoke real comprobó una página, **no** una sesión de más de 100 turnos).
 - **No soportadas:** adopción de sesiones externas con escritura (sin exclusividad verificable); recuperación de turno en vuelo entre procesos; `turn/steer`, `thread/search` y APIs experimentales (`experimentalApi` no habilitado).
 
 ### Riesgos pendientes
@@ -164,3 +164,16 @@ Esquema SQLite **V4** (`session_controls`) con `PRAGMA user_version = 4`. El tes
 ### Estado final
 
 **P4.1 — CERRADA EN LINUX.** Todo lo obligatorio fue ejecutado y pasó sobre el commit final. No se simuló ninguna capacidad no soportada por el proveedor. No se comenzó P4.2/P4.3/P4.4 ni se hizo merge a `main`.
+
+## 9. P4.1-H2 — Corrección de concurrencia de importación
+
+**Motivo:** una consulta nativa de historial puede tardar mientras otro cliente inicia un turno, y dos importaciones con la misma clave pueden competir entre la lectura previa y la reserva durable.
+
+**Cambios aplicados en `fleet-core`:**
+
+- Una reserva `Created` es la **única** autorización para consultar el proveedor y publicar historial. Ante `Existing`, se devuelve el resultado persistido si está `Completed`; `Reserved` o `Accepted` se informa como `OperationPending`, `Uncertain` como `NeedsReconciliation`, y `Failed` como `OperationFailed`. No se ejecuta una segunda importación.
+- Se vuelve a validar el destino con el `ManagerState` bloqueado **después** de recuperar los datos nativos y **antes** de emitir eventos. Si la sesión cambió de proveedor/estado, tiene un turno activo o presenta estado incierto, se rechaza sin publicar el historial y se marca fallida la operación que no produjo efectos.
+- Dos pruebas deterministas con una importación nativa bloqueada controladamente: una inicia un turno durante la consulta y comprueba `SessionBusy` sin nuevos eventos históricos; la otra enfrenta dos solicitudes con la misma clave y verifica propietario único, respuesta pendiente, replay del resultado completado y una sola ejecución nativa.
+
+**Alcance de evidencia:** estas pruebas reproducen las carreras en forma determinista sin llamar a Codex; los ocho smokes reales P4.1-H anteriores validaron los flujos de proveedor pero no constituyen una ejecución nueva de estas dos carreras contra un App Server real. La importación parcial todavía puede dejar un prefijo durable marcado `Uncertain`, sin prometer atomicidad de lote.
+

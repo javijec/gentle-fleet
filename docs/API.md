@@ -89,3 +89,11 @@ NotFound; UnsupportedCapability; InvalidArgument; Unauthorized; Forbidden; Confl
 ~~~
 
 Los ejemplos no son fixtures definitivos. No escribir SDK público hasta validar estas transiciones con un driver real.
+
+
+**P3:** el protocolo cliente (`fleetctl` ↔ `fleetd`) no cambia. Internamente
+`fleetd` usa `fleet_protocol::runner` (`fleet-runner-v1`) sobre socket local
+autenticado. Los eventos del runner llegan con `runner_seq`, se deduplican y se
+publican al cliente con el `seq` Fleet. `RunnerHealthChanged` y `RecoveryNotice`
+son los eventos públicos previstos para el estado del runner; la recuperación
+sin evidencia suficiente mantiene `NeedsReconciliation` y no reenvía prompts.

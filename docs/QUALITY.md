@@ -79,3 +79,13 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 - `tests/e2e_approvals.sh`: exige `dispatching` antes de la confirmación, cubre fallo de entrega con `FLEET_FAKE_FAIL_ANSWER` y verifica que el reintento devuelve `NeedsReconciliation`.
 - `tests/e2e_long_replay.sh`: páginas de 256 eventos más la cola viva posterior al cutoff.
 - Smoke real opt-in `tests/e2e_opencode_approval.sh` repetido con `once` y `reject`; pendiente de automatizar en CI con fixture local.
+
+
+### P3 — ejecutadas y en verde
+
+- 40 tests unitarios, incluyendo identidad/ACK de runner, migración v3 y frame del protocolo interno.
+- `tests/e2e_p3_survival.sh`: SIGKILL real de `fleetd`, runner vivo, spool generado durante la caída y replay sin duplicar prompt.
+- `tests/e2e_p3_approval_disconnect.sh`: aprobación pendiente durante la caída del daemon, decidida una sola vez tras reattach.
+- `tests/e2e_p3_identity.sh`: token manipulado y versión incompatible rechazados.
+- `tests/e2e_opencode_survival.sh` (opt-in): comando `sleep 12` real con daemon muerto, archivo y timeline verificados.
+- Smoke real de aprobaciones `once`/`reject` y suite P1/P2 sin regresiones.

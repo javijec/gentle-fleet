@@ -22,6 +22,8 @@
 
 **Salida**: proceso fleet-runner independiente de fleetd, identidad autenticada, spool acotado de eventos no ACK, retransmisión deduplicada y reattachment. Probar muerte del daemon con runner vivo en Linux y Windows. Solo entonces anunciar que las sesiones sobreviven al reinicio del daemon.
 
+**Estado (21/11/2026): CERRADO en Linux.** Ver [`P3_RESULTS.md`](P3_RESULTS.md): SIGKILL real de `fleetd` con turno largo de OpenCode, reattach, replay sin duplicados y aprobaciones tras desconexión. Windows queda explícitamente no validado.
+
 ## P4: tres motores y capacidad de proveedor
 
 **Salida**: tests de conformidad comunes para **Codex y Gentle Shell/Pi** reutilizando el contrato ya ejercitado por OpenCode; descubrimiento de versión, inicio, send, salida, permisos/capacidades y parada. Reutilizar los contratos Fleet sin agregar ramas de proveedor dentro de SessionManager. El soporte de resume se declara por driver/versión.

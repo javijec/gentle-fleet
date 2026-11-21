@@ -15,6 +15,7 @@ El diagrama y el árbol siguiente describen el destino arquitectónico. Lo imple
 - Transporte local: Unix Domain Socket en directorio 0700 con socket 0600 en Linux (VERIFIED); en Windows, TCP loopback + token privado, **plataforma no validada** en P1.1. No se confía en loopback como autenticación.
 - `RunnerMode::{Owned, Attached, Auto}` vive en el `LaunchContext` del driver; el runner como proceso independiente sigue siendo P3.
 - `SessionManager` no importa `fleet-driver-opencode` ni ningún driver concreto: `ProviderRegistry` es el único punto de extensión.
+- **P3:** `fleet-runner` es un proceso separado dueño del `AgentDriver` y del spool; `SessionManager` usa `RunnerLauncher` y no contiene hilos de driver. El reattachment valida `runner_id`, `boot_id`, `generation` y versión de protocolo antes de declarar recuperación. `fleetd` no muere con el runner y el runner no muere con `fleetd`.
 - **P2:** `fleet-store-sqlite` implementa `fleet_domain::store::SessionStore`; `SessionManager` solo conoce ese trait (y un store falso en pruebas), nunca SQL ni `rusqlite`. Los eventos se persisten antes de publicarse y el `seq` sigue siendo propiedad de Fleet. Las aprobaciones son recursos de dominio traducidos por cada driver; `native_request_id` no sale del driver hacia el wire. `fleetd` compone store, registry, manager y transporte; `fleetctl` solo habla la API compartida.
 
 ## Diagrama de componentes

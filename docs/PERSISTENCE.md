@@ -45,7 +45,7 @@ Configurar límites para eventos, imágenes, tool output y spool. Las entradas e
 
 ## Integridad y recuperación
 
-- Migrations y `PRAGMA integrity_check` en tests de upgrade; backup/restore en pruebas de corte de proceso. `user_version=2` añade foreign keys en `approvals`; una DB con aprobaciones huérfanas bloquea la migración en lugar de descartar datos silenciosamente.
+- Migrations y `PRAGMA integrity_check` en tests de upgrade; backup/restore en pruebas de corte de proceso. `user_version=2` añade foreign keys en `approvals` y `user_version=3` añade `runners`/`runner_events`; una DB con aprobaciones huérfanas bloquea la migración en lugar de descartar datos silenciosamente.
 - SQLite WAL requiere manejo correcto de -wal/-shm, fsync y directorio privado; no inventar identity fingerprint inode ni crear VFS propio.
 - No considerar la modificación por un proceso malicioso del mismo usuario como frontera de aislamiento. Sí defender contra datos corruptos, permisos accidentales y bugs normales.
 - Los vínculos de runner a sesión se validan al reconectar con secreto/identity de runtime y generación; PID por sí solo no es prueba de ownership.
@@ -54,3 +54,15 @@ Configurar límites para eventos, imágenes, tool output y spool. Las entradas e
 ## Test obligatorio de cortes
 
 Inyectar caída: antes de aceptar mutación, después del commit, antes de enviar al proveedor, tras envío pero antes de ACK, después de persistir evento y antes de avisar al cliente. Cada interleaving debe recuperar un resultado confirmado o incierto **sin reejecutar automáticamente un efecto ambiguo**.
+
+
+## P3: spool del runner frente a base autoritativa
+
+`fleet.sqlite` sigue siendo la única autoridad para sesiones, turnos,
+operaciones, aprobaciones y timeline. Cada runner posee un spool SQLite propio
+en el directorio de runtime con `spool(runner_seq, event, bytes, acked)` y
+`operations(operation_key, operation_id)`. El spool **no** es un catálogo Fleet:
+sólo conserva eventos aún no confirmados por el daemon. El daemon persiste cada
+evento y registra `(runner_id, runner_seq)` en la misma transición lógica antes
+de enviar el ACK; un reenvío se deduplica y no produce un segundo evento Fleet.
+El `seq` público continúa siendo propiedad del SessionManager.

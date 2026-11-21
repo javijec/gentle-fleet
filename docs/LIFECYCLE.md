@@ -97,3 +97,20 @@ StopSession es una operación explícita y auditable: pide al driver cancelació
 ### Cierre verificado (P1.1.1)
 
 `StopSession` transita `Running → Stopping → Stopped` solo cuando `AgentDriver::close` confirma la terminación. Un fallo de confirmación o timeout produce `StopUnconfirmed`, nunca `Stopped`. Un worker que complete `close` posteriormente puede confirmar `Stopped` de forma asíncrona. Esta transición no presupone que sea seguro volver a ejecutar un prompt.
+
+
+## P3: runner, reattachment y estados de proceso
+
+El runner tiene estados propios: `Starting`, `Active`, `Disconnected`,
+`Recovering`, `Stopping`, `Stopped`, `Lost` y `Uncertain`. Se distinguen procesos:
+cerrar `fleetctl` no afecta al runner; matar `fleetd` con SIGKILL deja el runner
+vivo y produciendo eventos en su spool; matar el runner no permite fingir que la
+sesión sigue; matar el proveedor es un caso distinto que queda incierto; un
+reinicio del host destruye procesos pero conserva los datos SQLite.
+
+Tras reiniciar `fleetd`, una sesión pasa de `NeedsReconciliation` a `Recovering`
+sólo con handshake autenticado y evidencia del runner. Sin esa evidencia se
+conserva la incertidumbre, sin crear runners sustitutos ni reenviar prompts.
+Los eventos se entregan con `runner_seq` y se deduplican durablemente antes de
+publicarse con el `seq` Fleet. Las decisiones de aprobación inciertas no se
+reenvían automáticamente.

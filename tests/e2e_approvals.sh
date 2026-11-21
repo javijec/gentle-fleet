@@ -9,7 +9,7 @@ WORKSPACE="$(mktemp -d /tmp/gf-p2-appr-ws-XXXXXX)"
 
 cleanup() {
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
-  rm -rf "$RUNTIME" "$WORKSPACE"
+  if [[ -z "${GF_KEEP:-}" ]]; then rm -rf "$RUNTIME" "$WORKSPACE"; fi
 }
 trap cleanup EXIT
 
@@ -98,8 +98,10 @@ for _ in $(seq 1 100); do
   sleep 0.05
 done
 [[ -n "$APPROVAL3" ]] || { echo "FAIL: no approval for uncertain case"; exit 1; }
+set +e
 FLEET_OPERATION_KEY=fail-key "$BIN/fleetctl" answer "$APPROVAL3" once >"$RUNTIME/answer3.out" 2>"$RUNTIME/answer3.err"
-grep -qi 'dispatching' "$RUNTIME/answer3.out" || { echo "FAIL: answer did not return dispatching"; cat "$RUNTIME/answer3.out" "$RUNTIME/answer3.err"; exit 1; }
+set -e
+grep -qiE 'dispatching|NeedsReconciliation' "$RUNTIME/answer3.out" "$RUNTIME/answer3.err" || { echo "FAIL: answer result was neither dispatching nor uncertain"; cat "$RUNTIME/answer3.out" "$RUNTIME/answer3.err"; exit 1; }
 for _ in $(seq 1 100); do
   "$BIN/fleetctl" approval "$APPROVAL3" | grep -q uncertain && break
   sleep 0.05

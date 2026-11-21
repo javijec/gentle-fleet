@@ -12,6 +12,8 @@
 5. Los smokes reales son **opt-in** (`GF_E2E_REAL=1`), con coste y binario documentados. Los fixtures deterministas usan FakeDriver/servidor local y no sustituyen al smoke real.
 6. Secretos: no copiar `auth.json`, `service.json` ni tokens; solo comprobar presencia y permisos. Los logs y capturas pasan por `redact_provider_error` y por un escáner de patrones (`ses_`, `msg_`, `per_`, `call_`, `exec_`, `evt_`, `sh_`, URLs, rutas de HOME) antes de versionarse.
 7. Las pruebas de concurrencia se serializan cuando compartan proceso/servicio nativo, según `docs/QUALITY.md`.
+8. Los controles mutables solo se declaran VERIFIED tras probarlos en un **perfil realmente aislado**, comprobando el estado antes y después y sin alterar datos personales. Sin aislamiento confiable, marcar UNTESTED; no afirmar capacidad completa.
+9. Para nuevos campos API/runner y persistencia, probar lectura de fixtures anteriores y errores tipados de incompatibilidad; no confundir `serde(default)` con compatibilidad demostrada.
 
 ## 2. Niveles de prueba
 
@@ -21,13 +23,13 @@
 |---|---|---|
 | Traducción de protocolo → dominio | decoding/encoding de requests/events, `sessionID`/`threadId`/`turnId`/`requestId` descartados, `native_request_id` con `#[serde(skip)]`, sin JSON nativo en `Event` público | P0-D6, F08 |
 | `ProviderCapabilities` | descriptores de control/enumeración/adopción/import; una capacidad ausente produce `UnsupportedCapability`; desactivable por versión | P0-D2, F04 |
-| Aprobaciones tipadas | opciones nativas convertidas a `ApprovalOption`; `decline` ≠ `cancel`; parámetros `execpolicy_amendment`/`network_policy_amendment`/`answers`/`scope` conservados sin autoaprobación; idempotencia por `operation_key` | D09, F07/F08 |
-| Control de estado | `get_control`/`set_control`; ámbito `turn`/`session`/`profile`; rechazo o `Deferred` cuando el proveedor no permite aplicar en caliente; confirmación del estado efectivo | F09/F14 |
+| Aprobaciones tipadas | opciones nativas convertidas a `ApprovalOption`; `decline` ≠ `cancel`; `option_id` público Fleet distinto de IDs nativos y **estable por aprobación/replay**; parámetros `execpolicy_amendment`/`network_policy_amendment`/`answers`/`scope` tipados; opción no anunciada, argumentos inválidos o expirados → rechazo; idempotencia por `operation_key` y sin autoaprobación | D09, F07/F08 |
+| Control de estado | `get_control`/`set_control` con perfil aislado; ámbito `turn`/`session`/`profile`; rechazo o `Deferred` durante turno si corresponde; confirmar estado efectivo y ausencia de escrituras sobre perfil personal | F09/F14 |
 | Recuperación | cinco `RecoveryKind` distintos; `LiveTurnRecoverable` solo con evidencia; `Uncertain` y `Lost` no reenvían prompts | F11/F13, D09 |
-| Store y adopción | vínculo `UNIQUE(provider_id, native_session_id)`; fallo cerrado con evidencia ambigua; procedencia `observed_live`/`imported_from_provider`/`reconstructed_partial`; importación idempotente; sin duplicados en replay | F10–F13 |
+| Store y adopción | vínculo `UNIQUE(provider_id, native_session_id)`; descubrimiento global de solo lectura a nivel factory/catálogo, **sin crear runner de conversación**; actividad externa, evidencia ambigua o carrera sin protección de exclusividad → fallo cerrado; procedencia `observed_live`/`imported_from_provider`/`reconstructed_partial`; importación idempotente; sin duplicados en replay | F10–F13 |
 | Redacción | `redact_provider_error` sobre `AgentError` y `AgentNotice` en rutas de stop; ningún ID nativo o URL en eventos públicos | IDs opacos |
 | Interrupt | `RunnerCommand::Interrupt` llega a `AgentDriver::interrupt` en ambos bucles; `cancel_turn` deja de ser inutilizable | B6 |
-| Registro | `register_builtin_providers` produce los mismos IDs en `fleetd` y `fleet-runner`; test de paridad | B5 |
+| Registro | composición del catálogo **fuera de `fleet-agent`** o duplicación temporal controlada; misma lista de IDs, versiones, capacidades y modos en ambos binarios, sin dependencias circulares | B5 |
 
 ### 2.2 Contract tests (fixtures offline, matrix-driven)
 
@@ -38,7 +40,7 @@ Un único conjunto de aserciones parametrizado por capacidades, con tres capas d
 - **Pi 1.6.0**: `get_state`, `get_available_models` (lista vacía → UNTESTED de modelo real), `get_available_thinking_levels`, `new_session`, `get_messages`, `get_entries`, `get_commands`, `agent_settled` vs `agent_end`, `message_end`, `tool_execution_*`, framing solo por LF (incluir U+2028/U+2029).
 - **Gentle Shell 4.8.0**: `capabilities` con 23 métodos/9 eventos, `session_snapshot` condicional, envelope `kind:"response"|"event"`, correlation por `requestId`, límites 64 KiB/128/64, códigos de error, `select` de permiso con opciones nativas, distinción Extension UI vs Desktop RPC.
 
-Fixtures a versionar: los `/tmp/p4_*` de la investigación se revisarán y convertirán en fixtures anonimizados bajo `spikes/` o `tests/fixtures/` en el corte correspondiente. **No se versionan capturas sin sanitizar.**
+Fixtures a versionar: los `/tmp/p4_*` de la investigación se convertirán en **sondas ejecutables reproducibles y fixtures anonimizados versionados** bajo `spikes/p4/` o `tests/fixtures/` en los cortes correspondientes, para permitir validación independiente. **No se versionan capturas sin sanitizar.**
 
 ### 2.3 Pruebas de proceso (E2E deterministas)
 
@@ -51,7 +53,7 @@ Convención de nombres: `tests/e2e_p4_<proveedor>_<caso>.sh`, con `timeout` acot
 | Herramienta | `item/started/completed` | `tool_execution_*` | `tool_execution_*` | si `tool_events` |
 | Aprobación tipada y entrega | `availableDecisions` parametrizadas | solo si Extension UI presente | `select` nativo | nunca autoaprobar; fallo cerrado |
 | Cancelación / steer | `turn/interrupt`, `turn/steer` | `abort` | `abort` | si `cancel_turn` |
-| Modelo / esfuerzo / modo / perfil | `model/list`, effort per-turn, settings experimental (rechazo documentado) | `set_model`, `set_thinking_level` | `get_config`, `get_permission_mode` (solo lectura) | confirmación de estado efectivo |
+| Modelo / esfuerzo / modo / perfil | `model/list`, effort per-turn, settings experimental (rechazo documentado) | `set_model`, `set_thinking_level` | lectura y setters en perfil aislado cuando sean soportados | verificar cambio real y estado efectivo; si no puede aislarse, UNTESTED |
 | Historial estructurado y procedencia | `thread/turns/list` paginado, `excludeTurns:true` | `get_entries`, `get_messages` | `get_snapshot`, `get_messages` | sin deltas inventados |
 | Descubrimiento de sesiones | `thread/list`, `thread/loaded/list` | `--session-dir` | `list_sessions` (`sessions_unavailable` en efímera) | enumeración no intrusiva |
 | Adopción segura / bloqueo de externa activa | con `activeFlags` | sin señal global → fallo cerrado | con feed/`session_snapshot` | exclusividad, vínculo durable |
@@ -80,6 +82,7 @@ Si una cuenta no tiene modelo disponible (caso Pi 1.6.0 en este entorno), el smo
 - Aprobaciones parametrizadas sin autoaprobación; `serverRequest/resolved` como confirmación; entrega incierta → `Uncertain`.
 - `thread/list`, `thread/loaded/list`, `thread/resume{excludeTurns:true}` y paginación; **diferencia explícita** entre resume de historial y turno en vuelo (inexistente).
 - `thread/items/list` no disponible en hilo no materializado → error tipado, no fallo oculto.
+- Validar que las opciones públicas de aprobación sobreviven a replay sin filtrar IDs nativos; probar catálogo de proveedores sin ciclos de dependencias.
 - Regresiones P1–P3 en verde; sin cambios de contrato que rompan OpenCode.
 - `cargo fmt/check/clippy -D warnings/test/build` y `git diff --check` en verde; CI verde.
 - Documentación: matriz y RPC research actualizados con evidencia de versión; contradicción de `~/.codex/version.json` registrada.
@@ -99,7 +102,7 @@ Si una cuenta no tiene modelo disponible (caso Pi 1.6.0 en este entorno), el smo
 - Proveedor independiente (P4-F02), no alias de Pi; transporte Pi RPC compartido donde corresponda.
 - Negociación `capabilities` por sesión: 23 métodos/9 eventos documentados, `session_snapshot` tratado como condicional, `get_snapshot` al detectar hueco de `seq`.
 - Chat y eventos de Extension UI/Desktop RPC correctamente separados; permisos nativos `select` tipados, sin autoaprobación.
-- Controles de solo lectura ejecutados; `set_config`/`apply_profile`/`set_permission_mode` **no ejecutados** sobre el perfil real.
+- Controles de lectura verificados; setters para modelo, esfuerzo, modos y perfiles anunciados como modificables requieren **prueba de escritura con perfil/entorno aislado, confirmación nativa y verificación de no afectar datos personales**. No ejecutar `set_config`/`apply_profile`/`set_permission_mode` sobre el perfil real. Si no hay aislamiento fiable, marcar UNTESTED, no PASS.
 - Subagentes documentados pero no implementados ni expuestos (P4-F05); sin referencia a GPUI (P4-F17).
 - Misma validación Rust y CI que P4.1.
 
@@ -111,6 +114,14 @@ Si una cuenta no tiene modelo disponible (caso Pi 1.6.0 en este entorno), el smo
 - Linux x86_64: CI y smokes reales con versiones identificadas. Windows/macOS siguen pendientes de P7.
 - Matriz final publicada con soportado/parcial/no soportado/no probado por proveedor y versión.
 - Cierre solo si se cumplen estos criterios; hallazgos ajenos se registran con prioridad sin rediseñar la arquitectura.
+
+### Reglas adicionales para cerrar P4.1–P4.4
+
+- `Interrupt` no puede seguir siendo no-op. Verificar extremo a extremo los proveedores que lo anuncian, los errores y carreras frente a stop/turno ya finalizado; sin E2E, no declarar `cancel_turn`.
+- Aplicar redacción de URLs/IDs nativos en `finish_stop` y `mark_stop_unconfirmed`, con test de regresión en eventos públicos.
+- La adopción exige exclusividad verificable y protección contra TOCTOU; `loaded=false`/PID ausente no son suficientes. Si no existe garantía nativa fiable, habilitar solo descubrimiento/lectura y declarar adopción UNSUPPORTED.
+- Las migraciones y cambios de wire deben tener pruebas de compatibilidad con persistencia y clientes anteriores.
+- Métodos RPC documentados pero no ejercitados no cumplen criterios de cierre de escritura.
 
 ## 4. Validación de P4.0 ejecutada
 

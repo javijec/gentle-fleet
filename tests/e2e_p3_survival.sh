@@ -76,5 +76,10 @@ USER_MSGS="$(grep -c 'user.survive daemon death' "$RUNTIME/timeline" || true)"
 echo "PASS: daemon reattached, replayed spool, and returned to Running"
 
 timeout 30 "$BIN/fleetctl" watch "$SID" --since 0 --until-turn-end >"$RUNTIME/replay.out" 2>"$RUNTIME/replay.err"
-diff -u <(cut -f1 "$RUNTIME/timeline") <(cut -f1 "$RUNTIME/replay.out")
-echo "PASS: reconnected client saw the same durable sequence"
+# --until-turn-end correctly stops at TurnCompleted. Recovery emits a
+# *subsequent* SessionStateChanged(Running) event in the durable timeline.
+REPLAY_LINES="$(wc -l <"$RUNTIME/replay.out")"
+diff -u <(head -n "$REPLAY_LINES" "$RUNTIME/timeline" | cut -f1) <(cut -f1 "$RUNTIME/replay.out")
+tail -n 1 "$RUNTIME/replay.out" | grep -q 'turn_completed.Completed'
+tail -n 1 "$RUNTIME/timeline" | grep -q 'session_state.Running'
+echo "PASS: terminal watch is contiguous and subsequent recovery state is durable"

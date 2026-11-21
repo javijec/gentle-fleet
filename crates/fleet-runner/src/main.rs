@@ -25,6 +25,14 @@ struct Args {
     workspace: PathBuf,
 }
 
+/// Shared operational state: the daemon endpoint reads snapshots while the
+/// provider worker owns the actual AgentDriver.
+struct RunnerShared {
+    spool: Arc<Spool>,
+    pending_approvals: Arc<Mutex<Vec<String>>>,
+    provider_alive: Arc<AtomicBool>,
+}
+
 fn parse_args() -> Args {
     let mut args = std::env::args().skip(1);
     let mut out = Args {
@@ -118,15 +126,18 @@ fn main() -> io::Result<()> {
     let (closed_tx, closed_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::channel();
     let provider_alive = Arc::new(AtomicBool::new(false));
+    let shared = Arc::new(RunnerShared {
+        spool: Arc::clone(&spool),
+        pending_approvals: Arc::clone(&pending_approvals),
+        provider_alive: Arc::clone(&provider_alive),
+    });
     let closed_rx = Arc::new(Mutex::new(closed_rx));
     let pending_approvals: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     spawn_driver_loop(
         args,
         build_registry(),
         command_rx,
-        Arc::clone(&spool),
-        Arc::clone(&pending_approvals),
-        Arc::clone(&provider_alive),
+        Arc::clone(&shared),
         startup_tx,
         closed_tx,
     );
@@ -142,11 +153,9 @@ fn main() -> io::Result<()> {
                     stream,
                     token.clone(),
                     identity.clone(),
-                    Arc::clone(&spool),
+                    Arc::clone(&shared),
                     commands.clone(),
-                    Arc::clone(&pending_approvals),
                     Arc::clone(&closed_rx),
-                    Arc::clone(&provider_alive),
                 ) {
                     eprintln!("runner connection ended: {error}");
                 }
@@ -160,12 +169,13 @@ fn spawn_driver_loop(
     args: Args,
     registry: ProviderRegistry,
     commands: Receiver<DriverCommand>,
-    spool: Arc<Spool>,
-    pending_approvals: Arc<Mutex<Vec<String>>>,
-    provider_alive: Arc<AtomicBool>,
+    shared: Arc<RunnerShared>,
     startup: Sender<Result<(), String>>,
     closed_tx: Sender<()>,
 ) {
+    let spool = Arc::clone(&shared.spool);
+    let pending_approvals = Arc::clone(&shared.pending_approvals);
+    let provider_alive = Arc::clone(&shared.provider_alive);
     std::thread::spawn(move || {
         // Panic or unexpected thread exit must not leave a stale true flag.
         struct AliveGuard(Arc<AtomicBool>);
@@ -330,12 +340,13 @@ fn serve_daemon(
     stream: LocalStream,
     token: String,
     identity: RunnerIdentity,
-    spool: Arc<Spool>,
+    shared: Arc<RunnerShared>,
     commands: Sender<DriverCommand>,
-    pending_approvals: Arc<Mutex<Vec<String>>>,
     closed_rx: Arc<Mutex<Receiver<()>>>,
-    provider_alive: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let spool = &shared.spool;
+    let pending_approvals = &shared.pending_approvals;
+    let provider_alive = &shared.provider_alive;
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut writer = BufWriter::new(stream);
     let mut authenticated = false;

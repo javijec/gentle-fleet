@@ -15,9 +15,16 @@ use fleet_domain::{RunnerEvent, RunnerIdentity};
 use fleet_protocol::runner::*;
 use fleet_protocol::transport::{connect_named, runtime_dir, LocalStream};
 
+struct RunnerIo {
+    writer: LocalStream,
+    // Preserve BufReader across requests; recreating it discards prefetched
+    // frames from the socket and can lose ACKs or terminal events.
+    reader: BufReader<LocalStream>,
+}
+
 struct ProcessHandle {
     identity: RunnerIdentity,
-    stream: Mutex<LocalStream>,
+    io: Mutex<RunnerIo>,
     buffered: Mutex<VecDeque<RunnerEvent>>,
     next_request: AtomicU64,
     child: Mutex<Option<std::process::Child>>,
@@ -38,9 +45,10 @@ impl ProcessHandle {
     ) -> Result<Self, AgentError> {
         let name = format!("fleet-runner-{}", identity.runner_id);
         let stream = connect_named(&name).map_err(io_error)?;
+        let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
         let handle = Self {
             identity,
-            stream: Mutex::new(stream),
+            io: Mutex::new(RunnerIo { writer: stream, reader }),
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(child),
@@ -52,8 +60,14 @@ impl ProcessHandle {
             identity: handle.identity.clone(),
             token,
         })? {
-            RunnerResponse::Hello { identity, protocol_version, .. }
-                if identity == handle.identity && protocol_version == RUNNER_WIRE => {}
+            RunnerResponse::Hello {
+                identity,
+                protocol_version,
+                last_ack_seq,
+                ..
+            } if identity == handle.identity && protocol_version == RUNNER_WIRE => {
+                handle.last_seq.store(last_ack_seq, Ordering::SeqCst);
+            }
             other => return Err(AgentError {
                 code: "runner_identity_invalid".into(),
                 message: format!("unexpected runner hello response: {other:?}"),
@@ -64,10 +78,9 @@ impl ProcessHandle {
 
     fn rpc(&self, request: RunnerRequest) -> Result<RunnerResponse, AgentError> {
         let request_id = format!("d{}", self.next_request.fetch_add(1, Ordering::SeqCst));
-        let mut stream = self.stream.lock().expect("runner stream poisoned");
-        let mut reader = BufReader::new(stream.try_clone().map_err(io_error)?);
+        let mut io = self.io.lock().expect("runner stream poisoned");
         write_runner_frame(
-            &mut *stream,
+            &mut io.writer,
             &RunnerFrame::Request {
                 request_id: request_id.clone(),
                 request,
@@ -75,7 +88,7 @@ impl ProcessHandle {
         )
         .map_err(io_error)?;
         loop {
-            match read_runner_frame(&mut reader).map_err(io_error)? {
+            match read_runner_frame(&mut io.reader).map_err(io_error)? {
                 Some(RunnerFrame::Response {
                     request_id: id,
                     result,

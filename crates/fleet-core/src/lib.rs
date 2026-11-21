@@ -376,7 +376,8 @@ impl SessionManager {
             }),
             OperationStatus::Failed => Err(AgentError {
                 code: "OperationFailed".into(),
-                message: "previous import failed; use a new operation key after investigation".into(),
+                message: "previous import failed; use a new operation key after investigation"
+                    .into(),
             }),
         }
     }
@@ -2102,7 +2103,8 @@ impl SessionManager {
             let mut state = self.state.lock().expect("manager poisoned");
             // Durante el RPC nativo (fuera del lock) pudo iniciarse un turno,
             // detenerse la sesión o cambiar su estado. No publicar nada allí.
-            if let Err(error) = Self::ensure_history_import_target(&state, session_id, provider_id) {
+            if let Err(error) = Self::ensure_history_import_target(&state, session_id, provider_id)
+            {
                 drop(state);
                 self.store
                     .update_operation(

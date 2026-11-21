@@ -302,6 +302,11 @@ pub enum DomainEvent {
         turn_id: TurnId,
         message: String,
     },
+    /// Resultado de dispatch nativo incierto: nunca reenviar el prompt.
+    TurnUncertain {
+        turn_id: TurnId,
+        reason: String,
+    },
     /// Información del proveedor que debe mostrarse sin cerrar el turno.
     AgentNotice {
         message: String,

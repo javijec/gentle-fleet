@@ -443,13 +443,14 @@ impl AgentDriver for CodexDriver {
                             self.effort = Some(requested.value.clone());
                         }
                     } else {
-                        return Err(AgentError {
-                            code: "InvalidArgument".into(),
+                        self.emit(DomainEvent::TurnFailed {
+                            turn_id: input.turn_id.clone(),
                             message: format!(
                                 "control value `{}` is not available for `{}`",
                                 requested.value, requested.name
                             ),
                         });
+                        return Ok(SendReceipt { accepted: false });
                     }
                 }
                 other => return Err(AgentError::unsupported(other)),
@@ -465,10 +466,18 @@ impl AgentDriver for CodexDriver {
         if let Some(effort) = &self.effort {
             params["effort"] = json!(effort);
         }
-        let result = self
-            .rpc_mut()?
-            .call("turn/start", params, CALL_TIMEOUT)
-            .map_err(to_agent_error)?;
+        let result = match self.rpc_mut()?.call("turn/start", params, CALL_TIMEOUT) {
+            Ok(value) => value,
+            Err(error) => {
+                // Codex pudo aceptar la solicitud antes de perder el ACK.
+                // Nunca reintentar automáticamente ni dejar el turno Running.
+                self.emit(DomainEvent::TurnUncertain {
+                    turn_id: input.turn_id,
+                    reason: format!("native turn/start outcome uncertain: {}", error.code),
+                });
+                return Ok(SendReceipt { accepted: false });
+            }
+        };
         let turn = result.get("turn").cloned().unwrap_or(result);
         let returned_native_turn = text(&turn, "id").unwrap_or_else(|| native_turn.clone());
         self.native_turn = Some(returned_native_turn.clone());

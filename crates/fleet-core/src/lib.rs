@@ -1167,6 +1167,19 @@ impl SessionManager {
                         status: TurnStatus::Failed,
                     }
                 }
+                DomainEvent::TurnUncertain { turn_id, reason } => {
+                    if !scoped_turn(&turn_id) {
+                        return Ok(None);
+                    }
+                    operation_update = record.current_operation.clone().map(|id| {
+                        (id, OperationStatus::Uncertain, Some(reason.clone()))
+                    });
+                    record.summary.turn_state = TurnState::Uncertain;
+                    EventKind::TurnUncertain {
+                        turn_id,
+                        reason: redact_provider_error(&reason),
+                    }
+                }
                 DomainEvent::ApprovalRequested {
                     native_request_id,
                     kind,

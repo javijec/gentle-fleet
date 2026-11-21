@@ -85,3 +85,7 @@ Verificado con Codex `0.171.0`: chat/streaming, herramientas, aprobaciones param
 ## P4.3 — Gentle Shell implementado (22/11/2026)
 
 `fleet-driver-gentle-shell` es un proveedor independiente con `provider_id=gentle-shell`. Comparte solo el transporte JSONL neutral (`fleet-rpc-jsonl`) con Pi; la capa Desktop RPC (`gentle-shell.desktop-rpc/v1`), la negociación de capacidades y la correlación por `requestId` son específicas y no se filtran al chat. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md).
+
+## P4.4 — conformidad común
+
+Los cuatro drivers reales (más FakeDriver para pruebas) se validan con la misma suite `fleet-conformance`, parametrizada por capacidades descubiertas en runtime. Las diferencias nativas siguen encapsuladas en cada driver; ver `docs/P4_4_RESULTS.md`.

@@ -131,6 +131,10 @@ Los eventos y aprobaciones ampliados (`options`, `arguments`, controles, histori
 
 `fleet-driver-gentle-shell` comparte únicamente el transporte JSONL neutral con Pi. La composición sigue en `fleet-providers`, fuera de `fleet-agent`; `SessionManager` no conoce nombres de proveedor. Desktop RPC se negocia por sesión, correlaciona por `requestId` y mantiene su propio control de secuencia con reconciliación por snapshot. No se implementó abstracción compartida de eventos ni de Desktop RPC para P4.3; ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md).
 
+## P4.4 — verificación transversal
+
+`fleet-conformance` valida los cuatro proveedores solo a través de la API pública, sin conocer sus protocolos. La composición sigue centralizada en `fleet-providers` y `SessionManager` no tiene ramas por proveedor. Ver `docs/P4_4_RESULTS.md`.
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

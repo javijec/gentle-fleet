@@ -119,3 +119,8 @@ Los smokes reales iniciales de Gentle Shell son evidencia de la integración pre
 ## 11. Evidencia de cierre P4.3-H
 
 El commit `5ba188a` pasó CI `44953487212`. El usuario confirmó PASS de los siete scripts P4.3-H en Linux: lifecycle, recovery, concurrency, chat, tools, interrupt y controls. Los resultados de `recovery` verificaron tanto supervivencia a SIGKILL de `fleetd` como reattach sin eventos duplicados. `model` y `effort` se aplicaron realmente en Gentle Shell; `permission_mode` permaneció de solo lectura. Mantener explícitos `UNTESTED` (permisos interactivos nativos y perfiles) y `UNSUPPORTED` (importación externa sin identidad de sesión verificable); no inferir cobertura de Windows/macOS ni iniciar P4.4 sin auditoría.
+
+
+## 10. Matriz final P4.4
+
+La matriz definitiva por proveedor y capacidad, con estado, versión, prueba y limitaciones, está en `docs/P4_4_RESULTS.md` §4. Las celdas no verificadas se mantienen como UNTESTED/UNSUPPORTED.

@@ -106,3 +106,6 @@ sin evidencia suficiente mantiene `NeedsReconciliation` y no reenvía prompts.
 
 
 **P4.3:** `gentle-shell` usa la misma Fleet API que los otros tres proveedores reales. `ListAgents` distingue `opencode`, `codex`, `pi` y `gentle-shell`; FakeDriver sigue siendo solo soporte de pruebas. Las solicitudes Extension UI se exponen como `ApprovalRequested` con `option_id` Fleet y argumentos tipados; ningún frame Desktop RPC se publica como mensaje de asistente.
+
+
+**P4.4:** la API pública es idéntica para los cuatro proveedores reales. La suite de conformidad consume únicamente `ListAgents`, `CreateSession`, `ListSessions`, `SendPrompt`, `ReadTimeline`, `SubscribeTimeline`, `ListControls`, `SetControl`, `ListNativeSessions`, `GetApproval` y `StopSession`; ninguna operación expone protocolo nativo. Ver `docs/P4_4_RESULTS.md`.

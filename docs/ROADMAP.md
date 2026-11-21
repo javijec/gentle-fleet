@@ -56,3 +56,6 @@ No existe migración automática. No se hacen cherry-picks de M0–M4, no se arr
 
 
 **Estado P4.3-H (22/11/2026): CERRADA EN LINUX con limitaciones explícitas.** El endurecimiento corrigió controles nativos efectivos, ACK inciertos, backpressure Desktop RPC, resets conservadores y aislamiento de lectura de historial. El CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) sobre `5ba188a` y los siete scripts Gentle Shell (lifecycle, recovery, concurrency, chat, tools, interrupt y controls) finalizaron PASS según los resultados compartidos por el usuario. Importación histórica no verificada deshabilitada, modo de permisos de solo lectura, permisos interactivos reales y perfiles UNTESTED. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md); P4.4 pendiente.
+
+
+**Estado P4.4 (22/11/2026): CERRADA EN LINUX.** Framework común `fleet-conformance`, matriz de 44 celdas en modo real y regresiones completas de P1–P3 y P4.1–P4.3 en verde. Ver [`P4_4_RESULTS.md`](P4_4_RESULTS.md). P5, P6 y P7 pendientes.

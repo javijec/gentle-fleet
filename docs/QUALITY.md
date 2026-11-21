@@ -190,3 +190,16 @@ Detalle en [`P4_3_RESULTS.md`](P4_3_RESULTS.md).
 | Modificación de perfiles / permisos globales | **UNTESTED / bloqueada** |
 
 P4.3-H se considera **CERRADA EN LINUX con limitaciones explícitas**. Estos resultados no autorizan por sí solos P4.4, Windows/macOS ni adopción de sesiones externas.
+
+
+### P4.4 — conformidad final (22/11/2026)
+
+| Validación | Resultado |
+|---|---|
+| 113 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
+| 17 E2E deterministas (14 P1–P3 + 3 P4.4) | PASS |
+| 8 Codex + 8 Pi + 6 Gentle Shell smokes + conformidad real | PASS |
+| 6 pares de proveedores aislados y auditoría de secretos | PASS |
+| Permisos interactivos/perfiles Gentle Shell | UNTESTED documentado |
+
+Detalle en [`P4_4_RESULTS.md`](P4_4_RESULTS.md).

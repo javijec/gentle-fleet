@@ -26,6 +26,55 @@ use fleet_domain::{
 };
 use runner::{RunnerCommand, RunnerHandle, RunnerLaunchContext, RunnerLauncher};
 
+/// Valida campos tipados ANTES de reservar una aprobación irreversible.
+fn check_approval_fields(
+    option: Option<&fleet_domain::ApprovalOptionSpec>,
+    args: &[fleet_domain::ApprovalArgument],
+) -> Result<(), AgentError> {
+    let Some(option) = option else {
+        if args.is_empty() {
+            return Ok(()); // aprobaciones anteriores a P4, solo decisión simple
+        }
+        return Err(AgentError {
+            code: "InvalidArgument".into(),
+            message: "approval has no declared argument schema".into(),
+        });
+    };
+    let mut seen = std::collections::HashSet::new();
+    for input in args {
+        if !seen.insert(input.name.as_str()) {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "duplicate approval argument".into(),
+            });
+        }
+        let field = option.args.iter().find(|spec| spec.name == input.name)
+            .ok_or_else(|| AgentError {
+                code: "InvalidArgument".into(),
+                message: "approval argument was not offered".into(),
+            })?;
+        if input.values.is_empty()
+            || input.values.iter().any(String::is_empty)
+            || (field.kind == "text" && input.values.len() != 1)
+            || !matches!(field.kind.as_str(), "text" | "text_list")
+        {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "invalid approval argument values".into(),
+            });
+        }
+    }
+    for required in option.args.iter().filter(|field| field.required) {
+        if !seen.contains(required.name.as_str()) {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "required approval argument is missing".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Capacidad por defecto de la cola de cada suscriptor.
 pub const SUBSCRIBER_LIMIT: usize = 256;
 /// Página máxima devuelta por una lectura de timeline.
@@ -1288,6 +1337,45 @@ impl SessionManager {
             .map_err(to_agent_error)
     }
 
+    /// Recupera el contrato de opciones desde la timeline durable. P3 ya
+    /// persiste los eventos antes de publicar y no requiere una nueva tabla.
+    fn validate_approval_payload(
+        &self,
+        approval: &ApprovalRequest,
+        decision: &str,
+        args: &[fleet_domain::ApprovalArgument],
+    ) -> Result<(), AgentError> {
+        let mut since = 0u64;
+        loop {
+            let events = self.store
+                .read_events(&approval.session_id, since, TIMELINE_PAGE)
+                .map_err(to_agent_error)?;
+            if events.is_empty() {
+                break;
+            }
+            for event in &events {
+                if let EventKind::ApprovalRequested { approval_id, options, .. } = &event.kind {
+                    if approval_id == &approval.approval_id {
+                        let option = options.iter().find(|spec| spec.option_id == decision);
+                        return check_approval_fields(option, args);
+                    }
+                }
+            }
+            let next = events.last().map(|event| event.seq).unwrap_or(since);
+            if next <= since {
+                return Err(AgentError {
+                    code: "TimelineCorrupt".into(),
+                    message: "approval event search did not advance".into(),
+                });
+            }
+            if events.len() < TIMELINE_PAGE {
+                break;
+            }
+            since = next;
+        }
+        check_approval_fields(None, args)
+    }
+
     /// Atomically claim the approval and its operation. The HTTP result is
     /// NOT known here: only a native driver event can confirm final delivery.
     pub fn answer_approval(
@@ -1323,6 +1411,7 @@ impl SessionManager {
                 message: format!("`{decision}` is not allowed for `{approval_id}`"),
             });
         }
+        self.validate_approval_payload(&approval, &decision, &arguments)?;
         let fingerprint =
             approval_answer_fingerprint(&approval.session_id, approval_id, &decision, &arguments);
         // Idempotent replay must work even after a storage fault: it does not
@@ -3438,4 +3527,33 @@ mod tests {
             "s\0a\0once"
         );
     }
+    #[test]
+    fn approval_arguments_are_checked_before_reservation() {
+        let spec = fleet_domain::ApprovalOptionSpec {
+            option_id: "grant".into(),
+            label: "Grant".into(),
+            args: vec![
+                fleet_domain::ApprovalArgSpec {
+                    name: "permissions".into(),
+                    kind: "text_list".into(),
+                    required: true,
+                },
+                fleet_domain::ApprovalArgSpec {
+                    name: "scope".into(),
+                    kind: "text".into(),
+                    required: false,
+                },
+            ],
+        };
+        assert!(check_approval_fields(Some(&spec), &[]).is_err());
+        assert!(check_approval_fields(Some(&spec), &[fleet_domain::ApprovalArgument {
+            name: "unknown".into(),
+            values: vec!["value".into()],
+        }]).is_err());
+        assert!(check_approval_fields(Some(&spec), &[fleet_domain::ApprovalArgument {
+            name: "permissions".into(),
+            values: vec!["read".into()],
+        }]).is_ok());
+    }
+
 }

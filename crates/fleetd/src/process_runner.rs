@@ -1,5 +1,6 @@
 //! Runner real: lanza y reconecta procesos `fleet-runner` mediante IPC local.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use fleet_protocol::transport::{connect_named, runtime_dir, LocalStream};
 struct ProcessHandle {
     identity: RunnerIdentity,
     stream: Mutex<LocalStream>,
-    buffered: Mutex<Vec<RunnerEvent>>,
+    buffered: Mutex<VecDeque<RunnerEvent>>,
     next_request: AtomicU64,
     child: Mutex<Option<std::process::Child>>,
     last_seq: AtomicU64,
@@ -40,17 +41,24 @@ impl ProcessHandle {
         let handle = Self {
             identity,
             stream: Mutex::new(stream),
-            buffered: Mutex::new(Vec::new()),
+            buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(child),
             last_seq: AtomicU64::new(0),
         };
         let token = std::fs::read_to_string(runtime_dir().join(format!("{name}.token")))
             .map_err(io_error)?;
-        handle.rpc(RunnerRequest::Hello {
+        match handle.rpc(RunnerRequest::Hello {
             identity: handle.identity.clone(),
             token,
-        })?;
+        })? {
+            RunnerResponse::Hello { identity, protocol_version, .. }
+                if identity == handle.identity && protocol_version == RUNNER_WIRE => {}
+            other => return Err(AgentError {
+                code: "runner_identity_invalid".into(),
+                message: format!("unexpected runner hello response: {other:?}"),
+            }),
+        }
         Ok(handle)
     }
 
@@ -81,7 +89,7 @@ impl ProcessHandle {
                     self.buffered
                         .lock()
                         .expect("buffered poisoned")
-                        .push(RunnerEvent {
+                        .push_back(RunnerEvent {
                             runner_id: self.identity.runner_id.clone(),
                             runner_seq,
                             event,
@@ -138,7 +146,7 @@ impl RunnerHandle for ProcessHandle {
     }
 
     fn recv(&self, _timeout: Duration) -> Result<Option<RunnerEvent>, AgentError> {
-        if let Some(event) = self.buffered.lock().expect("buffered poisoned").pop() {
+        if let Some(event) = self.buffered.lock().expect("buffered poisoned").pop_front() {
             return Ok(Some(event));
         }
         let since = self.last_seq.load(Ordering::SeqCst);
@@ -146,21 +154,15 @@ impl RunnerHandle for ProcessHandle {
             since_seq: since,
             limit: 64,
         })? {
-            RunnerResponse::Pending { mut events } => {
-                let first = events.drain(..).next();
-                self.buffered
-                    .lock()
-                    .expect("buffered poisoned")
-                    .extend(events.into_iter().map(|(runner_seq, event)| RunnerEvent {
-                        runner_id: self.identity.runner_id.clone(),
-                        runner_seq,
-                        event,
-                    }));
-                Ok(first.map(|(runner_seq, event)| RunnerEvent {
+            RunnerResponse::Pending { events } => {
+                let mut buffered = self.buffered.lock().expect("buffered poisoned");
+                buffered.extend(events.into_iter().map(|(runner_seq, event)| RunnerEvent {
                     runner_id: self.identity.runner_id.clone(),
                     runner_seq,
                     event,
-                }))
+                }));
+                // FIFO: ACKs are cumulative. Never return seq 4 before 2 and 3.
+                Ok(buffered.pop_front())
             }
             other => Err(AgentError {
                 code: "unexpected_runner_response".into(),
@@ -170,6 +172,15 @@ impl RunnerHandle for ProcessHandle {
     }
 
     fn ack(&self, runner_seq: u64) -> Result<(), AgentError> {
+        let acknowledged = self.last_seq.load(Ordering::SeqCst);
+        if runner_seq != acknowledged.saturating_add(1) {
+            return Err(AgentError {
+                code: "runner_sequence_gap".into(),
+                message: format!(
+                    "refusing cumulative ACK {runner_seq}; last confirmed is {acknowledged}"
+                ),
+            });
+        }
         self.rpc(RunnerRequest::Ack { runner_seq })?;
         self.last_seq.store(runner_seq, Ordering::SeqCst);
         Ok(())

@@ -324,6 +324,63 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Valida un destino bajo el bloqueo de ManagerState. La comprobación se
+    /// repite después del RPC nativo, inmediatamente antes de publicar historial.
+    fn ensure_history_import_target(
+        state: &ManagerState,
+        session_id: &str,
+        provider_id: &str,
+    ) -> Result<(), AgentError> {
+        Self::ensure_writable(state)?;
+        let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
+            code: "not_found".into(),
+            message: "target Fleet session does not exist".into(),
+        })?;
+        if record.summary.provider_id != provider_id {
+            return Err(AgentError {
+                code: "ProviderMismatch".into(),
+                message: "history provider and target session provider differ".into(),
+            });
+        }
+        if record.summary.state != SessionState::Running
+            || record.active_turn.is_some()
+            || !record.summary.turn_state.accepts_prompt()
+        {
+            return Err(AgentError {
+                code: "SessionBusy".into(),
+                message: "cannot import history into an inactive, busy or uncertain session".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Una reserva existente pertenece a otra ejecución, incluso cuando
+    /// el primer GET previo a la transacción no alcanzó a observarla.
+    fn replay_history_import(operation: OperationRecord) -> Result<usize, AgentError> {
+        match operation.status {
+            OperationStatus::Completed => operation
+                .message
+                .as_deref()
+                .and_then(|message| message.parse::<usize>().ok())
+                .ok_or_else(|| AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "completed history import has no valid persisted result".into(),
+                }),
+            OperationStatus::Reserved | OperationStatus::Accepted => Err(AgentError {
+                code: "OperationPending".into(),
+                message: "history import is already reserved; no duplicate execution".into(),
+            }),
+            OperationStatus::Uncertain => Err(AgentError {
+                code: "NeedsReconciliation".into(),
+                message: "previous history import outcome is uncertain".into(),
+            }),
+            OperationStatus::Failed => Err(AgentError {
+                code: "OperationFailed".into(),
+                message: "previous import failed; use a new operation key after investigation".into(),
+            }),
+        }
+    }
+
     pub fn new(
         registry: ProviderRegistry,
         store: Arc<dyn SessionStore>,
@@ -1981,55 +2038,9 @@ impl SessionManager {
     ) -> Result<usize, AgentError> {
         {
             let state = self.state.lock().expect("manager poisoned");
-            Self::ensure_writable(&state)?;
-            let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
-                code: "not_found".into(),
-                message: "target Fleet session does not exist".into(),
-            })?;
-            if record.summary.provider_id != provider_id {
-                return Err(AgentError {
-                    code: "ProviderMismatch".into(),
-                    message: "history provider and target session provider differ".into(),
-                });
-            }
-            if !record.summary.turn_state.accepts_prompt() {
-                return Err(AgentError {
-                    code: "SessionBusy".into(),
-                    message: "cannot import history during an active or uncertain turn".into(),
-                });
-            }
+            Self::ensure_history_import_target(&state, session_id, provider_id)?;
         }
         let fingerprint = format!("{session_id}\0{provider_id}\0{native_ref}");
-        if let Some(existing) = self
-            .store
-            .get_operation(operation_key)
-            .map_err(to_agent_error)?
-        {
-            if existing.kind != OperationKind::ImportHistory
-                || existing.session_id != session_id
-                || existing.fingerprint != fingerprint
-            {
-                return Err(AgentError {
-                    code: "Conflict".into(),
-                    message: "operation key belongs to a different import".into(),
-                });
-            }
-            if matches!(
-                existing.status,
-                OperationStatus::Reserved | OperationStatus::Uncertain
-            ) {
-                return Err(AgentError {
-                    code: "NeedsReconciliation".into(),
-                    message: "previous import outcome is uncertain".into(),
-                });
-            }
-            if existing.status == OperationStatus::Completed {
-                return Ok(existing
-                    .message
-                    .and_then(|message| message.parse().ok())
-                    .unwrap_or(0));
-            }
-        }
         let operation = OperationRecord {
             operation_id: self.next_id("op"),
             operation_key: operation_key.to_string(),
@@ -2047,12 +2058,17 @@ impl SessionManager {
             .reserve_operation(&operation)
             .map_err(to_agent_error)?
         {
-            OperationReservation::Created(_) | OperationReservation::Existing(_) => {}
+            OperationReservation::Created(_) => {}
+            OperationReservation::Existing(existing) => {
+                // Solo el creador de la reserva puede consultar el proveedor y
+                // publicar eventos. La transacción SQLite es el árbitro real.
+                return Self::replay_history_import(existing);
+            }
             OperationReservation::Conflict => {
                 return Err(AgentError {
                     code: "Conflict".into(),
                     message: "operation key belongs to a different import".into(),
-                })
+                });
             }
         }
         let messages = self
@@ -2084,6 +2100,19 @@ impl SessionManager {
             // Serializa la comparación y las escrituras de importaciones
             // concurrentes dentro del mismo SessionManager.
             let mut state = self.state.lock().expect("manager poisoned");
+            // Durante el RPC nativo (fuera del lock) pudo iniciarse un turno,
+            // detenerse la sesión o cambiar su estado. No publicar nada allí.
+            if let Err(error) = Self::ensure_history_import_target(&state, session_id, provider_id) {
+                drop(state);
+                self.store
+                    .update_operation(
+                        &operation.operation_id,
+                        OperationStatus::Failed,
+                        Some(redact_provider_error(&error.message)),
+                    )
+                    .map_err(to_agent_error)?;
+                return Err(error);
+            }
             let mut existing_sources = std::collections::HashSet::new();
             let mut since = 0u64;
             loop {

@@ -1024,7 +1024,10 @@ mod tests {
         });
         assert!(driver.pending.contains_key("42"));
         assert!(driver.answered.is_empty());
-        let event = driver.local_events.pop_front().expect("approval event expected");
+        let event = driver
+            .local_events
+            .pop_front()
+            .expect("approval event expected");
         match event.kind {
             DomainEvent::ApprovalRequested {
                 native_request_id,

@@ -18,9 +18,22 @@ pub struct NativeSessionInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeHistoryTool {
+    pub name: String,
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeHistoryMessage {
     pub role: String,
     pub text: String,
+    /// Identificador Fleet determinista; nunca expone el itemId nativo.
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    #[serde(default)]
+    pub tool: Option<NativeHistoryTool>,
 }
 
 pub type ProviderId = String;
@@ -384,6 +397,11 @@ pub enum EventKind {
         role: String,
         text: String,
         provenance: String,
+        /// Campos opcionales para no romper la lectura de timelines P1–P3.
+        #[serde(default)]
+        source_ref: Option<String>,
+        #[serde(default)]
+        tool: Option<NativeHistoryTool>,
     },
     /// El turno quedó sin evidencia suficiente; no se reenvía.
     TurnUncertain {

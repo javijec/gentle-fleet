@@ -16,7 +16,7 @@ use fleet_agent::{
     NativeHistoryMessage, NativeSessionInfo, ProviderRegistry, RecoveryEvidence, SendReceipt,
 };
 use fleet_domain::{
-    AgentEvent, ControlState, DomainEvent, ProviderAvailability, ProviderCapabilities,
+    AgentEvent, ControlState, DomainEvent, NativeHistoryTool, ProviderAvailability, ProviderCapabilities,
     ProviderDescriptor, ProviderVersion, RunnerMode, SessionState, VersionRange,
 };
 use serde_json::{json, Value};
@@ -853,7 +853,11 @@ impl DriverFactory for CodexFactory {
                             code: "HistoryMalformed".into(),
                             message: "Codex turn history is missing items".into(),
                         })?;
-                for item in items {
+                let turn_id = text(turn, "id").ok_or_else(|| AgentError {
+                    code: "HistoryMalformed".into(),
+                    message: "Codex history turn has no stable native identity".into(),
+                })?;
+                for (item_index, item) in items.iter().enumerate() {
                     let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
                     let role = match kind {
                         "userMessage" | "userInput" => "user",
@@ -901,14 +905,33 @@ impl DriverFactory for CodexFactory {
                     } else {
                         text(item, "text").or_else(content_text).unwrap_or_default()
                     };
-                    // Un objeto sin texto no se transforma en un resultado
-                    // ficticio: se registra solo si hay contenido verificable.
-                    if !body.is_empty() {
-                        messages.push(NativeHistoryMessage {
-                            role: role.into(),
-                            text: body,
+                    if body.is_empty() {
+                        return Err(AgentError {
+                            code: "HistoryMissingContent".into(),
+                            message: "Codex history contains an item without recoverable content".into(),
                         });
                     }
+                    let source_ref = native_ref(&format!(
+                        "{}\\0{}\\0{}", thread_id, turn_id, item_index
+                    ));
+                    let tool = if role == "tool" {
+                        Some(NativeHistoryTool {
+                            name: kind.to_string(),
+                            input: text(item, "command").or_else(|| text(item, "query")),
+                            output: text(item, "aggregatedOutput")
+                                .or_else(|| text(item, "output"))
+                                .or_else(|| text(item, "result")),
+                            status: text(item, "status"),
+                        })
+                    } else {
+                        None
+                    };
+                    messages.push(NativeHistoryMessage {
+                        role: role.into(),
+                        text: body,
+                        source_ref: Some(source_ref),
+                        tool,
+                    });
                 }
             }
             cursor = text(&turns, "nextCursor");

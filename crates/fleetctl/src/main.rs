@@ -426,7 +426,8 @@ fn describe(kind: &EventKind) -> String {
             role,
             text,
             provenance,
-        } => format!("history\t{role}\t{provenance}\t{text}"),
+            ..
+        } => format!("history\\t{role}\\t{provenance}\\t{text}"),
         EventKind::TurnUncertain { turn_id, reason } => {
             format!("turn_uncertain\t{turn_id}\t{reason}")
         }

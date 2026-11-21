@@ -2042,10 +2042,52 @@ impl SessionManager {
                     Some(redact_provider_error(&error.message)),
                 );
             })?;
-        let count = messages.len();
+        if messages.iter().any(|message| message.source_ref.as_deref().is_none_or(str::is_empty)) {
+            let _ = self.store.update_operation(
+                &operation.operation_id,
+                OperationStatus::Failed,
+                Some("source history item lacks stable identity".into()),
+            );
+            return Err(AgentError {
+                code: "HistoryMissingIdentity".into(),
+                message: "cannot safely import historical records without stable identities".into(),
+            });
+        }
+        let mut count = 0usize;
         {
+            // Serializa la comparación y las escrituras de importaciones
+            // concurrentes dentro del mismo SessionManager.
             let mut state = self.state.lock().expect("manager poisoned");
+            let mut existing_sources = std::collections::HashSet::new();
+            let mut since = 0u64;
+            loop {
+                let page = self.store.read_events(session_id, since, TIMELINE_PAGE)
+                    .map_err(to_agent_error)?;
+                if page.is_empty() {
+                    break;
+                }
+                for event in &page {
+                    if let EventKind::HistoryMessage { source_ref: Some(source), .. } = &event.kind {
+                        existing_sources.insert(source.clone());
+                    }
+                }
+                let next = page.last().map(|event| event.seq).unwrap_or(since);
+                if next <= since {
+                    return Err(AgentError {
+                        code: "TimelineCorrupt".into(),
+                        message: "history deduplication cursor did not advance".into(),
+                    });
+                }
+                since = next;
+                if page.len() < TIMELINE_PAGE {
+                    break;
+                }
+            }
             for message in messages {
+                let source_ref = message.source_ref.expect("source checked above");
+                if !existing_sources.insert(source_ref.clone()) {
+                    continue;
+                }
                 if let Err(error) = self.publish_locked(
                     &mut state,
                     session_id,
@@ -2053,6 +2095,8 @@ impl SessionManager {
                         role: message.role,
                         text: message.text,
                         provenance: "imported_from_provider".into(),
+                        source_ref: Some(source_ref),
+                        tool: message.tool,
                     },
                 ) {
                     drop(state);
@@ -2063,6 +2107,7 @@ impl SessionManager {
                     );
                     return Err(error);
                 }
+                count += 1;
             }
         }
         self.store

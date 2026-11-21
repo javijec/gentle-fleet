@@ -94,3 +94,8 @@ Leyenda: ✅ VERIFIED · ◐ OBSERVED · ○ UNTESTED · ✗ UNSUPPORTED · — 
 Tras la implementación (`docs/P4_1_RESULTS.md`) las celdas de Codex 0.171.0 pasan a **VERIFIED** con evidencia reproducible: streaming y mensajes finales (`e2e_p4_codex_chat.sh`), herramientas (`item/started`/`item/completed`), aprobaciones parametrizadas con `option_id` y argumentos tipados (`e2e_p4_codex_approval.sh`), `turn/interrupt` (`e2e_p4_codex_interrupt.sh`), modelos/esfuerzos descubiertos (`e2e_p4_codex_controls.sh`), enumeración de sesiones e importación de historial (`e2e_p4_codex_discovery.sh`), supervivencia a SIGKILL de `fleetd` (`e2e_p4_codex_survival.sh`) y concurrencia con OpenCode (`e2e_p4_codex_concurrency.sh`).
 
 Siguen **UNSUPPORTED/UNTESTED**: adopción con escritura (sin exclusividad verificable), recuperación de turno en vuelo entre procesos, `turn/steer` y cambios de modelo/esfuerzo dentro de un turno activo (requieren `experimentalApi`, no habilitado). No se ha probado Windows/macOS; siguen en P7.
+
+
+## 7. Cierre P4.1-H
+
+Revalidación final sobre `d1eab2a` con Codex `0.171.0`: 8 smokes reales PASS, incluidos control efectivo confirmado en el thread nativo (`effort=high`), importación de herramientas estructuradas, supervivencia de aprobaciones y aislamiento entre proveedores. Las celdas UNSUPPORTED (adopción con escritura, recuperación de turno en vuelo) se mantienen por limitación real del proveedor, no por falta de pruebas. Ver `docs/P4_1_RESULTS.md` §8.

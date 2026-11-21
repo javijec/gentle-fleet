@@ -133,13 +133,15 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 Plataformas pendientes de validación funcional: **Windows y macOS (P7)**. No se afirma que funcionen. Se mantienen las comprobaciones de compilación cruzada disponibles (parciales, sin SQLite embebido en Windows).
 
 
-### P4.1 — Codex (22/11/2026)
+### P4.1-H — validación final de Codex (22/11/2026)
 
 | Validación | Resultado |
 |---|---|
 | `cargo fmt/check/clippy -D warnings/test/build`, `git diff --check` | PASS |
 | 14 E2E deterministas P1–P3, incluidas OpenCode y P3 survival | PASS |
-| 7 smokes reales `GF_E2E_REAL=1` (chat, aprobación, argumentos tipados, interrupción, controles, descubrimiento/historial, supervivencia, concurrencia) | PASS |
+| 8 smokes reales `GF_E2E_REAL=1` sobre `d1eab2a`: chat, aprobación con archivo aislado, interrupción, controles con persistencia V4 y efecto nativo, descubrimiento/historial con herramientas, supervivencia, concurrencia y aprobación superviviente a SIGKILL de `fleetd` | PASS |
+| 72 tests unitarios y 14 E2E deterministas P1–P3 | PASS |
+| Migración V3→V4 con sesión previa persistida | PASS |
 | Cross-compilación Windows de crates portables (dominio, protocolo, agente, core, driver Codex, composición) | PASS como señal de portabilidad |
 | Adopción de sesiones externas con escritura | UNSUPPORTED deliberado: sin garantía de exclusividad; no se simuló |
 | Cambios de modelo/esfuerzo durante un turno activo | No habilitados: requieren `experimentalApi`; se ofrecen solo por turno |

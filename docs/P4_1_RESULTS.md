@@ -2,7 +2,7 @@
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
 **Versión validada:** `codex-cli 0.171.0` (`codex --version`), App Server `[experimental]` con `capabilities.experimentalApi:false`.
-**Estado:** **P4.1-H EN REVALIDACIÓN** después de auditoría correctiva. No se ratifica el cierre final hasta repetir los smokes reales de Codex 0.171.0 contra el nuevo HEAD y obtener CI verde. La adopción con escritura continúa bloqueada por falta de garantía de exclusividad.
+**Estado:** **P4.1 — CERRADA EN LINUX** tras la revalidación final P4.1-H sobre el commit `d1eab2a` (Codex `0.171.0`, 8 smokes reales PASS, regresiones y CI en verde). La adopción con escritura continúa bloqueada por falta de garantía de exclusividad; Windows y macOS siguen pendientes de P7.
 
 ## 1. Commits
 
@@ -11,6 +11,9 @@
 | `155a6d7` | P4.1-A: redacción de errores en stop, interrupt extremo a extremo, composición de proveedores, compatibilidad de wire |
 | `7451eae` | P4.1-B…G: driver Codex, aprobaciones tipadas, controles, descubrimiento/historial y E2E reales |
 | `3c88703` | Propagación de argumentos tipados de aprobación desde la API al driver |
+| `a5cc4d1` | Documentación inicial de resultados |
+| `ce9595b`…`dcb77b1` | Auditoría correctiva: RPC malformado, turnos inciertos, V4, historial tipado, aprobaciones sin autoaprobación |
+| `d1eab2a` | P4.1-H: evidencia de control efectivo, herramientas importadas, migración V3→V4 y supervivencia de aprobaciones |
 
 ## 2. Arquitectura implementada
 
@@ -74,21 +77,90 @@
 | Controles deseados en memoria del daemon | Media | No sobreviven a un reinicio de `fleetd`; se documentan como preferencia de turno, no autoridad durable |
 | Puerto de transporte/IDs nativos en errores de stop | Media | Corregido en P4.1-A con redacción y test de regresión |
 
-## 7. Auditoría correctiva P4.1-H (posterior al informe original)
+## 7. Auditoría correctiva previa (contexto)
 
 Se revisó el driver y se corrigieron comportamientos no cubiertos por el informe inicial:
 
 - El lector JSON-RPC aplica backpressure en lugar de descartar notificaciones; la cola se drena mientras se esperan respuestas propias. Frames sobredimensionados o inválidos ahora fallan de manera explícita, y el código incluye tests de saturación y tamaño.
 - Se respeta la configuración nativa de sandbox y aprobación. Las variables `FLEET_CODEX_*` solo anulan valores cuando están declaradas explícitamente.
-- La huella de respuesta de aprobación incluye argumentos tipados y evita reutilizar la misma clave con otros parámetros. Antes de reclamar una aprobación se comprueban opciones y campos anunciados en su evento persistido; el driver valida además preguntas y permisos nativos.
+- La huella de aprobación incluye argumentos tipados y evita reutilizar la misma clave con otros parámetros. Antes de reclamar una aprobación se comprueban opciones y campos anunciados en su evento persistido; el driver valida además preguntas y permisos nativos.
 - El historial se pagina con detección de ciclo, conserva contenido original, agrega campos tipados opcionales para herramientas e identificadores de origen estables, y deduplica elementos incluso entre claves de operación distintas. La adopción con escritura permanece prohibida.
-- Los errores de importación dejan el efecto como incierto en vez de informar completado; el destino debe ser de igual proveedor y no estar en turno activo. **Una importación interrumpida puede contener un prefijo durable**: no se prometen transacciones de lote hasta demostrar atomicidad.
-- Las preferencias de controles se muestran como `deferred` y se guardan por sesión en SQLite V4 para persistir tras reinicio de `fleetd`. Esto **no** prueba que el proveedor ya haya aplicado el valor durante el turno; esa confirmación requiere smoke específico.
+- Los errores de importación dejan el efecto como incierto en vez de informar completado; el destino debe ser de igual proveedor y no estar en turno activo. Una importación interrumpida puede contener un prefijo durable: no se prometen transacciones de lote.
+- Las preferencias de controles se guardan por sesión en SQLite V4 para persistir tras reinicio de `fleetd`.
 - Se mejoró la asociación de deltas con mensajes individuales; errores ambiguos al iniciar un turno dejan la operación `Uncertain`, sin reenvío automático.
-- Los tests reales de chat, controles, aprobaciones y descubrimiento ya no admiten varios fallos silenciosos; CI valida además sintaxis de scripts Bash. El CI no ejecuta llamadas pagas al modelo.
+- Los tests reales de chat, controles, aprobaciones y descubrimiento ya no admiten varios fallos silenciosos; CI valida sintaxis de scripts Bash. El CI no ejecuta llamadas pagas al modelo.
 
-**Validación pendiente:** confirmar CI verde del HEAD correctivo y volver a ejecutar los siete smokes reales opt-in con credenciales nativas existentes. Revisar especialmente importación de herramientas y paginación, aprobación con múltiples preguntas, permisos parametrizados y persistencia de controles en el entorno real. Hasta entonces la clasificación es **código corregido / integración real todavía no revalidada**.
+## 8. P4.1-H — Resultados finales de auditoría y validación real
 
-## 8. Veredicto revisado
+**Versión instalada:** `codex-cli 0.171.0` (`codex --version`; binario `~/.local/share/mise/installs/codex/0.171.0/bin/codex`). `~/.codex/version.json` está obsoleto y no se usa para detección.
+**Commit probado:** `d1eab2a` sobre `feature/p4-multi-provider` (HEAD final). No se modificó código después de ejecutar los smokes finales salvo documentación.
 
-**P4.1 no se considera nuevamente CERRADA hasta completar la revalidación P4.1-H**. El informe de implementación original verificó en Linux: Codex opera como proveedor de Gentle Fleet con la misma API, SessionManager, runner persistente, aprobaciones, persistencia y timeline que OpenCode, sin regresiones P1–P3 y con capacidades declaradas honestamente. Quedan fuera, con evidencia y sin simulación, la adopción con escritura, la recuperación de turno en vuelo y los cambios de configuración dentro de un turno activo. Windows/macOS permanecen pendientes de P7.
+### Comandos ejecutados
+
+```bash
+cargo build --workspace --locked
+for t in interrupt controls discovery survival concurrency chat approval approval_survival; do
+  GF_E2E_REAL=1 bash tests/e2e_p4_codex_$t.sh
+done
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+git diff --check
+# 14 scripts deterministas P1-P3 definidos por CI y docs/QUALITY.md
+```
+
+### Resultado de los smokes reales
+
+| Smoke real | Resultado | Evidencia |
+|---|---|---|
+| `e2e_p4_codex_chat.sh` | PASS | streaming, `turn_completed Completed`, respuesta `P4 CODEX OK` |
+| `e2e_p4_codex_approval.sh` | PASS | sandbox `read-only`, `approval_requested`, opciones `accept,cancel,amend_execpolicy`, `approval_resolved`, archivo aislado `FLEET_APPROVAL_PROBE`, turno completado |
+| `e2e_p4_codex_interrupt.sh` | PASS | `turn/interrupt` real, `agent_notice`, `turn_completed Interrupted`, sin terminal contradictoria |
+| `e2e_p4_codex_controls.sh` | PASS | 10 modelos y 6 esfuerzos descubiertos, valor inválido rechazado, preferencia `effort=high` persistida tras reinicio de `fleetd`, `native_effort=high` comprobado en el thread nativo del siguiente turno |
+| `e2e_p4_codex_discovery.sh` | PASS | refs opacos `cx-*`, workspace correcto, historial con 3 eventos `history`, herramienta estructurada importada, dedup con misma clave y con clave distinta |
+| `e2e_p4_codex_survival.sh` | PASS | runner vivo tras SIGKILL de `fleetd`, eventos spoleados, reattach, replay sin duplicar prompt, operación `completed` |
+| `e2e_p4_codex_concurrency.sh` | PASS | OpenCode y Codex terminales, timelines aisladas; al matar el runner Codex, OpenCode sigue completando turnos |
+| `e2e_p4_codex_approval_survival.sh` | PASS | aprobación pendiente persistió tras SIGKILL de `fleetd`, sin resolución implícita, entregada explícitamente con `accept` y confirmada por el proveedor |
+
+### Cantidad de pruebas
+
+- **72 tests unitarios** (`cargo test --workspace --locked`, 19 bloques `test result: ok`).
+- **14 E2E deterministas P1–P3** (incluidas OpenCode, replay, aprobaciones, backpressure, kill de runner y multi-sesión): PASS.
+- **8 smokes reales opt-in** sobre Codex 0.171.0 y OpenCode 2.3.2: PASS.
+- Verificaciones Rust y `git diff --check`: PASS. Cross-compilación Windows de crates portables: PASS como señal de portabilidad (no validación funcional; Windows/macOS → P7).
+
+### Defectos y huecos corregidos en P4.1-H
+
+| Hallazgo | Corrección | Commit |
+|---|---|---|
+| No se distinguía preferencia Fleet de control efectivamente aplicado | `NativeSessionInfo`reporta `model`/`effort` observados del proveedor; E2E verifica `native_effort=high` | `d1eab2a` |
+| Sin prueba real de persistencia V4 tras reinicio de daemon | E2E ampliado con reinicio y comprobación `controls`; test V3→V4 con sesión previa | `d1eab2a` |
+| Importación de historial sin comprobación de herramientas estructuradas | E2E verifica `history	tool` con procedencia y dedup | `d1eab2a` |
+| No se probaba conservación de aprobaciones ante muerte del daemon | Nuevo smoke `approval_survival` | `d1eab2a` |
+| Aislamiento ante fallo de un proveedor no cubierto | E2E mata el runner Codex y verifica OpenCode | `d1eab2a` |
+| RPC malformado, turnos inciertos, aprobaciones huérfanas, historial no tipado | Correcciones de auditoría sucesivas | `ce9595b`…`dcb77b1` |
+
+### Migraciones verificadas
+
+Esquema SQLite **V4** (`session_controls`) con `PRAGMA user_version = 4`. El test `v3_database_migrates_to_v4_without_losing_persisted_sessions` crea una base V3 con workspace y sesión persistidos, la migra y comprueba que la sesión sobrevive y que se pueden guardar/listar preferencias. Los frames antiguos de `NativeSessionInfo` siguen deserializando (campos nuevos con `serde(default)`).
+
+### Capacidades soportadas, parciales y no soportadas
+
+- **Soportadas y verificadas:** chat/streaming, herramientas, terminal real por `turn/completed`, aprobaciones parametrizadas con `option_id` y argumentos tipados, `turn/interrupt`, modelos/esfuerzos descubiertos y aplicados por turno, descubrimiento de sesiones, historial con herramientas y procedencia, supervivencia P3, concurrencia.
+- **Parciales:** control dentro de un turno activo (solo `deferred`, se aplica al siguiente); importación interrumpida (prefijo durable, sin atomicidad de lote); paginación de historial (bucle con detección de ciclo, probado con una página en el entorno real).
+- **No soportadas:** adopción de sesiones externas con escritura (sin exclusividad verificable); recuperación de turno en vuelo entre procesos; `turn/steer`, `thread/search` y APIs experimentales (`experimentalApi` no habilitado).
+
+### Riesgos pendientes
+
+| Riesgo | Severidad | Mitigación |
+|---|---|---|
+| Adopción con escritura sin garantía de exclusividad | Alta | Bloqueada; solo descubrimiento/lectura |
+| Importación parcial con prefijo durable | Media | Operación `Uncertain`, sin reintento automático; documentado |
+| `availableDecisions` no declarado en el esquema generado | Media | Campo runtime opcional con defaults por método |
+| Preferencias de control en memoria del daemon antes de V4 | Resuelta | Persistidas en V4 y verificadas tras reinicio |
+| Windows/macOS sin validar funcionalmente | Media (P7) | Cross-compile verde; no se declara compatibilidad |
+
+### Estado final
+
+**P4.1 — CERRADA EN LINUX.** Todo lo obligatorio fue ejecutado y pasó sobre el commit final. No se simuló ninguna capacidad no soportada por el proveedor. No se comenzó P4.2/P4.3/P4.4 ni se hizo merge a `main`.

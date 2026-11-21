@@ -151,3 +151,8 @@ P4.0 no añade ni modifica código de producción: el diff debe contener solo do
 Todos los casos aplicables a Codex se ejecutaron con `GF_E2E_REAL=1` sobre Codex `0.171.0`: `tests/e2e_p4_codex_{chat,approval,interrupt,controls,discovery,concurrency,survival}.sh` → **PASS**. Las 14 E2E deterministas P1–P3, incluidas OpenCode y las de supervivencia P3, permanecen en verde. Las verificaciones Rust y `git diff --check` pasan. Los comandos y su evidencia están en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
 
 No se ejecutaron pruebas reales de Pi ni Gentle Shell en este corte (P4.2/P4.3). Windows/macOS siguen pendientes de P7.
+
+
+## 6. Cierre P4.1-H
+
+Los casos de P4.1 se reejecutaron sobre el commit final `d1eab2a`: 72 tests unitarios, 14 E2E deterministas y 8 smokes reales pasaron. Se añadieron coberturas de persistencia V4 tras reinicio de `fleetd`, efecto nativo de controles, herramientas en historial, aprobación superviviente a daemon death y fallo de un runner sin detener al otro proveedor. Resultado y evidencia: `docs/P4_1_RESULTS.md` §8. No se ejecutaron pruebas de Pi/Gentle Shell (P4.2/P4.3) ni de Windows/macOS (P7).

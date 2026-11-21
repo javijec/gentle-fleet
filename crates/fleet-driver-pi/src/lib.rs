@@ -8,6 +8,7 @@ mod events;
 mod rpc;
 
 use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -689,63 +690,123 @@ impl DriverFactory for PiFactory {
             code: "history_unreadable".into(),
             message: error.to_string(),
         })?;
-        let mut messages = Vec::new();
-        for line in contents.lines() {
-            let Ok(entry) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if entry.get("type").and_then(Value::as_str) != Some("message") {
-                continue;
-            }
-            let Some(entry_id) = text(&entry, "id") else {
-                continue;
-            };
-            let message = entry.get("message").cloned().unwrap_or_default();
-            let role = text(&message, "role").unwrap_or_default();
-            if role == "system" {
-                continue;
-            }
-            let body = message
-                .get("content")
-                .map(|content| match content {
-                    Value::String(value) => value.clone(),
-                    Value::Array(parts) => parts
-                        .iter()
-                        .filter_map(|part| text(part, "text"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    _ => String::new(),
-                })
-                .unwrap_or_default();
-            if body.is_empty() {
-                continue;
-            }
-            let tool = if role == "toolResult" {
-                Some(NativeHistoryTool {
-                    name: text(&message, "toolName").unwrap_or_else(|| "tool".into()),
-                    input: None,
-                    output: Some(body.clone()),
-                    status: None,
-                })
-            } else {
-                None
-            };
-            messages.push(NativeHistoryMessage {
-                role: if role == "toolResult" {
-                    "tool".into()
-                } else {
-                    role
-                },
-                text: redact_provider_error(&body),
-                source_ref: Some(native_ref(&entry_id)),
-                tool,
+        if contents.len() as u64 > MAX_HISTORY_BYTES {
+            return Err(AgentError {
+                code: "HistoryResultLimit".into(),
+                message: "native session grew beyond the safe import limit".into(),
             });
-            if messages.len() >= MAX_HISTORY_MESSAGES {
-                break;
-            }
         }
-        Ok(messages)
+        let header = contents.lines().next().ok_or_else(|| AgentError {
+            code: "HistoryMalformed".into(),
+            message: "Pi session file is empty".into(),
+        })?;
+        let header: Value = serde_json::from_str(header).map_err(|_| AgentError {
+            code: "HistoryMalformed".into(),
+            message: "Pi session header is malformed".into(),
+        })?;
+        let session_id = text(&header, "id").ok_or_else(|| AgentError {
+            code: "HistoryMalformed".into(),
+            message: "Pi session header lacks identity".into(),
+        })?;
+        if header.get("type").and_then(Value::as_str) != Some("session")
+            || native_ref(&format!("{}:{}", path.display(), session_id)) != reference
+        {
+            return Err(AgentError {
+                code: "HistoryIdentityMismatch".into(),
+                message: "native session file changed since discovery; rediscover it".into(),
+            });
+        }
+        parse_native_history(&contents, reference)
+
     }
+}
+
+/// Convierte una captura JSONL de Pi sin perder ni modificar el contenido
+/// original. Los bloques no textuales se conservan como JSON estructurado.
+fn parse_native_history(contents: &str, reference: &str) -> Result<Vec<NativeHistoryMessage>, AgentError> {
+    let mut messages = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        let entry: Value = serde_json::from_str(line).map_err(|_| AgentError {
+            code: "HistoryMalformed".into(),
+            message: format!("Pi session JSONL contains malformed record at line {}", index + 1),
+        })?;
+        if entry.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let entry_id = text(&entry, "id").ok_or_else(|| AgentError {
+            code: "HistoryMalformed".into(),
+            message: format!("Pi session message at line {} has no stable ID", index + 1),
+        })?;
+        let message = entry.get("message").ok_or_else(|| AgentError {
+            code: "HistoryMalformed".into(),
+            message: format!("Pi session message at line {} has no payload", index + 1),
+        })?;
+        let role = text(message, "role").ok_or_else(|| AgentError {
+            code: "HistoryMalformed".into(),
+            message: format!("Pi session message at line {} has no role", index + 1),
+        })?;
+        // System messages are intentionally excluded from imported user chat.
+        if role == "system" {
+            continue;
+        }
+        let content = message.get("content").ok_or_else(|| AgentError {
+            code: "HistoryMissingContent".into(),
+            message: format!("Pi session message at line {} has no content", index + 1),
+        })?;
+        let body = match content {
+            Value::String(value) => value.clone(),
+            Value::Array(parts) if parts.iter().all(|part| {
+                part.get("type").and_then(Value::as_str) == Some("text")
+                    && part.get("text").and_then(Value::as_str).is_some()
+            }) => parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(""),
+            Value::Array(_) | Value::Object(_) => content.to_string(),
+            _ => {
+                return Err(AgentError {
+                    code: "HistoryMissingContent".into(),
+                    message: format!("Pi session content at line {} cannot be represented", index + 1),
+                });
+            }
+        };
+        if body.is_empty() {
+            return Err(AgentError {
+                code: "HistoryMissingContent".into(),
+                message: format!("Pi session message at line {} has empty content", index + 1),
+            });
+        }
+        if messages.len() >= MAX_HISTORY_MESSAGES {
+            return Err(AgentError {
+                code: "HistoryResultLimit".into(),
+                message: "Pi native history exceeds the maximum number of imported messages".into(),
+            });
+        }
+        let tool = if role == "toolResult" {
+            Some(NativeHistoryTool {
+                name: text(message, "toolName").unwrap_or_else(|| "tool".into()),
+                input: None,
+                output: Some(body.clone()),
+                status: None,
+            })
+        } else {
+            None
+        };
+        messages.push(NativeHistoryMessage {
+            role: if role == "toolResult" {
+                "tool".into()
+            } else {
+                role
+            },
+            text: body,
+            // Incluye la identidad de la sesión en la referencia, porque
+            // diferentes sesiones Pi reutilizan IDs de entradas.
+            source_ref: Some(native_ref(&format!("{reference}\\0{entry_id}"))),
+            tool,
+        });
+    }
+    Ok(messages)
 }
 
 fn collect_session_files(
@@ -770,13 +831,17 @@ fn collect_session_files(
         if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
             continue;
         }
-        let Ok(contents) = std::fs::read_to_string(&path) else {
+        // Descubrir una sesión requiere solo la cabecera: nunca cargar a
+        // memoria todo el historial nativo durante una simple enumeración.
+        let Ok(file) = std::fs::File::open(&path) else {
             continue;
         };
-        let Some(header_line) = contents.lines().next() else {
+        let mut reader = std::io::BufReader::new(file.take(64 * 1024));
+        let mut header_line = String::new();
+        if reader.read_line(&mut header_line).is_err() {
             continue;
-        };
-        let Ok(header) = serde_json::from_str::<Value>(header_line) else {
+        }
+        let Ok(header) = serde_json::from_str::<Value>(&header_line) else {
             continue;
         };
         if header.get("type").and_then(Value::as_str) != Some("session") {
@@ -852,6 +917,38 @@ mod tests {
         }
         assert!(driver.pending.is_empty());
         assert!(driver.pending_events.is_empty());
+    }
+
+    #[test]
+    fn native_history_rejects_malformed_and_truncated_imports() {
+        let malformed = concat!(
+            "{\"type\":\"session\",\"id\":\"s\"}\n",
+            "{invalid json}\n"
+        );
+        let error = parse_native_history(malformed, "pi-session-1").unwrap_err();
+        assert_eq!(error.code, "HistoryMalformed");
+        let mut many = String::new();
+        for index in 0..=MAX_HISTORY_MESSAGES {
+            many.push_str(&format!(
+                "{{\"type\":\"message\",\"id\":\"e{index}\",\"message\":{{\"role\":\"assistant\",\"content\":\"x\"}}}}\n"
+            ));
+        }
+        let error = parse_native_history(&many, "pi-session-1").unwrap_err();
+        assert_eq!(error.code, "HistoryResultLimit");
+    }
+
+    #[test]
+    fn native_history_preserves_original_content_and_session_scoped_ids() {
+        let contents = concat!(
+            "{\"type\":\"message\",\"id\":\"e1\",\"message\":{\"role\":\"user\",\"content\":\"https://example.invalid/path\",\"toolCallId\":\"abc\"}}\n",
+            "{\"type\":\"message\",\"id\":\"e2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"image\",\"mimeType\":\"image/png\",\"data\":\"abc\"}]}}\n"
+        );
+        let first = parse_native_history(contents, "pi-first-session").unwrap();
+        let second = parse_native_history(contents, "pi-second-session").unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].text, "https://example.invalid/path");
+        assert!(first[1].text.contains("image/png"));
+        assert_ne!(first[0].source_ref, second[0].source_ref);
     }
 
     #[test]

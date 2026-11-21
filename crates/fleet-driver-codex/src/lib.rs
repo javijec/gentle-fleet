@@ -846,19 +846,21 @@ impl DriverFactory for CodexFactory {
                     message: "Codex history response has no turn array".into(),
                 })?;
             for turn in page {
-                let items = turn
-                    .get("items")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| AgentError {
-                        code: "HistoryMalformed".into(),
-                        message: "Codex turn history is missing items".into(),
-                    })?;
+                let items =
+                    turn.get("items")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| AgentError {
+                            code: "HistoryMalformed".into(),
+                            message: "Codex turn history is missing items".into(),
+                        })?;
                 for item in items {
                     let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
                     let role = match kind {
                         "userMessage" | "userInput" => "user",
                         "agentMessage" => "assistant",
-                        "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => "tool",
+                        "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
+                            "tool"
+                        }
                         "reasoning" => "reasoning",
                         _ => {
                             return Err(AgentError {
@@ -882,7 +884,8 @@ impl DriverFactory for CodexFactory {
                     let body = if role == "tool" {
                         let mut fields = Vec::new();
                         fields.push(format!("tool_type: {kind}"));
-                        if let Some(command) = text(item, "command").or_else(|| text(item, "query")) {
+                        if let Some(command) = text(item, "command").or_else(|| text(item, "query"))
+                        {
                             fields.push(format!("input: {command}"));
                         }
                         if let Some(output) = text(item, "aggregatedOutput")

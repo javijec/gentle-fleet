@@ -122,7 +122,10 @@ fn classify(
         };
         // Estos métodos son notificaciones de Extension UI. No esperan
         // respuesta y no deben ocupar la cola de aprobaciones tipadas.
-        if matches!(request.method.as_str(), "notify" | "setStatus" | "setWidget") {
+        if matches!(
+            request.method.as_str(),
+            "notify" | "setStatus" | "setWidget"
+        ) {
             return;
         }
         // Las solicitudes interactivas nunca se descartan silenciosamente.

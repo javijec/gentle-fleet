@@ -150,12 +150,14 @@ impl RunnerHandle for ProcessHandle {
                 native_request_id,
                 decision,
                 operation_key,
+                arguments,
                 ..
             } => RunnerCommand::Answer {
                 approval_id: String::new(),
                 native_request_id,
                 decision,
                 operation_key,
+                arguments,
             },
             CoreCommand::Interrupt { turn_id } => RunnerCommand::Interrupt { turn_id },
             CoreCommand::Stop => RunnerCommand::Stop,

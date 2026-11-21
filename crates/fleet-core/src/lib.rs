@@ -1269,6 +1269,18 @@ impl SessionManager {
         decision: String,
         operation_key: &str,
     ) -> Result<ApprovalRequest, AgentError> {
+        self.answer_approval_with_args(approval_id, decision, Vec::new(), operation_key)
+    }
+
+    /// P4.1-D: igual que `answer_approval`, pero transporta argumentos
+    /// tipados validados por el driver contra el esquema de la opción.
+    pub fn answer_approval_with_args(
+        &self,
+        approval_id: &str,
+        decision: String,
+        arguments: Vec<fleet_domain::ApprovalArgument>,
+        operation_key: &str,
+    ) -> Result<ApprovalRequest, AgentError> {
         let mut state = self.state.lock().expect("manager poisoned");
         let approval = state
             .approvals
@@ -1371,6 +1383,7 @@ impl SessionManager {
                         native_request_id: approval.native_request_id.clone(),
                         decision: decision.clone(),
                         operation_key: operation_key.to_string(),
+                        arguments,
                     })
                     .map_err(|error| AgentError {
                         code: "approval_delivery_failed".into(),

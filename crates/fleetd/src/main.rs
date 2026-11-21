@@ -282,8 +282,9 @@ fn handle_client(
                 approval_id,
                 decision,
                 operation_key,
+                arguments,
             } => manager
-                .answer_approval(&approval_id, decision, &operation_key)
+                .answer_approval_with_args(&approval_id, decision, arguments, &operation_key)
                 .map(|approval| Response::ApprovalResolved { approval }),
             Request::SubscribeTimeline {
                 session_id,

@@ -44,6 +44,8 @@ pub enum RunnerCommand {
         native_request_id: String,
         decision: String,
         operation_key: String,
+        #[serde(default)]
+        arguments: Vec<fleet_domain::ApprovalArgument>,
     },
     Interrupt {
         turn_id: String,

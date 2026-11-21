@@ -238,11 +238,12 @@ fn spawn_driver_loop(
                 Ok(DriverCommand::Answer {
                     native_request_id,
                     decision,
+                    arguments,
                     done,
                     ..
                 }) => {
                     let outcome = driver
-                        .answer(native_request_id, decision)
+                        .answer_with_args(native_request_id, decision, arguments)
                         .map_err(|error| error.to_string());
                     if let Err(error) = &outcome {
                         append_with_backpressure(
@@ -351,6 +352,7 @@ enum DriverCommand {
         _approval_id: String,
         native_request_id: String,
         decision: String,
+        arguments: Vec<fleet_domain::ApprovalArgument>,
         done: std::sync::mpsc::Sender<Result<(), String>>,
     },
     Interrupt {
@@ -480,6 +482,7 @@ fn serve_daemon(
                             native_request_id,
                             decision,
                             operation_key: _,
+                            arguments,
                         } => {
                             let (done_tx, done_rx) = std::sync::mpsc::channel();
                             (
@@ -487,6 +490,7 @@ fn serve_daemon(
                                     _approval_id: approval_id,
                                     native_request_id,
                                     decision,
+                                    arguments,
                                     done: done_tx,
                                 },
                                 Some(done_rx),

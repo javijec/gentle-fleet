@@ -83,6 +83,8 @@ pub enum Request {
         approval_id: String,
         decision: String,
         operation_key: String,
+        #[serde(default)]
+        arguments: Vec<fleet_domain::ApprovalArgument>,
     },
 }
 

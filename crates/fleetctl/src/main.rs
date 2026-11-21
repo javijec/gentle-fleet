@@ -123,7 +123,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents"
         .into()
 }
 
@@ -555,10 +555,20 @@ fn answer(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut client = Client::connect()?;
     client.call(Client::hello())?;
+    // Argumentos tipados opcionales: name=value[,value] ...
+    let arguments = args[2..]
+        .iter()
+        .filter_map(|item| item.split_once('='))
+        .map(|(name, values)| fleet_domain::ApprovalArgument {
+            name: name.to_string(),
+            values: values.split(',').map(str::to_string).collect(),
+        })
+        .collect();
     match client.call(Request::AnswerApproval {
         approval_id,
         decision,
         operation_key,
+        arguments,
     })? {
         Response::ApprovalResolved { approval } => {
             println!("{}\t{}", approval.approval_id, approval.status_text());

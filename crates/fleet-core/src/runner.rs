@@ -33,6 +33,7 @@ pub enum RunnerCommand {
         native_request_id: String,
         decision: String,
         operation_key: String,
+        arguments: Vec<fleet_domain::ApprovalArgument>,
     },
     Interrupt {
         turn_id: String,
@@ -225,9 +226,12 @@ fn spawn_in_process_driver(
                 Ok(RunnerCommand::Answer {
                     native_request_id,
                     decision,
+                    arguments,
                     ..
                 }) => {
-                    if let Err(error) = driver.answer(native_request_id, decision) {
+                    if let Err(error) =
+                        driver.answer_with_args(native_request_id, decision, arguments)
+                    {
                         emit(
                             &events,
                             &runner_id,

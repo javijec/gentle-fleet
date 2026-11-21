@@ -2572,12 +2572,9 @@ mod tests {
             launcher_registry,
             "host-test".into(),
         ));
-        let store = Arc::new(
-            fleet_store_sqlite::SqliteStore::open(unique_db_path()).unwrap(),
-        );
-        let manager = Arc::new(
-            SessionManager::new(registry, store, launcher, "host-test".into()).unwrap(),
-        );
+        let store = Arc::new(fleet_store_sqlite::SqliteStore::open(unique_db_path()).unwrap());
+        let manager =
+            Arc::new(SessionManager::new(registry, store, launcher, "host-test".into()).unwrap());
         (manager, ready_rx, resume_tx, calls)
     }
 
@@ -3786,7 +3783,11 @@ mod tests {
         assert_eq!(error.code, "SessionBusy");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(
-            manager.get_operation("import-race").unwrap().unwrap().status,
+            manager
+                .get_operation("import-race")
+                .unwrap()
+                .unwrap()
+                .status,
             OperationStatus::Failed
         );
         assert!(manager
@@ -3842,6 +3843,4 @@ mod tests {
         assert_eq!(history_count, 1);
         manager.stop_session(&ses.id).unwrap();
     }
-
-
 }

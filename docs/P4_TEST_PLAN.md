@@ -38,7 +38,7 @@ Un único conjunto de aserciones parametrizado por capacidades, con tres capas d
 - **OpenCode 2.3.2**: regresión P1–P3. `permission.asked` → `once|always|reject`, `permission.replied`, SSE, replay y kill de daemon/runners. Es la línea base: cualquier cambio de contrato debe mantener estas pruebas en verde.
 - **Codex 0.171.0**: esquema regenerado (714 v2 / 110 ClientRequest), handshake, `thread/start/list/read/resume`, `turn/start/interrupt/steer`, requests de aprobación con `id` numérico y `availableDecisions` en runtime, `serverRequest/resolved`, `thread/status.changed.activeFlags`, gate `requires experimentalApi`.
 - **Pi 1.6.0**: `get_state`, `get_available_models` (lista vacía → UNTESTED de modelo real), `get_available_thinking_levels`, `new_session`, `get_messages`, `get_entries`, `get_commands`, `agent_settled` vs `agent_end`, `message_end`, `tool_execution_*`, framing solo por LF (incluir U+2028/U+2029).
-- **Gentle Shell 4.8.0**: `capabilities` con 23 métodos/9 eventos, `session_snapshot` condicional, envelope `kind:"response"|"event"`, correlation por `requestId`, límites 64 KiB/128/64, códigos de error, `select` de permiso con opciones nativas, distinción Extension UI vs Desktop RPC.
+- **Gentle Shell 4.8.0**: `capabilities` con 23 métodos y 8 eventos anunciados en sesión efímera, más `session_snapshot` como noveno evento condicional, envelope `kind:"response"|"event"`, correlation por `requestId`, límites 64 KiB/128/64, códigos de error, `select` de permiso con opciones nativas, distinción Extension UI vs Desktop RPC.
 
 Fixtures a versionar: los `/tmp/p4_*` de la investigación se convertirán en **sondas ejecutables reproducibles y fixtures anonimizados versionados** bajo `spikes/p4/` o `tests/fixtures/` en los cortes correspondientes, para permitir validación independiente. **No se versionan capturas sin sanitizar.**
 
@@ -100,7 +100,7 @@ Si una cuenta no tiene modelo disponible (caso Pi 1.6.0 en este entorno), el smo
 ### P4.3 — Gentle Shell
 
 - Proveedor independiente (P4-F02), no alias de Pi; transporte Pi RPC compartido donde corresponda.
-- Negociación `capabilities` por sesión: 23 métodos/9 eventos documentados, `session_snapshot` tratado como condicional, `get_snapshot` al detectar hueco de `seq`.
+- Negociación `capabilities` por sesión: 23 métodos/8 eventos anunciados en la prueba efímera, con `session_snapshot` como noveno evento condicional documentado, `get_snapshot` al detectar hueco de `seq`.
 - Chat y eventos de Extension UI/Desktop RPC correctamente separados; permisos nativos `select` tipados, sin autoaprobación.
 - Controles de lectura verificados; setters para modelo, esfuerzo, modos y perfiles anunciados como modificables requieren **prueba de escritura con perfil/entorno aislado, confirmación nativa y verificación de no afectar datos personales**. No ejecutar `set_config`/`apply_profile`/`set_permission_mode` sobre el perfil real. Si no hay aislamiento fiable, marcar UNTESTED, no PASS.
 - Subagentes documentados pero no implementados ni expuestos (P4-F05); sin referencia a GPUI (P4-F17).

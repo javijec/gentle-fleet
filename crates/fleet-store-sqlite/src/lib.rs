@@ -1451,6 +1451,69 @@ mod tests {
     }
 
     #[test]
+    fn runner_event_and_dedup_are_one_atomic_commit() {
+        let (store, _) = temp_store();
+        let workspace = WorkspaceRecord {
+            id: "ws_1".into(),
+            path: "/tmp/demo".into(),
+        };
+        store.save_workspace(&workspace).unwrap();
+        let session = SessionRecord {
+            session_id: "ses_1".into(),
+            workspace_id: workspace.id,
+            provider_id: "fake".into(),
+            state: SessionState::Running,
+            turn_state: TurnState::Idle,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        store.save_session(&session).unwrap();
+        let runner = RunnerRecord {
+            identity: RunnerIdentity {
+                runner_id: "runner_1".into(),
+                session_id: session.session_id.clone(),
+                provider_id: "fake".into(),
+                host_id: "local".into(),
+                boot_id: "boot_1".into(),
+                pid: 123,
+                protocol_version: "fleet-runner-v1".into(),
+                generation: 1,
+            },
+            status: RunnerStatus::Active,
+            endpoint: "test".into(),
+            last_ack_seq: 0,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        store.save_runner(&runner).unwrap();
+        let event = Event {
+            event_id: "ses_1-e1".into(),
+            session_id: session.session_id.clone(),
+            seq: 1,
+            created_at_ms: 1,
+            kind: EventKind::AgentNotice { message: "hello".into() },
+        };
+        assert!(store.commit_runner_event("runner_1", 1, &event, &session, None).unwrap());
+        assert!(!store.commit_runner_event("runner_1", 1, &event, &session, None).unwrap());
+        assert_eq!(store.read_events("ses_1", 0, 100).unwrap().len(), 1);
+        assert!(store.runner_event_exists("runner_1", 1).unwrap());
+        assert_eq!(store.get_runner("ses_1").unwrap().unwrap().last_ack_seq, 1);
+
+        // Conflict rolls back BOTH the event and dedup marker.
+        let conflicting = Event {
+            event_id: "ses_1-other".into(),
+            ..event
+        };
+        let error = store
+            .commit_runner_event("runner_1", 2, &conflicting, &session, None)
+            .unwrap_err();
+        assert_eq!(error.code, "sequence_conflict");
+        assert!(!store.runner_event_exists("runner_1", 2).unwrap());
+        assert_eq!(store.read_events("ses_1", 0, 100).unwrap().len(), 1);
+        assert_eq!(store.get_runner("ses_1").unwrap().unwrap().last_ack_seq, 1);
+    }
+
+    #[test]
     fn foreign_keys_are_enforced_on_each_new_connection() {
         let (store, _path) = temp_store();
         let record = SessionRecord {

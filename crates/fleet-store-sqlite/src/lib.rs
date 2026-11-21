@@ -1980,7 +1980,7 @@ mod tests {
             updated_at_ms: 1,
         };
         store.save_workspace(&WorkspaceRecord {
-            workspace_id: "ws-controls".into(),
+            id: "ws-controls".into(),
             path: "/tmp/test-controls".into(),
         }).unwrap();
         store.save_session(&session).unwrap();

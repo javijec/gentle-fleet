@@ -147,3 +147,16 @@ Plataformas pendientes de validación funcional: **Windows y macOS (P7)**. No se
 | Cambios de modelo/esfuerzo durante un turno activo | No habilitados: requieren `experimentalApi`; se ofrecen solo por turno |
 
 Windows y macOS continúan pendientes de validación funcional en P7. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
+
+### P4.2 — Pi estándar (22/11/2026)
+
+| Validación | Resultado |
+|---|---|
+| 85 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
+| 14 E2E deterministas P1–P3 y 8 smokes Codex (regresión) | PASS |
+| 4 E2E deterministas Pi (lifecycle, discovery/history, reattach, aislamiento) | PASS |
+| 4 smokes reales Pi (chat, herramientas, controles, interrupción) sobre Pi 1.6.0 | PASS |
+| Aprobaciones de permisos nativas | UNSUPPORTED en la instalación; no se simuló |
+
+El chat real era UNTESTED hasta que el usuario configuró un modelo; se repitió la verificación antes de cerrar. Detalle en [`P4_2_RESULTS.md`](P4_2_RESULTS.md).

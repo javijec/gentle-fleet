@@ -219,3 +219,8 @@ Los ficheros `/tmp/*` son **sondeos transitorios no reproducibles desde otro che
 ## 5. Nota de implementación P4.1
 
 El driver real confirma los hallazgos de esta investigación y añade tres precisiones observadas con la versión instalada: `model/list` expone `id`, `isDefault`, `supportedReasoningEfforts[].reasoningEffort` y `defaultReasoningEffort`; `thread/turns/list` con `itemsView:"full"` devuelve los ítems dentro de cada turno (los objetos de `thread/items/list` están envueltos en `item`); y `serverRequest/resolved` usa `params.requestId` numérico. `availableDecisions` es un campo de runtime no declarado en el esquema generado. Las sondas `/tmp` quedan sustituidas por los scripts versionados `tests/e2e_p4_codex_*.sh` con `GF_E2E_REAL=1`. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
+
+## 6. Nota de implementación P4.2
+
+El driver real confirma el inventario de P4.0 para Pi 1.6.0: activación `pi --mode rpc --session-dir`, respuestas `{"type":"response","command":...,"success":...}`, eventos `message_update` delta-only con `assistantMessageEvent`, `agent_settled` como terminal y archivos de sesión JSONL v3. Tras configurar un modelo, `get_available_models` devuelve 10 entradas con `id`/`provider` y `get_state.model.id=gpt-6.1-terra`. Las sondas versionadas son `tests/e2e_p4_pi_*.sh`. No se usó Desktop RPC ni GPUI.

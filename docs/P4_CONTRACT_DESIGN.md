@@ -190,3 +190,8 @@ Reglas de oro: identificadores **nativos** opacos no se serializan; `FleetOption
 ## 10. Resultado de la ratificación en P4.1
 
 Se implementaron las propuestas A1 (controles por defecto con capacidades), B1 (opciones públicas `option_id` con referencia nativa privada y argumentos validados), C1 parcial (descubrimiento a nivel factory + importación de historial con procedencia; **adopción con escritura bloqueada** por falta de exclusividad), D (evidencia de recuperación conservadora en `inspect_recovery`), E1 (composición en `fleet-providers` fuera de `fleet-agent`), F (redacción en stop) y G (interrupt extremo a extremo). La compatibilidad de wire se demostró con fixtures antiguos que siguen deserializando; no se crearon tablas nuevas, solo un `OperationKind::ImportHistory` persistido con el mismo esquema. Los nombres definitivos quedan fijados en el código de P4.1 y documentados en [`P4_1_RESULTS.md`](P4_1_RESULTS.md). Permanecen propuestas y sin implementar la adopción segura, la recuperación de turno en vuelo y los cambios de configuración en caliente.
+
+
+## 11. Ratificación en P4.2
+
+Se reutilizaron `AgentDriver`, `DriverFactory`, `ProviderRegistry`, la composición en `fleet-providers` y las operaciones `ListControls`/`SetControl`, `InterruptTurn`, `ListNativeSessions` e `ImportNativeHistory` sin cambios de wire. Las opciones de aprobación tipadas se implementaron para Extension UI genérico, pero no hay evidencia real en Pi estándar. No se creó la abstracción RPC compartida prevista para P4.3; `docs/P4_2_RESULTS.md` §7 documenta qué componente podría reutilizarse sin acoplar proveedores.

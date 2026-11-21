@@ -77,6 +77,18 @@ Las contradicciones con documentación P0 (deriva de versión de Pi y resolució
 
 Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
 
+## Implementación P4.2 (22/11/2026) — sin decisiones funcionales nuevas
+
+| Hallazgo | Consecuencia |
+|---|---|
+| Pi 1.6.0 no tenía modelo al inicio de la etapa | El chat se mantuvo UNTESTED hasta que el usuario configuró uno; no se copiaron credenciales |
+| `agent_end` puede preceder a reintentos | Solo `agent_settled` produce `TurnCompleted` |
+| Pi estándar no carga extensiones de permisos | Aprobaciones UNSUPPORTED; la traducción Extension UI queda disponible pero sin evidencia real |
+| Sin garantía de exclusividad de sesiones externas | Descubrimiento e importación sí; adopción con escritura bloqueada |
+| Interrupción verificada con modelo real | `cancel_turn` declarado `true` solo después del smoke |
+
+Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

@@ -123,6 +123,10 @@ No se han creado crates, tablas ni migraciones en P4.0: la tabla de vínculo de 
 
 Los eventos y aprobaciones ampliados (`options`, `arguments`, controles, historial con procedencia) usan campos opcionales versionados; los frames antiguos siguen deserializando. La adopción de sesiones externas con escritura permanece deshabilitada porque el proveedor no ofrece exclusividad verificable. Ver [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
 
+## P4.2 — tercer proveedor real
+
+`fleet-driver-pi` se inserta en el mismo punto de extensión que OpenCode y Codex: `ProviderRegistry` sigue siendo el único catálogo y la composición concreta vive en `fleet-providers`, fuera de `fleet-agent`. El runner posee el proceso Pi y su directorio de sesiones aislado; el transporte usa JSONL por LF con backpressure explícito y colas acotadas. No se introdujo una abstracción RPC compartida con Gentle Shell: solo se documenta su posible reutilización futura en P4.3. Ver [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

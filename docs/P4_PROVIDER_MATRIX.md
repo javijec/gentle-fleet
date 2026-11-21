@@ -99,3 +99,8 @@ Siguen **UNSUPPORTED/UNTESTED**: adopción con escritura (sin exclusividad verif
 ## 7. Cierre P4.1-H
 
 Revalidación final sobre `d1eab2a` con Codex `0.171.0`: 8 smokes reales PASS, incluidos control efectivo confirmado en el thread nativo (`effort=high`), importación de herramientas estructuradas, supervivencia de aprobaciones y aislamiento entre proveedores. Las celdas UNSUPPORTED (adopción con escritura, recuperación de turno en vuelo) se mantienen por limitación real del proveedor, no por falta de pruebas. Ver `docs/P4_1_RESULTS.md` §8.
+
+
+## 8. Cierre P4.2
+
+Pi estándar 1.6.0 pasa a VERIFIED para chat/streaming, herramientas, controles modelados y aplicados, interrupción real, descubrimiento/historial con dedup, reattach y aislamiento multiproveedor (`docs/P4_2_RESULTS.md`). Aprobaciones de permisos: UNSUPPORTED en esta instalación (sin extensión que las emita). `steer`/`follow_up`: UNTESTED. Adopción con escritura y recuperación de turno en vuelo: UNSUPPORTED.

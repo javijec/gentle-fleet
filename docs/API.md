@@ -100,3 +100,6 @@ sin evidencia suficiente mantiene `NeedsReconciliation` y no reenvía prompts.
 
 
 **P4.1:** el contrato público incorpora `InterruptTurn`, `ListControls`, `SetControl`, `ListNativeSessions` e `ImportNativeHistory`. `AnswerApproval` acepta `arguments` opcionales (`name` + `values`) y `ApprovalRequested` publica `options` con `option_id` Fleet y esquema de argumentos; los IDs y payloads nativos siguen siendo privados. `ListAgents` reporta `controls` descubiertos por versión. Los nuevos campos son opcionales y compatibles con clientes anteriores. La importación de historial emite `history` con `provenance=imported_from_provider`; nunca se presenta como evento observado en vivo. Ver [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
+
+**P4.2:** el proveedor `pi` usa las mismas operaciones (`CreateSession`, `SendPrompt`, `SubscribeTimeline`, `InterruptTurn`, `ListControls`, `SetControl`, `ListNativeSessions`, `ImportNativeHistory`). Los eventos `AssistantDelta`/`AssistantMessage` se deduplican y el fin de turno llega con `TurnCompleted` tras `agent_settled`. Las aprobaciones de Extension UI, cuando existen, usan el mismo contrato `ApprovalRequested` con `option_id` Fleet. Sin cambios de wire: Pi se registra en `fleet-providers` y `ListAgents` lo distingue por `id=pi`.

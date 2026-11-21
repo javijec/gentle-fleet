@@ -332,6 +332,24 @@ impl JsonlRpc {
         Ok(())
     }
 
+    /// Bombea los eventos de la cola del lector hacia el buffer acotado,
+    /// preservando orden de llegada sin entregarlos prematuramente al caller.
+    /// Desktop RPC espera su respuesta en Extension UI; durante esa espera
+    /// debe mantener libre la cola ordinaria para evitar un deadlock.
+    pub fn buffer_events(&mut self) -> Result<(), RpcError> {
+        while let Ok(event) = self.events.try_recv() {
+            let fatal = event.get("type").and_then(Value::as_str) == Some("rpc_fatal_error");
+            self.retain_event(event)?;
+            if fatal {
+                return Err(RpcError::new(
+                    "rpc_protocol",
+                    "RPC reader encountered a malformed or oversized frame",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Mientras espera un ACK, drena las colas del lector RPC y retiene los
     /// eventos para next_event(). Evita un interbloqueo entre backpressure y
     /// una respuesta cuyo frame aún no pudo leer el mismo hilo.
@@ -365,25 +383,14 @@ impl JsonlRpc {
         let outcome = loop {
             // Un fallo de protocolo invalida la correlación incluso si Pi
             // alcanzó a entregar una respuesta previa a la corrupción.
+            if let Err(error) = self.buffer_events() {
+                break Err(error);
+            }
             let mut fatal = None;
-            while let Ok(event) = self.events.try_recv() {
-                if event.get("type").and_then(Value::as_str) == Some("rpc_fatal_error") {
-                    fatal = Some(RpcError::new(
-                        "rpc_protocol",
-                        "RPC reader encountered a malformed or oversized frame",
-                    ));
-                }
-                if let Err(error) = self.retain_event(event) {
+            while let Ok(request) = self.ui.try_recv() {
+                if let Err(error) = self.retain_ui(request) {
                     fatal = Some(error);
                     break;
-                }
-            }
-            if fatal.is_none() {
-                while let Ok(request) = self.ui.try_recv() {
-                    if let Err(error) = self.retain_ui(request) {
-                        fatal = Some(error);
-                        break;
-                    }
                 }
             }
             if let Some(error) = fatal {

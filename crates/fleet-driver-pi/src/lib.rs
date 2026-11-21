@@ -963,6 +963,21 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_frame_makes_in_flight_pi_turn_uncertain() {
+        let mut driver = PiDriver::new();
+        driver.mapper.begin_turn("fleet-turn".into());
+        assert!(driver.handle_internal_event(
+            &json!({"type":"rpc_fatal_error","message":"malformed Pi RPC frame"})
+        ));
+        assert!(driver.mapper.fleet_turn.is_none());
+        let event = driver.pending_events.pop_front().unwrap();
+        assert!(matches!(
+            event.kind,
+            DomainEvent::TurnUncertain { turn_id, .. } if turn_id == "fleet-turn"
+        ));
+    }
+
+    #[test]
     fn controls_are_discovered_from_native_payloads() {
         let models = json!({"models":[{"id":"m1","provider":"p1"},{"id":"m2","provider":"p2"}]});
         let levels = json!({"levels":["off","medium"]});

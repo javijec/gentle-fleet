@@ -120,7 +120,12 @@ fn classify(
                 .into(),
             value,
         };
-        // Las aprobaciones nunca se descartan: backpressure bloquea al lector.
+        // Estos métodos son notificaciones de Extension UI. No esperan
+        // respuesta y no deben ocupar la cola de aprobaciones tipadas.
+        if matches!(request.method.as_str(), "notify" | "setStatus" | "setWidget") {
+            return;
+        }
+        // Las solicitudes interactivas nunca se descartan silenciosamente.
         let _ = ui.send(request);
         return;
     }
@@ -575,6 +580,22 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
         assert!(rpc.try_event().is_none());
         let _ = rpc.close();
         reader.join().unwrap();
+    }
+
+    #[test]
+    fn extension_ui_notifications_never_block_approval_queue() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (events_tx, _events) = mpsc::sync_channel(1);
+        let (ui_tx, ui_rx) = mpsc::sync_channel(1);
+        for method in ["notify", "setStatus", "setWidget"] {
+            classify(
+                json!({"type":"extension_ui_request","id":"u1","method":method}),
+                &pending,
+                &events_tx,
+                &ui_tx,
+            );
+        }
+        assert!(ui_rx.try_recv().is_err());
     }
 
     #[test]

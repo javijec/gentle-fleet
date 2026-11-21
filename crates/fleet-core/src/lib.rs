@@ -504,8 +504,28 @@ impl SessionManager {
     ) -> JoinHandle<()> {
         let manager = Arc::clone(self);
         let runner_id = handle.identity().runner_id.clone();
-        thread::spawn(move || loop {
-            match handle.recv(Duration::from_millis(50)) {
+        thread::spawn(move || {
+            let mut last_probe = std::time::Instant::now();
+            loop {
+                if last_probe.elapsed() >= Duration::from_secs(2) {
+                    last_probe = std::time::Instant::now();
+                    match handle.provider_alive() {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            manager.mark_runner_uncertain(
+                                &session_id, &runner_id, "native provider is no longer alive",
+                            );
+                            break;
+                        }
+                        Err(error) => {
+                            manager.mark_runner_uncertain(
+                                &session_id, &runner_id, &error.to_string(),
+                            );
+                            break;
+                        }
+                    }
+                }
+                match handle.recv(Duration::from_millis(50)) {
                 Ok(Some(RunnerEvent {
                     runner_id: event_runner_id,
                     runner_seq,
@@ -523,10 +543,50 @@ impl SessionManager {
                 Ok(None) => {}
                 Err(error) => {
                     eprintln!("runner ingress stopped for {session_id}: {error}");
+                    manager.mark_runner_uncertain(
+                        &session_id, &runner_id, &error.to_string(),
+                    );
                     break;
+                }
                 }
             }
         })
+    }
+
+    fn mark_runner_uncertain(&self, session_id: &str, runner_id: &str, reason: &str) {
+        let mut state = self.state.lock().expect("manager poisoned");
+        let Some(record) = state.sessions.get_mut(session_id) else { return; };
+        if !matches!(record.summary.state, SessionState::Running | SessionState::Recovering)
+            || record.runner.as_ref().is_none_or(|handle| handle.identity().runner_id != runner_id)
+        {
+            // A deliberate Stop must not be reclassified as a crash.
+            return;
+        }
+        let active = record.active_turn.clone();
+        record.summary.state = SessionState::NeedsReconciliation;
+        if active.is_some() {
+            record.summary.turn_state = TurnState::Uncertain;
+        }
+        if let Some(turn_id) = active {
+            let _ = self.publish_locked(
+                &mut state,
+                session_id,
+                EventKind::TurnUncertain {
+                    turn_id,
+                    reason: "runner connection or provider health lost".into(),
+                },
+            );
+        }
+        let _ = self.publish_locked(
+            &mut state,
+            session_id,
+            EventKind::SessionStateChanged {
+                state: SessionState::NeedsReconciliation,
+            },
+        );
+        if let Err(error) = self.store.update_runner_status(runner_id, RunnerStatus::Uncertain) {
+            eprintln!("cannot persist runner uncertainty: {error:?}; original: {reason}");
+        }
     }
 
     /// Ingesta deduplicada por `(runner_id, runner_seq)`: el evento se publica

@@ -2496,6 +2496,89 @@ mod tests {
         manager_at(config, unique_db_path())
     }
 
+    struct BlockingHistoryFactory {
+        config: FakeConfig,
+        ready: SyncSender<()>,
+        resume: Arc<Mutex<Receiver<()>>>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl DriverFactory for BlockingHistoryFactory {
+        fn id(&self) -> String {
+            "fake".into()
+        }
+
+        fn compatibility(&self) -> VersionRange {
+            FakeFactory::new().compatibility()
+        }
+
+        fn create(&self) -> Box<dyn AgentDriver> {
+            Box::new(FakeDriver::with_config(self.config.clone()))
+        }
+
+        fn metadata(&self) -> ProviderDescriptor {
+            FakeFactory::new().metadata()
+        }
+
+        fn import_native_history(
+            &self,
+            _native_ref: &str,
+        ) -> Result<Vec<fleet_agent::NativeHistoryMessage>, AgentError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.ready.send(()).map_err(|_| AgentError {
+                code: "TestSync".into(),
+                message: "history test receiver disconnected".into(),
+            })?;
+            self.resume
+                .lock()
+                .expect("history test gate poisoned")
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| AgentError {
+                    code: "TestSync".into(),
+                    message: "history import was not released by test".into(),
+                })?;
+            Ok(vec![fleet_agent::NativeHistoryMessage {
+                role: "assistant".into(),
+                text: "historical answer".into(),
+                source_ref: Some("fixture-history-item-1".into()),
+                tool: None,
+            }])
+        }
+    }
+
+    fn manager_with_blocking_history(
+        config: FakeConfig,
+    ) -> (
+        Arc<SessionManager>,
+        Receiver<()>,
+        SyncSender<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(2);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(2);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(BlockingHistoryFactory {
+            config: config.clone(),
+            ready: ready_tx,
+            resume: Arc::new(Mutex::new(resume_rx)),
+            calls: Arc::clone(&calls),
+        }));
+        let mut launcher_registry = ProviderRegistry::new();
+        launcher_registry.register(Box::new(ConfiguredFactory(config)));
+        let launcher = Arc::new(InProcessRunnerLauncher::new(
+            launcher_registry,
+            "host-test".into(),
+        ));
+        let store = Arc::new(
+            fleet_store_sqlite::SqliteStore::open(unique_db_path()).unwrap(),
+        );
+        let manager = Arc::new(
+            SessionManager::new(registry, store, launcher, "host-test".into()).unwrap(),
+        );
+        (manager, ready_rx, resume_tx, calls)
+    }
+
     fn workspace(manager: &SessionManager) -> WorkspaceSummary {
         manager
             .register_workspace(&std::env::temp_dir().to_string_lossy())
@@ -3678,4 +3761,85 @@ mod tests {
         )
         .is_ok());
     }
+    #[test]
+    fn history_import_rechecks_session_after_slow_native_fetch() {
+        let config = FakeConfig {
+            defer_terminal_until_interrupt: true,
+            ..FakeConfig::default()
+        };
+        let (manager, started, release, calls) = manager_with_blocking_history(config);
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let importing = Arc::clone(&manager);
+        let session_id = ses.id.clone();
+        let task = thread::spawn(move || {
+            importing.import_native_history(&session_id, "fake", "native-1", "import-race")
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        manager
+            .send_prompt(&ses.id, "active turn".into(), "prompt-while-importing")
+            .unwrap();
+        release.send(()).unwrap();
+        let error = task.join().unwrap().unwrap_err();
+        assert_eq!(error.code, "SessionBusy");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manager.get_operation("import-race").unwrap().unwrap().status,
+            OperationStatus::Failed
+        );
+        assert!(manager
+            .read_timeline(&ses.id, 0, TIMELINE_PAGE)
+            .unwrap()
+            .iter()
+            .all(|event| !matches!(event.kind, EventKind::HistoryMessage { .. })));
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn same_import_key_has_one_owner_and_replays_completed_result() {
+        let (manager, started, release, calls) =
+            manager_with_blocking_history(FakeConfig::default());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let owner = Arc::clone(&manager);
+        let session_id = ses.id.clone();
+        let owner_thread = thread::spawn(move || {
+            owner.import_native_history(&session_id, "fake", "native-1", "same-key")
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        let contender = Arc::clone(&manager);
+        let contender_session = ses.id.clone();
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        let contender_thread = thread::spawn(move || {
+            let outcome =
+                contender.import_native_history(&contender_session, "fake", "native-1", "same-key");
+            result_tx.send(outcome).unwrap();
+        });
+        let contender_result = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("contender must not execute the slow provider import")
+            .unwrap_err();
+        assert_eq!(contender_result.code, "OperationPending");
+        release.send(()).unwrap();
+        assert_eq!(owner_thread.join().unwrap().unwrap(), 1);
+        contender_thread.join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manager
+                .import_native_history(&ses.id, "fake", "native-1", "same-key")
+                .unwrap(),
+            1
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let history_count = manager
+            .read_timeline(&ses.id, 0, TIMELINE_PAGE)
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::HistoryMessage { .. }))
+            .count();
+        assert_eq!(history_count, 1);
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+
 }

@@ -306,6 +306,12 @@ impl CodexDriver {
                 });
             }
             None => {
+                self.emit(DomainEvent::AgentNotice {
+                    message: format!(
+                        "Codex interactive request unsupported and rejected: {}",
+                        redact_provider_error(&request.method)
+                    ),
+                });
                 // Request nativo que no sabemos traducir: se rechaza con error
                 // JSON-RPC. Nunca se autoaprueba y nunca se deja sin respuesta
                 // al App Server (evita deadlock y aprobaciones huérfanas).

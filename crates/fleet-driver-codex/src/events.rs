@@ -451,15 +451,28 @@ pub fn build_native_answer(
     let mut used = std::collections::HashSet::new();
     for input in args {
         if !used.insert(input.name.as_str()) {
-            return Err(AgentError { code: "InvalidArgument".into(), message: "duplicate argument".into() });
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "duplicate argument".into(),
+            });
         }
-        let field = spec.args.iter().find(|field| field.name == input.name)
-            .ok_or_else(|| AgentError { code: "InvalidArgument".into(), message: "argument not announced".into() })?;
-        if input.values.is_empty() || input.values.iter().any(String::is_empty)
+        let field = spec
+            .args
+            .iter()
+            .find(|field| field.name == input.name)
+            .ok_or_else(|| AgentError {
+                code: "InvalidArgument".into(),
+                message: "argument not announced".into(),
+            })?;
+        if input.values.is_empty()
+            || input.values.iter().any(String::is_empty)
             || (field.kind == "text" && input.values.len() != 1)
             || !matches!(field.kind.as_str(), "text" | "text_list")
         {
-            return Err(AgentError { code: "InvalidArgument".into(), message: "invalid argument type or values".into() });
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "invalid argument type or values".into(),
+            });
         }
     }
     for required in spec.args.iter().filter(|arg| arg.required) {
@@ -495,10 +508,13 @@ pub fn build_native_answer(
         "answer" => {
             let mut answer_map = serde_json::Map::new();
             for field in &spec.args {
-                let id = field.name.strip_prefix("question:").ok_or_else(|| AgentError {
-                    code: "InvalidArgument".into(),
-                    message: "unrecognized question identifier".into(),
-                })?;
+                let id = field
+                    .name
+                    .strip_prefix("question:")
+                    .ok_or_else(|| AgentError {
+                        code: "InvalidArgument".into(),
+                        message: "unrecognized question identifier".into(),
+                    })?;
                 let values = arg_values(args, &field.name);
                 if values.is_empty() {
                     return Err(AgentError {
@@ -636,11 +652,22 @@ mod tests {
             .options
             .iter()
             .any(|o| o.option_id == "amend_execpolicy"));
-        assert!(build_native_answer(&approval.method, "decline", &approval.options, &[], &request.params).is_err());
-        assert!(
-            build_native_answer(&approval.method, "amend_execpolicy", &approval.options, &[], &request.params)
-                .is_err()
-        );
+        assert!(build_native_answer(
+            &approval.method,
+            "decline",
+            &approval.options,
+            &[],
+            &request.params
+        )
+        .is_err());
+        assert!(build_native_answer(
+            &approval.method,
+            "amend_execpolicy",
+            &approval.options,
+            &[],
+            &request.params
+        )
+        .is_err());
         let answer = build_native_answer(
             &approval.method,
             "amend_execpolicy",
@@ -667,39 +694,60 @@ mod tests {
             "answer",
             &approval.options,
             &[
-                ApprovalArgument { name: "question:language".into(), values: vec!["Rust".into()] },
-                ApprovalArgument { name: "question:style".into(), values: vec!["compact".into()] },
+                ApprovalArgument {
+                    name: "question:language".into(),
+                    values: vec!["Rust".into()],
+                },
+                ApprovalArgument {
+                    name: "question:style".into(),
+                    values: vec!["compact".into()],
+                },
             ],
             &request.params,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(answer["answers"]["language"]["answers"][0], "Rust");
         assert_eq!(answer["answers"]["style"]["answers"][0], "compact");
     }
 
     #[test]
     fn native_permission_grant_rejects_broader_scope_and_resources() {
-        let options = vec![option("grant", "Grant", vec![
-            arg("permissions", "text_list", true),
-            arg("scope", "text", false),
-        ])];
+        let options = vec![option(
+            "grant",
+            "Grant",
+            vec![
+                arg("permissions", "text_list", true),
+                arg("scope", "text", false),
+            ],
+        )];
         let params = json!({"permissions":["read"],"availableScopes":["turn"]});
         assert!(build_native_answer(
             "item/permissions/requestApproval",
             "grant",
             &options,
-            &[ApprovalArgument { name: "permissions".into(), values: vec!["write".into()] }],
+            &[ApprovalArgument {
+                name: "permissions".into(),
+                values: vec!["write".into()]
+            }],
             &params,
-        ).is_err());
+        )
+        .is_err());
         assert!(build_native_answer(
             "item/permissions/requestApproval",
             "grant",
             &options,
             &[
-                ApprovalArgument { name: "permissions".into(), values: vec!["read".into()] },
-                ApprovalArgument { name: "scope".into(), values: vec!["session".into()] },
+                ApprovalArgument {
+                    name: "permissions".into(),
+                    values: vec!["read".into()]
+                },
+                ApprovalArgument {
+                    name: "scope".into(),
+                    values: vec!["session".into()]
+                },
             ],
             &params,
-        ).is_err());
+        )
+        .is_err());
     }
-
 }

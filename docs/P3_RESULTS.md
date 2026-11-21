@@ -286,3 +286,14 @@ cerrado en este entorno.
 - Cross-compilación Windows parcial (sin SQLite): PASS para dominio, protocolo,
   agente, core y CLI; workspace completo bloqueado por herramienta ausente.
 - `git diff --check`: PASS
+
+### CI sobre el commit final de la auditoría
+
+- Commit `532f14e` (`test(p3 audit): cover spool saturation, runner kill and concurrent recovery`).
+- GitHub Actions `cargo` run `44902472250`: **success** (1m57s), incluyendo fmt,
+  check, clippy, tests, build y los 14 scripts E2E deterministas.
+- El run anterior `44892007170` (commit `6464600`) falló en
+  `e2e_backpressure.sh`; la causa fue sensibilidad temporal del script y
+  runners huérfanos entre pruebas, corregidos en esta auditoría.
+- Los smokes reales de OpenCode (`GF_E2E_REAL=1`) son opt-in y no forman parte
+  de CI; se ejecutaron localmente sobre este mismo árbol con resultado PASS.

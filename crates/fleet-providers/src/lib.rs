@@ -9,6 +9,7 @@
 use fleet_agent::fake::{FakeConfig, FakeFactory};
 use fleet_agent::ProviderRegistry;
 use fleet_driver_codex::CodexFactory;
+use fleet_driver_gentle_shell::GentleShellFactory;
 use fleet_driver_opencode::OpenCodeFactory;
 use fleet_driver_pi::PiFactory;
 
@@ -47,6 +48,7 @@ pub fn register_builtin_providers(
     )));
     registry.register(Box::new(CodexFactory));
     registry.register(Box::new(PiFactory));
+    registry.register(Box::new(GentleShellFactory));
 }
 
 /// Construye el catálogo leyendo las mismas variables de entorno en ambos
@@ -72,11 +74,12 @@ mod tests {
         let b = builtin_registry_from_env();
         assert_eq!(a.ids(), b.ids());
         let ids = a.ids();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         assert!(ids.contains(&"fake".to_string()));
         assert!(ids.contains(&"opencode".to_string()));
         assert!(ids.contains(&"codex".to_string()));
         assert!(ids.contains(&"pi".to_string()));
+        assert!(ids.contains(&"gentle-shell".to_string()));
         let mut seen = std::collections::HashSet::new();
         for descriptor in a.descriptors() {
             assert!(seen.insert(descriptor.id.clone()));

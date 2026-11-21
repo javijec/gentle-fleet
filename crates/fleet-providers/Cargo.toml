@@ -9,6 +9,7 @@ fleet-agent = { path = "../fleet-agent" }
 fleet-driver-opencode = { path = "../fleet-driver-opencode" }
 fleet-driver-codex = { path = "../fleet-driver-codex" }
 fleet-driver-pi = { path = "../fleet-driver-pi" }
+fleet-driver-gentle-shell = { path = "../fleet-driver-gentle-shell" }
 
 [dev-dependencies]
 fleet-domain = { path = "../fleet-domain" }

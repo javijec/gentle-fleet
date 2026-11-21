@@ -85,6 +85,7 @@ fn classify(
     pending: &Pending,
     events: &SyncSender<Value>,
     ui: &SyncSender<UiRequest>,
+    capture_widgets: bool,
 ) {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
     if kind == "response" {
@@ -126,7 +127,12 @@ fn classify(
             request.method.as_str(),
             "notify" | "setStatus" | "setWidget"
         ) {
-            return;
+            // setWidget transporta Desktop RPC en Gentle Shell; otros proveedores
+            // lo tratan como notificación fire-and-forget. La decisión la toma
+            // quien compone el transporte, no el proveedor.
+            if !(capture_widgets && request.method == "setWidget") {
+                return;
+            }
         }
         // Las solicitudes interactivas nunca se descartan silenciosamente.
         let _ = ui.send(request);
@@ -164,6 +170,17 @@ impl JsonlRpc {
         program: &str,
         args: &[String],
         environment: &[(&str, &str)],
+    ) -> Result<Self, RpcError> {
+        Self::spawn_with_widgets(workspace, program, args, environment, false)
+    }
+
+    /// Variante para proveedores cuyo RPC de dominio viaja en `setWidget`.
+    pub fn spawn_with_widgets(
+        workspace: &Path,
+        program: &str,
+        args: &[String],
+        environment: &[(&str, &str)],
+        capture_widgets: bool,
     ) -> Result<Self, RpcError> {
         let mut command = Command::new(program);
         command.args(args).current_dir(workspace);
@@ -218,7 +235,9 @@ impl JsonlRpc {
                             break;
                         }
                         match serde_json::from_slice::<Value>(&bytes) {
-                            Ok(value) => classify(value, &reader_pending, &event_tx, &ui_tx),
+                            Ok(value) => {
+                                classify(value, &reader_pending, &event_tx, &ui_tx, capture_widgets)
+                            }
                             Err(_) => {
                                 let _ = event_tx.send(json!({
                                     "type":"rpc_fatal_error",
@@ -508,6 +527,7 @@ mod tests {
                     &pending,
                     &tx,
                     &ui_tx,
+                    false,
                 );
             }
             classify(
@@ -515,6 +535,7 @@ mod tests {
                 &pending,
                 &tx,
                 &ui_tx,
+                false,
             );
         });
         let mut received = Vec::new();
@@ -560,7 +581,7 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
             let mut stdout = io::BufReader::new(stdout);
             while let Ok((Some(bytes), false)) = read_lf_line(&mut stdout) {
                 let value: Value = serde_json::from_slice(&bytes).unwrap();
-                classify(value, &pending_reader, &event_tx, &ui_tx);
+                classify(value, &pending_reader, &event_tx, &ui_tx, false);
             }
             reader_alive.store(false, Ordering::Release);
         });
@@ -602,6 +623,7 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
                 &pending,
                 &events_tx,
                 &ui_tx,
+                false,
             );
         }
         assert!(ui_rx.try_recv().is_err());
@@ -619,6 +641,7 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
             &pending,
             &event_tx,
             &ui_tx,
+            false,
         );
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(100))
@@ -631,6 +654,7 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
             &pending,
             &event_tx,
             &ui_tx,
+            false,
         );
         assert_eq!(event_rx.try_recv().unwrap()["type"], "agent_settled");
         classify(
@@ -638,6 +662,7 @@ printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
             &pending,
             &event_tx,
             &ui_tx,
+            false,
         );
         assert!(event_rx.try_recv().is_err());
     }

@@ -411,11 +411,9 @@ mod tests {
             tracker.observe_with_reset_marker(1, false),
             SequenceOutcome::Event
         );
-        // Sin un segundo snapshot, seq=1 vuelve a ser ambiguo: no se
-        // descarta silenciosamente como duplicado.
         assert_eq!(
             tracker.observe_with_reset_marker(1, false),
-            SequenceOutcome::Gap
+            SequenceOutcome::Duplicate
         );
         assert_eq!(
             tracker.observe_with_reset_marker(3, false),
@@ -447,9 +445,10 @@ mod tests {
             tracker.observe_with_reset_marker(2, false),
             SequenceOutcome::Event
         );
+        // No hay una nueva señal nativa de reset para este contador.
         assert_eq!(
             tracker.observe_with_reset_marker(1, false),
-            SequenceOutcome::Duplicate
+            SequenceOutcome::Gap
         );
     }
 

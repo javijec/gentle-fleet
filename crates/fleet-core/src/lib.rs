@@ -2149,7 +2149,9 @@ mod tests {
             .find(|item| item.id == ses.id)
             .expect("session must be restored");
         assert_eq!(restored.state, SessionState::NeedsReconciliation);
-        assert_eq!(restored.turn_state, TurnState::Uncertain);
+        // Recovery without a live runner remains uncertain at session level,
+        // but the already terminal turn must remain Completed in SQLite.
+        assert_eq!(restored.turn_state, TurnState::Completed);
         let events = reopened.read_timeline(&ses.id, 0, 256).unwrap();
         assert!(events.len() >= 4);
         assert!(events

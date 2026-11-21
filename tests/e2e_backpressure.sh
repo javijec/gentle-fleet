@@ -10,6 +10,7 @@ WORKSPACE="$(mktemp -d /tmp/gf-p11-bp-ws-XXXXXX)"
 cleanup() {
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
   rm -rf "$RUNTIME" "$WORKSPACE"
+    pkill -f "fleet-runner .* --workspace $WORKSPACE" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -29,16 +30,27 @@ WORKSPACE_ID="$("$BIN/fleetctl" workspace add "$WORKSPACE" | cut -f1)"
 SESSION_ID="$("$BIN/fleetctl" session create --workspace "$WORKSPACE_ID" --provider fake | cut -f1)"
 
 set +e
-timeout 15s "$BIN/fleetctl" watch "$SESSION_ID" --count 50 >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
+timeout 60s "$BIN/fleetctl" watch "$SESSION_ID" --count 50 >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
 WATCH_PID=$!
-for _ in $(seq 1 50); do grep -q subscribed "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
-"$BIN/fleetctl" prompt "$SESSION_ID" "flood" >/dev/null
+for _ in $(seq 1 100); do grep -q subscribed "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
+"$BIN/fleetctl" prompt "$SESSION_ID" "flood" >"$RUNTIME/prompt.out" 2>"$RUNTIME/prompt.err"
+PROMPT_CODE=$?
+# Esperar al aviso tipado en lugar de depender de que `timeout` mate al watcher.
+for _ in $(seq 1 200); do grep -q "Backpressure" "$RUNTIME/watch.err" 2>/dev/null && break; sleep 0.1; done
 wait "$WATCH_PID"
 WATCH_CODE=$?
 set -e
 
+if [[ "$PROMPT_CODE" != "0" ]]; then
+  echo "FAIL: prompt was not accepted"; cat "$RUNTIME/prompt.err"; exit 1
+fi
 if ! grep -q "Backpressure" "$RUNTIME/watch.err"; then
-  echo "FAIL: no explicit backpressure notice"; cat "$RUNTIME/watch.err"; exit 1
+  echo "FAIL: no explicit backpressure notice"
+  echo "--- watch.err"; cat "$RUNTIME/watch.err"
+  echo "--- watch.out"; cat "$RUNTIME/watch.out"
+  echo "--- daemon.err"; cat "$RUNTIME/daemon.err"
+  echo "--- daemon.out"; cat "$RUNTIME/daemon.out"
+  exit 1
 fi
 if (( WATCH_CODE == 0 )); then
   echo "FAIL: slow client was not disconnected"; exit 1

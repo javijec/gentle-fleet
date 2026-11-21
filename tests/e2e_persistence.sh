@@ -11,6 +11,7 @@ cleanup() {
   [[ -n "${RUNNER_PID:-}" ]] && kill "$RUNNER_PID" 2>/dev/null || true
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
   rm -rf "$RUNTIME" "$WORKSPACE"
+    pkill -f "fleet-runner .* --workspace $WORKSPACE" 2>/dev/null || true
 }
 trap cleanup EXIT
 

@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0, P1, P1.1 y P2 integrados; P3.1 en validación y revisión** (21/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Runner independiente con supervivencia demostrada ante SIGKILL de `fleetd`. Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md` y `docs/P3_RESULTS.md`.
+**Estado:** **P0, P1, P1.1 y P2 CERRADOS; P3 con VALIDACIÓN PARCIAL** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Runner independiente con supervivencia demostrada ante SIGKILL de `fleetd`. Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md` y `docs/P3_RESULTS.md`.
 
 ## Regla de avance
 
@@ -12,7 +12,7 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P1 — Un chat local con OpenCode ✅ **CERRADO** | Un CLI registra workspace, crea sesión con `provider_id=opencode`, envía prompt y recibe texto y herramientas mediante Fleet API | Cumplido: FakeDriver + smoke real con OpenCode, dos clientes con la misma secuencia `seq`, fmt/clippy/test y e2e en verde; ver `docs/P1_RESULTS.md` |
 | P1.1 — Estabilización y concurrencia ✅ **CERRADO** | Sesiones y eventos aislados, un turno activo por sesión, idempotencia atómica, stop acotado, transporte local por usuario y colas acotadas | Cumplido: 15 tests unitarios, e2e de aislamiento/carrera/backpressure/ACL y smoke real con OpenCode; ver `docs/P1_1_RESULTS.md` |
 | P2 — Permisos y timeline ✅ **CERRADO** | SQLite WAL con migraciones, timeline paginada por cursor, operaciones idempotentes y aprobaciones de OpenCode | Cumplido: 25 tests unitarios, e2e de persistencia/reinicio, aprobaciones con un ganador y smoke real con `once`/`reject`; ver `docs/P2_RESULTS.md` |
-| P3 — Persistencia de procesos ⚠️ **EN REVISIÓN P3.1** | `fleet-runner` independiente, reattach autenticado y spool acotado | Cumplido en Linux: SIGKILL real de `fleetd` con turno OpenCode en curso, replay sin duplicación y aprobaciones tras desconexión; ver `docs/P3_RESULTS.md`. Windows no validado |
+| P3 — Persistencia de procesos ⚠️ **VALIDACIÓN PARCIAL** | `fleet-runner` independiente, reattach autenticado y spool acotado | Linux VERIFIED (SIGKILL, replay, aprobaciones, multi-sesión, kill de runner). Windows NO validado: falta toolchain MinGW y DACL; criterio del plan no completamente satisfecho. Ver `docs/P3_RESULTS.md` |
 | P4 — Drivers adicionales | Codex y después Gentle Shell/Pi integrados usando la interfaz de capacidades, sin cambiar el gestor de sesiones | Misma suite de contrato para los tres drivers; funciones no soportadas visibles; resume declarado por versión |
 | P5 — Cliente remoto | Cliente local conecta a Fleet en otro host vía SSH autenticado, misma API | Caída de SSH y reconexión; no se inicia worker duplicado; sin TCP abierto |
 | P6 — SDK y GPUI | Cliente de escritorio consume Fleet SDK, sin acceso interno a runners | Tests SDK, chat, permisos, desconexión y cambio de host |

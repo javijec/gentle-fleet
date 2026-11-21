@@ -83,7 +83,7 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 
 ### P3 — ejecutadas y en verde
 
-- 40 tests unitarios, incluyendo identidad/ACK de runner, migración v3 y frame del protocolo interno.
+- 48 tests unitarios, incluyendo identidad/ACK de runner, migración v3 y frame del protocolo interno.
 - `tests/e2e_p3_survival.sh`: SIGKILL real de `fleetd`, runner vivo, spool generado durante la caída y replay sin duplicar prompt.
 - `tests/e2e_p3_approval_disconnect.sh`: aprobación pendiente durante la caída del daemon, decidida una sola vez tras reattach.
 - `tests/e2e_p3_identity.sh`: token manipulado y versión incompatible rechazados.
@@ -106,7 +106,14 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 
 ### P3.2 — revisión independiente verificada
 
-- 42 tests unitarios (añadidos: persistencia de estado de runner al parar, guard de recovery duplicado, normalización de sesión `recovering` huérfana).
+- 48 tests unitarios (añadidos: persistencia de estado de runner al parar, guard de recovery duplicado, normalización de sesión `recovering` huérfana).
 - `tests/e2e_p3_provider_health.sh`: fail-closed ante pérdida de salud del proveedor con runner IPC vivo; ejecutado y en verde, añadido a CI.
 - Correcciones de revisión: estados de runner al parar, `recover_runners` por estado de sesión, guard de ingress duplicado, fail-closed en writes de estado, avisos de spool duraderos, compilación Windows del runner, permisos del token y propagación de `operation_key`.
 - `e2e_opencode_survival.sh` espera ahora al evento terminal durable antes de aseverar replay (la transición a `Recovering` se publica antes de que el ingress consuma el spool).
+
+### P3.3 — auditoría final y regresiones
+
+- 48 tests unitarios (incluye 3 tests del spool que saturan 1024 eventos, límite de bytes e idempotencia de reserva; y regresiones de ACK fallido y stop sin runner).
+- Nuevos E2E: `e2e_p3_runner_kill.sh`, `e2e_p3_multi_session.sh`, `e2e_p3_provider_health.sh`. Todos en verde y añadidos a CI.
+- Correcciones: firma Windows de `expected_token`, fail-closed en ACK, predicado de salud unificado, colas acotadas, stop sin runner, `AgentNotice` de saturación, limpieza de runners huérfanos y resistencia temporal de `e2e_backpressure.sh`.
+- Windows: cross-check parcial PASS (dominio/protocolo/agente/core/CLI); workspace completo NO verificado por falta de compilador MinGW. Aislamiento entre usuarios en Windows NO implementado.

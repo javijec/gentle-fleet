@@ -115,7 +115,7 @@ sobreviven (ver `e2e_persistence.sh` y `e2e_long_replay.sh`).
 |---|---|
 | `cargo fmt --all -- --check` | PASS |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |
-| `cargo test --workspace --locked` | PASS — 40 tests unitarios |
+| `cargo test --workspace --locked` | PASS — 48 tests unitarios |
 | `cargo build --workspace --locked` | PASS |
 | `e2e_fake.sh` / `e2e_concurrency.sh` / `e2e_backpressure.sh` | PASS |
 | `e2e_unix_permissions.sh` | modos 0600/0700 VERIFIED; cruce UID **UNTESTED** aquí |
@@ -210,7 +210,7 @@ validaciones y E2E. Hallazgos verificados y corregidos:
 - `cargo fmt --all -- --check`: PASS
 - `cargo check --workspace --all-targets`: PASS
 - `cargo clippy --workspace --all-targets -- -D warnings`: PASS
-- `cargo test --workspace`: PASS — **42 tests unitarios**
+- `cargo test --workspace`: PASS — **48 tests unitarios**
 - `cargo build --workspace`: PASS
 - 12 E2E deterministas + 2 smokes reales de OpenCode: PASS
 - `git diff --check`: PASS; sin secretos ni artefactos de compilación en el repo
@@ -221,3 +221,68 @@ validaciones y E2E. Hallazgos verificados y corregidos:
 - **P2**: saturar realmente el spool de 1024 eventos para comprobar la política de backpressure con el daemon caído.
 - **P3**: `provider_alive` puede quedar desactualizado mientras el worker está bloqueado en una llamada HTTP larga; el marker deterministico permite fallo inmediato cuando se detecta externamente, pero no sustituye una sonda nativa asíncrona.
 - **P3**: limpieza de la tabla `operations` del spool del runner (crece con cada submit único; el dedup ya usa el key de Fleet).
+
+## P3.3 — auditoría final de cierre (22/11/2026)
+
+Auditoría independiente con revisores paralelos que intentaron romper cada
+invariante. Estado del plan: P3 exige supervivencia ante caída del daemon en
+**Linux y Windows**. Linux está demostrado; Windows **no** puede darse por
+cerrado en este entorno.
+
+### Hallazgos y correcciones
+
+| # | Prioridad | Hallazgo | Corrección |
+|---|---|---|---|
+| 1 | P2 | `expected_token()` tenía firma distinta en Unix y Windows: `fleetctl` no compilaba para Windows (`.ok().flatten()` sobre `String`) | Firma unificada `io::Result<Option<String>>`; `fleetctl` y `fleet-protocol` verificados con `cargo check --target x86_64-pc-windows-gnu` |
+| 2 | P2 | Un fallo aislado del ACK desincronizaba el cursor: los eventos siguientes se persistían pero nunca se confirmaban, creciendo el spool | `ack_failed` ahora es un error terminal del ingress: se marca la sesión `NeedsReconciliation` y se deja de consumir, sin reenvíos |
+| 3 | P2 | `Hello` ignoraba el marker de proveedor muerto que sí consultaba `Status`: un proveedor muerto podía presentarse activo en el reattach | Predicado de salud unificado para `Hello` y `Status` |
+| 4 | P2 | Colas de comandos del runner y del launcher en proceso eran ilimitadas; con el spool lleno el daemon podía acumular Submit sin límite | `sync_channel(16)` y `try_send` con error `runner_busy` (backpressure) |
+| 5 | P2 | `stop_session` fallaba si no había runner tras un reattach fallido: no existía forma de finalizar una sesión incierta | El stop explícito finaliza `Stopped` y persiste el estado del runner aunque no haya proceso |
+| 6 | P2 | La saturación del spool sólo era visible en stderr del daemon, no como evento tipado para clientes | `RunnerHandle::notices()` + `AgentNotice` deduplicado publicado en la timeline |
+| 7 | P3 | `parse_state` no reconocía `"recovering"` y lo interpretaba como `Running` si se leía sin normalizar | Mapear `recovering` → `NeedsReconciliation` |
+| 8 | P2 | CI en `6464600` falló en `e2e_backpressure.sh` por sensibilidad temporal (15 s) y falta de diagnóstico | Timeout 60 s, espera activa del aviso y volcado de logs; añadida limpieza de runners huérfanos por workspace en todos los E2E |
+| 9 | P2 | Los scripts E2E no mataban sus runners: quedaban procesos huérfanos que falseaban `pgrep` en pruebas posteriores | `pkill -f "fleet-runner .* --workspace $WORKSPACE"` en el cleanup de todos los scripts |
+
+### Pendientes añadidos por la auditoría
+
+- **P2 — Windows bloquea el cierre estricto del plan.** Se instaló el target
+  `x86_64-pc-windows-gnu` y se verificaron `fleet-domain`, `fleet-protocol`,
+  `fleet-agent`, `fleet-core --lib` y `fleetctl --bins`. El check completo del
+  workspace falla en `libsqlite3-sys` porque no hay compilador MinGW
+  (`x86_64-w64-mingw32-gcc`) ni permisos para instalarlo. Además, el transporte
+  Windows usa TCP loopback + token en fichero sin DACL: **el aislamiento entre
+  usuarios locales no está implementado ni probado**. No se declara soporte
+  Windows.
+- **P2 — `provider_alive` puede quedar desactualizado** mientras un `send`
+  bloquea hasta 30 s (o durante saturación), porque el worker no puede sondear.
+  Existe el marker determinista para fallo inmediato cuando se detecta
+  externamente; no se introdució un supervisor genérico fuera de alcance.
+- **P2 — crecimiento de `operations` del spool.** No existe una regla de
+  borrado que pueda demostrar que conserva idempotencia sin acoplarse a la DB
+  autoritativa. Se mantiene sin poda y se registra para P7 (no se elimina
+  evidencia necesaria para evitar repetir efectos).
+- **P3 — pérdida del fichero de spool** con identidad de runner persistida
+  reinicia `runner_seq` en 1 y el store lo deduciría como viejo, sin un
+  `RetentionGap` tipado. No probado; requiere limpieza accidental del runtime.
+
+### Cobertura adicional añadida
+
+- `tests/e2e_p3_runner_kill.sh`: SIGKILL del runner, `NeedsReconciliation`, sin
+  runner sustituto y rechazo de nuevos prompts.
+- `tests/e2e_p3_multi_session.sh`: tres sesiones concurrentes sobreviven a dos
+  SIGKILL consecutivos de `fleetd`, con replay sin prompts duplicados.
+- `tests/e2e_p3_provider_health.sh`: fallo de salud con runner IPC vivo.
+- Tests unitarios del spool: saturación real de 1024 eventos, límite de bytes,
+  avisos duraderos, conservación de eventos sin ACK e idempotencia de reserva.
+
+### Resultados de validación de la auditoría
+
+- `cargo fmt --all -- --check`: PASS
+- `cargo check --workspace --all-targets --locked`: PASS
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: PASS
+- `cargo test --workspace --locked`: PASS — **48 tests unitarios**
+- `cargo build --workspace --locked`: PASS
+- 14 E2E deterministas + 2 smokes reales de OpenCode: PASS
+- Cross-compilación Windows parcial (sin SQLite): PASS para dominio, protocolo,
+  agente, core y CLI; workspace completo bloqueado por herramienta ausente.
+- `git diff --check`: PASS

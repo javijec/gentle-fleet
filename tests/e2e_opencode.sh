@@ -12,6 +12,7 @@ cleanup() {
   [[ -n "${SESSION_ID:-}" ]] && "$BIN/fleetctl" stop "$SESSION_ID" >/dev/null 2>&1 || true
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
   rm -rf "$RUNTIME" "$WORKSPACE"
+    pkill -f "fleet-runner .* --workspace $WORKSPACE" 2>/dev/null || true
 }
 trap cleanup EXIT
 

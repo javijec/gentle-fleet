@@ -22,7 +22,7 @@
 
 **Salida**: proceso fleet-runner independiente de fleetd, identidad autenticada, spool acotado de eventos no ACK, retransmisión deduplicada y reattachment. Probar muerte del daemon con runner vivo en Linux y Windows. Solo entonces anunciar que las sesiones sobreviven al reinicio del daemon.
 
-**Estado (21/11/2026): CERRADO en Linux.** Ver [`P3_RESULTS.md`](P3_RESULTS.md): SIGKILL real de `fleetd` con turno largo de OpenCode, reattach, replay sin duplicados y aprobaciones tras desconexión. Windows queda explícitamente no validado.
+**Estado (22/11/2026): VALIDACIÓN PARCIAL.** Linux VERIFIED con SIGKILL real de `fleetd` y de runner, reattach, replay sin duplicados, aprobaciones tras desconexión y múltiples sesiones. Windows NO validado (cross-check parcial sin SQLite; falta MinGW y DACL de token), por lo que el criterio de cierre del plan no se cumple totalmente. Ver [`P3_RESULTS.md`](P3_RESULTS.md).
 
 ## P4: tres motores y capacidad de proveedor
 

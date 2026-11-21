@@ -8,6 +8,7 @@ WORKSPACE="$(mktemp -d /tmp/gf-p21-replay-ws-XXXXXX)"
 cleanup() {
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
   rm -rf "$RUNTIME" "$WORKSPACE"
+    pkill -f "fleet-runner .* --workspace $WORKSPACE" 2>/dev/null || true
 }
 trap cleanup EXIT
 export FLEET_RUNTIME_DIR="$RUNTIME"

@@ -18,6 +18,7 @@ cleanup() {
   [[ -n "${WATCH_PID:-}" ]] && kill "$WATCH_PID" 2>/dev/null || true
   [[ -n "${WATCH2_PID:-}" ]] && kill "$WATCH2_PID" 2>/dev/null || true
   rm -rf "$RUNTIME" "$WORKSPACE"
+    pkill -f "fleet-runner .* --workspace $WORKSPACE" 2>/dev/null || true
 }
 trap cleanup EXIT
 

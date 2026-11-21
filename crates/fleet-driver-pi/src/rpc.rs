@@ -512,6 +512,71 @@ mod tests {
         assert_eq!(received.len(), 5);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pi_call_drains_saturated_pipe_before_receiving_ack() {
+        // Test de extremo a extremo del propio transporte, sin un modelo Pi.
+        // El proceso envía más eventos que la capacidad de la cola acotada
+        // antes de emitir el ACK de "prompt".
+        let script = r#"IFS= read -r line
+i=0
+while [ "$i" -lt 300 ]; do
+  printf '{"type":"message_update","index":%s}\n' "$i"
+  i=$((i+1))
+done
+printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
+"#;
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let pending_reader = pending.clone();
+        let (event_tx, events) = mpsc::sync_channel(1);
+        let (ui_tx, ui) = mpsc::sync_channel(1);
+        let alive = Arc::new(AtomicBool::new(true));
+        let reader_alive = alive.clone();
+        let reader = std::thread::spawn(move || {
+            let mut stdout = io::BufReader::new(stdout);
+            while let Ok((Some(bytes), false)) = read_lf_line(&mut stdout) {
+                let value: Value = serde_json::from_slice(&bytes).unwrap();
+                classify(value, &pending_reader, &event_tx, &ui_tx);
+            }
+            reader_alive.store(false, Ordering::Release);
+        });
+        let mut rpc = PiRpc {
+            child,
+            stdin: Some(stdin),
+            next_id: AtomicU64::new(1),
+            pending,
+            events,
+            ui,
+            alive,
+            dropped: Arc::new(AtomicU64::new(0)),
+            stderr_tail: Arc::new(Mutex::new(Vec::new())),
+            deferred_events: VecDeque::new(),
+            deferred_ui: VecDeque::new(),
+            deferred_bytes: 0,
+        };
+        let reply = rpc
+            .call("prompt", json!({"message":"test"}), Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(reply["ok"], true);
+        for index in 0..300 {
+            let event = rpc.try_event().expect("missing or discarded event");
+            assert_eq!(event["index"], index);
+        }
+        assert!(rpc.try_event().is_none());
+        let _ = rpc.close();
+        reader.join().unwrap();
+    }
+
     #[test]
     fn response_correlates_by_id_and_events_are_separate() {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));

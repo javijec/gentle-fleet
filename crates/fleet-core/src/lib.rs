@@ -597,7 +597,10 @@ impl SessionManager {
             .store
             .update_runner_status(runner_id, RunnerStatus::Uncertain)
         {
+            // Fail closed: if the DB still says `active`, a restart would
+            // reattach the runner and contradict the in-memory uncertainty.
             eprintln!("cannot persist runner uncertainty: {error:?}; original: {reason}");
+            self.record_storage_fault(&error.message);
         }
     }
 
@@ -649,26 +652,59 @@ impl SessionManager {
         for record in records {
             if matches!(
                 record.status,
-                RunnerStatus::Stopped | RunnerStatus::Lost | RunnerStatus::Stopping
+                RunnerStatus::Stopped
+                    | RunnerStatus::StopUnconfirmed
+                    | RunnerStatus::Lost
+                    | RunnerStatus::Stopping
+                    | RunnerStatus::Uncertain
             ) {
                 continue;
+            }
+            let Some(session_record) = self
+                .store
+                .get_session(&record.identity.session_id)
+                .map_err(to_agent_error)?
+            else {
+                continue;
+            };
+            // Logical session state governs reattachment. A deliberately
+            // stopped or failed session must never be revived by a live runner.
+            if matches!(
+                session_record.state,
+                SessionState::Stopped
+                    | SessionState::Stopping
+                    | SessionState::StopUnconfirmed
+                    | SessionState::Failed
+            ) {
+                let _ = self
+                    .store
+                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Stopped);
+                continue;
+            }
+            // Never start a second ingress for the same runner. Recovery may
+            // be retried after a partial failure; two ingress threads would
+            // consume the same event stream and fight over state transitions.
+            {
+                let state = self.state.lock().expect("manager poisoned");
+                if state
+                    .sessions
+                    .get(&record.identity.session_id)
+                    .is_none_or(|session| session.runner.is_some() || session.ingress.is_some())
+                {
+                    continue;
+                }
             }
             let context = RunnerLaunchContext {
                 session_id: record.identity.session_id.clone(),
                 provider_id: record.identity.provider_id.clone(),
                 workspace: self
-                    .store
-                    .get_session(&record.identity.session_id)
-                    .map_err(to_agent_error)?
-                    .and_then(|session| {
-                        self.state
-                            .lock()
-                            .expect("manager poisoned")
-                            .workspaces
-                            .iter()
-                            .find(|workspace| workspace.id == session.workspace_id)
-                            .map(|workspace| workspace.path.clone())
-                    })
+                    .state
+                    .lock()
+                    .expect("manager poisoned")
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == session_record.workspace_id)
+                    .map(|workspace| workspace.path.clone())
                     .unwrap_or_default(),
                 mode: RunnerMode::Attached,
                 existing: Some(record.clone()),
@@ -712,10 +748,18 @@ impl SessionManager {
             let session_id = record.identity.session_id.clone();
             let shared: Arc<dyn RunnerHandle> = Arc::from(handle);
             // Query before handing the reader to the ingress thread.
-            let active = self
-                .store
-                .active_turn_for_session(&session_id)
-                .map_err(to_agent_error)?;
+            let active = match self.store.active_turn_for_session(&session_id) {
+                Ok(active) => active,
+                Err(error) => {
+                    // A single unreadable session must not block recovery of
+                    // every other runner handled in this startup pass.
+                    eprintln!("cannot read active turn for {session_id}: {error:?}");
+                    let _ = self
+                        .store
+                        .update_runner_status(&runner_id, RunnerStatus::Uncertain);
+                    continue;
+                }
+            };
             // Publish the recovered turn ownership BEFORE starting ingress:
             // replayed terminal events must see the correct active_turn.
             {
@@ -1292,6 +1336,7 @@ impl SessionManager {
                         approval_id: approval_id.to_string(),
                         native_request_id: approval.native_request_id.clone(),
                         decision: decision.clone(),
+                        operation_key: operation_key.to_string(),
                     })
                     .map_err(|error| AgentError {
                         code: "approval_delivery_failed".into(),
@@ -1539,6 +1584,7 @@ impl SessionManager {
         if let Err(error) = runner.submit(RunnerCommand::Prompt {
             text,
             turn_id: turn_id.clone(),
+            operation_key: operation_key.to_string(),
         }) {
             self.fail_turn(
                 session_id,
@@ -1641,6 +1687,10 @@ impl SessionManager {
             SessionState::StopUnconfirmed
         };
         record.summary.state = new_state;
+        let runner_id = record
+            .runner
+            .as_ref()
+            .map(|handle| handle.identity().runner_id.clone());
         let _ = self.publish_locked(
             &mut state,
             session_id,
@@ -1657,6 +1707,18 @@ impl SessionManager {
         }
         drop(state);
         self.persist_session_state(session_id);
+        // Persist the runner's terminal status too: otherwise the next daemon
+        // start would treat a deliberately stopped runner as reattachable.
+        if let Some(runner_id) = runner_id {
+            let status = if result.is_ok() {
+                RunnerStatus::Stopped
+            } else {
+                RunnerStatus::StopUnconfirmed
+            };
+            if let Err(error) = self.store.update_runner_status(&runner_id, status) {
+                eprintln!("cannot persist runner stop status {status:?}: {error:?}");
+            }
+        }
     }
 
     fn mark_stop_unconfirmed(&self, session_id: &str, reason: &str) {
@@ -1667,6 +1729,10 @@ impl SessionManager {
         if record.summary.state != SessionState::Stopping {
             return;
         }
+        let runner_id = record
+            .runner
+            .as_ref()
+            .map(|handle| handle.identity().runner_id.clone());
         record.summary.state = SessionState::StopUnconfirmed;
         let _ = self.publish_locked(
             &mut state,
@@ -1684,6 +1750,14 @@ impl SessionManager {
         );
         drop(state);
         self.persist_session_state(session_id);
+        if let Some(runner_id) = runner_id {
+            if let Err(error) = self
+                .store
+                .update_runner_status(&runner_id, RunnerStatus::StopUnconfirmed)
+            {
+                eprintln!("cannot persist unconfirmed runner stop: {error:?}");
+            }
+        }
     }
 
     /// Cierre acotado: Stopped solo significa cierre confirmado.
@@ -2611,5 +2685,57 @@ mod tests {
             .answer_approval(&approval_id, "once".into(), "answer-key")
             .unwrap();
         assert_eq!(replay.approval_id, first.approval_id);
+    }
+
+    #[test]
+    fn confirmed_stop_persists_runner_status_and_is_not_revived() {
+        let path = unique_db_path();
+        let manager = manager_at(FakeConfig::default(), path.clone());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        manager.stop_session(&ses.id).unwrap();
+        assert_eq!(
+            manager.store.get_runner(&ses.id).unwrap().unwrap().status,
+            RunnerStatus::Stopped
+        );
+        drop(manager);
+
+        let reopened = manager_at(FakeConfig::default(), path);
+        let recovered = reopened.recover_runners().unwrap();
+        assert!(
+            recovered.is_empty(),
+            "a stopped session must not be reattached"
+        );
+        let restored = reopened
+            .list_sessions()
+            .into_iter()
+            .find(|item| item.id == ses.id)
+            .unwrap();
+        assert_eq!(restored.state, SessionState::Stopped);
+        assert_eq!(
+            reopened.store.get_runner(&ses.id).unwrap().unwrap().status,
+            RunnerStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn duplicate_recovery_does_not_spawn_second_ingress() {
+        let manager = manager(FakeConfig::default());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        // Simulate a daemon restart with a still-attached runner: the guard
+        // must skip rather than starting a second ingress over the same stream.
+        {
+            let mut state = manager.state.lock().expect("manager poisoned");
+            if let Some(record) = state.sessions.get_mut(&ses.id) {
+                record.summary.state = SessionState::NeedsReconciliation;
+            }
+        }
+        let recovered = manager.recover_runners().unwrap();
+        assert!(
+            recovered.is_empty(),
+            "recovery must skip a session that already has a runner and ingress"
+        );
+        manager.stop_session(&ses.id).unwrap();
     }
 }

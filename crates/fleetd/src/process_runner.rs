@@ -135,21 +135,42 @@ impl RunnerHandle for ProcessHandle {
 
     fn submit(&self, command: CoreCommand) -> Result<(), AgentError> {
         let native = match command {
-            CoreCommand::Prompt { text, turn_id } => RunnerCommand::Prompt { text, turn_id },
+            CoreCommand::Prompt {
+                text,
+                turn_id,
+                operation_key,
+            } => RunnerCommand::Prompt {
+                text,
+                turn_id,
+                operation_key,
+            },
             CoreCommand::Answer {
                 native_request_id,
                 decision,
+                operation_key,
                 ..
             } => RunnerCommand::Answer {
                 approval_id: String::new(),
                 native_request_id,
                 decision,
+                operation_key,
             },
             CoreCommand::Interrupt { turn_id } => RunnerCommand::Interrupt { turn_id },
             CoreCommand::Stop => RunnerCommand::Stop,
         };
-        let operation_id = format!("runner-op-{}", uuid::Uuid::new_v4());
-        let operation_key = format!("{}:{}", operation_id, native_key(&native));
+        let (operation_id, operation_key) = match &native {
+            RunnerCommand::Prompt { operation_key, .. }
+            | RunnerCommand::Answer { operation_key, .. } => {
+                (format!("runner-op-{operation_key}"), operation_key.clone())
+            }
+            _ => {
+                let operation_id = format!("runner-op-{}", uuid::Uuid::new_v4());
+                (
+                    operation_id.clone(),
+                    format!("{operation_id}:{}", native_key(&native)),
+                )
+            }
+        };
         match self.rpc(RunnerRequest::Submit {
             operation_id,
             operation_key,
@@ -206,7 +227,16 @@ impl RunnerHandle for ProcessHandle {
 
     fn provider_alive(&self) -> Result<bool, AgentError> {
         match self.rpc(RunnerRequest::Status)? {
-            RunnerResponse::Status { provider_alive, .. } => Ok(provider_alive),
+            RunnerResponse::Status {
+                provider_alive,
+                notices,
+                ..
+            } => {
+                for notice in notices {
+                    eprintln!("runner notice: {notice}");
+                }
+                Ok(provider_alive)
+            }
             other => Err(AgentError {
                 code: "unexpected_runner_response".into(),
                 message: format!("{other:?}"),

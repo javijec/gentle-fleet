@@ -35,11 +35,13 @@ pub enum RunnerCommand {
     Prompt {
         text: String,
         turn_id: String,
+        operation_key: String,
     },
     Answer {
         approval_id: String,
         native_request_id: String,
         decision: String,
+        operation_key: String,
     },
     Interrupt {
         turn_id: String,
@@ -107,6 +109,8 @@ pub enum RunnerResponse {
         last_ack_seq: u64,
         pending_count: usize,
         provider_alive: bool,
+        /// Notas durables del runner (p.ej. backpressure del spool).
+        notices: Vec<String>,
     },
     Accepted {
         operation_id: String,

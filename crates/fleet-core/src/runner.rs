@@ -25,11 +25,13 @@ pub enum RunnerCommand {
     Prompt {
         text: String,
         turn_id: String,
+        operation_key: String,
     },
     Answer {
         approval_id: String,
         native_request_id: String,
         decision: String,
+        operation_key: String,
     },
     Interrupt {
         turn_id: String,
@@ -184,7 +186,11 @@ fn spawn_in_process_driver(
         let mut runner_seq = 0u64;
         loop {
             match commands.recv_timeout(Duration::from_millis(20)) {
-                Ok(RunnerCommand::Prompt { text, turn_id }) => {
+                Ok(RunnerCommand::Prompt {
+                    text,
+                    turn_id,
+                    operation_key: _,
+                }) => {
                     if let Err(error) = driver.send(AgentInput { text, turn_id }) {
                         emit(
                             &events,

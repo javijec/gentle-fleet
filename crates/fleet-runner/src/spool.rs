@@ -30,12 +30,52 @@ impl Spool {
                     operation_key TEXT PRIMARY KEY,
                     operation_id TEXT NOT NULL,
                     created_at INTEGER NOT NULL
+                 );
+                 /* Backpressure evidence survives a full spool; bounded. */
+                 CREATE TABLE IF NOT EXISTS notices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
                  );",
             )
             .map_err(|error| error.to_string())?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Registra evidencia durable de backpressure con capacidad propia: el
+    /// spool principal puede estar lleno, pero la saturación nunca se pierde
+    /// silenciosamente. Conserva como máximo las 16 últimas notas.
+    pub fn record_notice(&self, message: &str) -> Result<(), String> {
+        let mut connection = self.connection.lock().expect("spool poisoned");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO notices(message, created_at) VALUES(?1, ?2)",
+            params![message, now_ms() as i64],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM notices WHERE id IN
+             (SELECT id FROM notices ORDER BY id DESC LIMIT -1 OFFSET 16)",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    }
+
+    pub fn notices(&self) -> Result<Vec<String>, String> {
+        let connection = self.connection.lock().expect("spool poisoned");
+        let mut statement = connection
+            .prepare("SELECT message FROM notices ORDER BY id DESC LIMIT 16")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
     }
 
     fn unacked_count(&self) -> Result<(usize, usize), String> {

@@ -2,7 +2,7 @@
 
 mod spool;
 
-use std::io::{self, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -88,14 +88,35 @@ fn token_file(runner_id: &str) -> PathBuf {
     runtime_dir().join(format!("fleet-runner-{runner_id}.token"))
 }
 
+/// Test hook: touching this file simulates a dead native provider without
+/// killing the runner process. The probe is immediate so fail-closed does not
+/// wait for a blocked driver worker (e.g. an HTTP call with a 30s timeout).
+fn provider_dead_marker(runner_id: &str) -> PathBuf {
+    runtime_dir().join(format!("fleet-runner-{runner_id}.provider-dead"))
+}
+
 fn prepare_token(runner_id: &str) -> io::Result<String> {
-    use std::os::unix::fs::PermissionsExt;
     let path = token_file(runner_id);
     // A newly spawned runner must have a fresh secret. Old PID-based tokens
     // were predictable; token continuity is only needed while THIS process lives.
     let token = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&path, token.as_bytes())?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+    file.write_all(token.as_bytes())?;
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    // Windows: el directorio de runtime es privado; la ACL del fichero queda
+    // pendiente de validación en esa plataforma.
     Ok(token)
 }
 
@@ -304,12 +325,12 @@ fn append_with_backpressure(spool: &Spool, event: AgentEvent) {
             Ok(_) => return,
             Err(_error) if _error == "spool_full" => {
                 // Emitir evidencia de saturación en cuanto haya hueco reservado.
-                let notice = AgentEvent {
-                    kind: DomainEvent::AgentError {
-                        message: format!("runner spool full ({MAX_SPOOL_EVENTS} events); operations suspended until daemon ACK"),
-                    },
-                };
-                let _ = spool.append(&notice);
+                let message = format!(
+                    "runner spool full ({MAX_SPOOL_EVENTS} events); operations suspended until daemon ACK"
+                );
+                if let Err(error) = spool.record_notice(&message) {
+                    eprintln!("runner could not persist backpressure notice: {error}");
+                }
                 std::thread::sleep(Duration::from_millis(200));
             }
             Err(_error) => {
@@ -400,7 +421,8 @@ fn serve_daemon(
                 protocol_version: RUNNER_WIRE.into(),
             }),
             RunnerRequest::Status => {
-                let alive = provider_alive.load(Ordering::Acquire);
+                let alive = provider_alive.load(Ordering::Acquire)
+                    && !provider_dead_marker(&identity.runner_id).exists();
                 Ok(RunnerResponse::Status {
                     status: if alive {
                         RunnerStatus::Active
@@ -412,6 +434,7 @@ fn serve_daemon(
                     last_ack_seq: spool.last_ack()?,
                     pending_count: spool.pending_count()?,
                     provider_alive: alive,
+                    notices: spool.notices()?,
                 })
             }
             RunnerRequest::Pending { since_seq, limit } => Ok(RunnerResponse::Pending {
@@ -424,6 +447,7 @@ fn serve_daemon(
                     last_ack_seq: spool.last_ack()?,
                     pending_count: spool.pending_count()?,
                     provider_alive: provider_alive.load(Ordering::Acquire),
+                    notices: spool.notices()?,
                 })
             }
             RunnerRequest::Submit {
@@ -434,13 +458,16 @@ fn serve_daemon(
                 let duplicate = spool.reserve_operation(&operation_key, &operation_id)?;
                 if !duplicate {
                     let (native, answer_done) = match command {
-                        RunnerCommand::Prompt { text, turn_id } => {
-                            (DriverCommand::Prompt { text, turn_id }, None)
-                        }
+                        RunnerCommand::Prompt {
+                            text,
+                            turn_id,
+                            operation_key: _,
+                        } => (DriverCommand::Prompt { text, turn_id }, None),
                         RunnerCommand::Answer {
                             approval_id,
                             native_request_id,
                             decision,
+                            operation_key: _,
                         } => {
                             let (done_tx, done_rx) = std::sync::mpsc::channel();
                             (
@@ -553,6 +580,7 @@ impl StatusStr for RunnerStatus {
             RunnerStatus::Disconnected => "disconnected",
             RunnerStatus::Recovering => "recovering",
             RunnerStatus::Stopping => "stopping",
+            RunnerStatus::StopUnconfirmed => "stop_unconfirmed",
             RunnerStatus::Stopped => "stopped",
             RunnerStatus::Lost => "lost",
             RunnerStatus::Uncertain => "uncertain",

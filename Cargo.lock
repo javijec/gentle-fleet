@@ -137,6 +137,7 @@ dependencies = [
  "fleet-protocol",
  "rusqlite",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

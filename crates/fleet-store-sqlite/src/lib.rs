@@ -420,7 +420,7 @@ impl SessionStore for SqliteStore {
                     ELSE sessions.turn_state
                 END,
                 updated_at=?1
-             WHERE state IN ('running','stopping','stop_unconfirmed')",
+             WHERE state IN ('running','stopping','stop_unconfirmed','recovering')",
             params![now_ms() as i64],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
@@ -1284,6 +1284,7 @@ fn runner_status_text(status: RunnerStatus) -> &'static str {
         RunnerStatus::Disconnected => "disconnected",
         RunnerStatus::Recovering => "recovering",
         RunnerStatus::Stopping => "stopping",
+        RunnerStatus::StopUnconfirmed => "stop_unconfirmed",
         RunnerStatus::Stopped => "stopped",
         RunnerStatus::Lost => "lost",
         RunnerStatus::Uncertain => "uncertain",
@@ -1297,6 +1298,7 @@ fn parse_runner_status(value: &str) -> RunnerStatus {
         "disconnected" => RunnerStatus::Disconnected,
         "recovering" => RunnerStatus::Recovering,
         "stopping" => RunnerStatus::Stopping,
+        "stop_unconfirmed" => RunnerStatus::StopUnconfirmed,
         "stopped" => RunnerStatus::Stopped,
         "lost" => RunnerStatus::Lost,
         _ => RunnerStatus::Uncertain,

@@ -145,6 +145,7 @@ pub enum RunnerStatus {
     Disconnected,
     Recovering,
     Stopping,
+    StopUnconfirmed,
     Stopped,
     Lost,
     Uncertain,

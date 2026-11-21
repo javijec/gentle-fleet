@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0, P1, P1.1, P2 y P3 CERRADOS EN LINUX** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 hasta completar P6**; la validación funcional de Windows y macOS se realiza en P7, sin declarar compatibilidad antes. Codex y Gentle Shell/Pi quedan para P4. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md` y `docs/P3_RESULTS.md`.
+**Estado:** **P0, P1, P1.1, P2 y P3 CERRADOS EN LINUX; P4.0 COMPLETADO (investigación y contratos)** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 hasta completar P6**; la validación funcional de Windows y macOS se realiza en P7, sin declarar compatibilidad antes. P4.1–P4.4 siguen pendientes: **no se ha implementado ningún driver nuevo**. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md`, `docs/P3_RESULTS.md` y entregables P4.0 (`docs/P4_PROVIDER_MATRIX.md`, `docs/P4_RPC_RESEARCH.md`, `docs/P4_CONTRACT_DESIGN.md`, `docs/P4_TEST_PLAN.md`).
 
 ## Estrategia de plataforma
 
@@ -17,7 +17,11 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P1.1 — Estabilización y concurrencia ✅ **CERRADO** | Sesiones y eventos aislados, un turno activo por sesión, idempotencia atómica, stop acotado, transporte local por usuario y colas acotadas | Cumplido: 15 tests unitarios, e2e de aislamiento/carrera/backpressure/ACL y smoke real con OpenCode; ver `docs/P1_1_RESULTS.md` |
 | P2 — Permisos y timeline ✅ **CERRADO** | SQLite WAL con migraciones, timeline paginada por cursor, operaciones idempotentes y aprobaciones de OpenCode | Cumplido: 25 tests unitarios, e2e de persistencia/reinicio, aprobaciones con un ganador y smoke real con `once`/`reject`; ver `docs/P2_RESULTS.md` |
 | P3 — Persistencia de procesos ✅ **CERRADA EN LINUX** | `fleet-runner` independiente, reattach autenticado y spool acotado | Cumplido en Linux: supervivencia ante SIGKILL de `fleetd`, reattach autenticado, replay durable sin duplicados, aprobaciones consistentes, spool acotado con backpressure, CI y smokes reales de OpenCode. Ver `docs/P3_RESULTS.md`. Windows/macOS: validación funcional en P7 |
-| P4 — Drivers adicionales | Codex y después Gentle Shell/Pi integrados usando la interfaz de capacidades, sin cambiar el gestor de sesiones | Misma suite de contrato para los tres drivers; funciones no soportadas visibles; resume declarado por versión |
+| P4.0 — Investigación y contratos ✅ **COMPLETADO** | Versiones reales, protocolos y contratos propuestos para Codex, Pi y Gentle Shell, sin implementar drivers | Cuatro entregables producidos y validación Rust en verde; decisiones funcionales de `docs/P4_SPEC.md` intactas |
+| P4.1 — Codex | Driver App Server con aprobaciones tipadas, historial y controles según versión 0.171.0 | Criterios de `docs/P4_TEST_PLAN.md` §3; sin confundir `thread/resume` con turno en vuelo |
+| P4.2 — Pi estándar | Driver Pi RPC 1.6.0, proceso propio, `agent_settled` e historial | Criterios de `docs/P4_TEST_PLAN.md` §3; independiente de extensiones Gentle |
+| P4.3 — Gentle Shell | Proveedor propio con Desktop RPC negociado, permisos nativos y controles de solo lectura | Criterios de `docs/P4_TEST_PLAN.md` §3; subagentes y GPUI fuera de alcance |
+| P4.4 — Conformidad | Suite matrix-driven para cuatro proveedores y regresiones P1–P3 | Criterios de `docs/P4_TEST_PLAN.md` §3; OpenCode como línea base |
 | P5 — Cliente remoto | Cliente local conecta a Fleet en otro host vía SSH autenticado, misma API | Caída de SSH y reconexión; no se inicia worker duplicado; sin TCP abierto |
 | P6 — SDK y GPUI | Cliente de escritorio consume Fleet SDK, sin acceso interno a runners | Tests SDK, chat, permisos, desconexión y cambio de host |
 | P7 — Endurecimiento y release | Empaquetado, instalación, límites, backups, migraciones y telemetría local | Suite de fallas, carga, validación funcional de Windows y macOS, docs y recuperación de datos |

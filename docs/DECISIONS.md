@@ -50,6 +50,21 @@ requiere el caso de uso, reproducción y comparación de la regla existente.
 
 Estas decisiones extienden D02/D03/D05/D09 sin cambiar `AgentDriver` ni el wire público más que en lo imprescindible.
 
+## Investigación P4.0 (22/11/2026) — sin decisiones funcionales nuevas
+
+P4.0 no modifica D01–D12, P0-D1…D6 ni P3-D1…D8, y **no ratifica** las propuestas técnicas de [`P4_CONTRACT_DESIGN.md`](P4_CONTRACT_DESIGN.md). Las 18 decisiones funcionales aprobadas siguen siendo las de [`P4_SPEC.md`](P4_SPEC.md). Registro de hallazgos que condicionarán la ratificación en P4.1–P4.4:
+
+| Hallazgo | Consecuencia para decisiones futuras |
+|---|---|
+| Versiones reales: Codex 0.171.0, Pi estándar 1.6.0, Gentle Shell 4.8.0 (Pi 1.5.2) | P0-D5 (compatibilidad por rango y evidencia por versión) se aplica con dos binarios Pi distintos; no se atribuyen capacidades de uno al otro |
+| APIS estructuradas sin servidor HTTP público en los proveedores nuevos | P0-D3 se refuerza: el runner posee el proceso/servicio; `fleetd` sigue sin importar protocolos nativos |
+| Codex: `turn/steer` exige turno activo en el mismo proceso; `thread/resume` es solo historial | D09 se aplica sin excepción: recuperar historial ≠ recuperar un turno en vuelo; este último no existe en los tres proveedores nuevos |
+| Codex `availableDecisions` y Gentle `select` devuelven opciones parametrizadas | F08 exige contrato propio tipado antes de P4.1; no reutilizar el par `once/always/reject` de OpenCode como universal |
+| Gentle `session_snapshot` no se negocia en sesión efímera | F04/F14 requieren negociación por sesión y fallback `get_snapshot`; no hardcodear inventario de métodos |
+| Rutas de `stop` publican errores nativos sin redactar | D04/P0-D6 requieren arreglo local con test de regresión antes de añadir tres drivers |
+
+Las contradicciones con documentación P0 (deriva de versión de Pi y resolución de inventario Gentle) se registran con propuesta de nota en [`P4_PROVIDER_MATRIX.md`](P4_PROVIDER_MATRIX.md) §5; no se han borrado las evidencias P0.
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

@@ -7,6 +7,8 @@ documentos por motor: aquí se clasifican y se enlaza la evidencia.
 Plataforma: **Linux x86_64**. Versiones: Gentle Shell `4.8.0` / Pi `1.5.2`,
 Codex `0.171.0`, OpenCode `2.3.2`. Windows no fue probado en ningún caso.
 
+> **Nota P4.0 (22/11/2026):** P4.0 detectó además el `pi` estándar `1.6.0` (distinto del Pi `1.5.2` de Gentle Shell). `new_session` quedó VERIFIED en 1.6.0; `list_sessions` se probó con `sessions_unavailable` en sesión efímera; el inventario de capacidades de Gentle Shell quedó completo (23 métodos, 9 eventos). Ver [`../P4_PROVIDER_MATRIX.md`](../P4_PROVIDER_MATRIX.md) §5.
+
 Etiquetas: **VERIFIED** (aserción automática o salida de comando conservada),
 **OBSERVED** (visto en ejecución real sin aserción), **UNTESTED** (sin prueba),
 **UNSUPPORTED** (rechazado o ausente en la versión probada). Definición completa

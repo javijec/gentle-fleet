@@ -5,6 +5,8 @@
 [`PROVIDER_COMPARISON.md`](PROVIDER_COMPARISON.md). Todas las afirmaciones
 aquí van acompañadas de una referencia de evidencia `[PI-E#]`.
 
+> **Nota P4.0 (22/11/2026):** este documento describe el Pi `1.5.2` embebido en Gentle Shell `4.8.0`. El `pi` estándar del PATH es **`1.6.0`**, un binario distinto con comandos adicionales (`get_entries`, `get_tree`, `bash`, `set_*_mode`, compact/retry) y sin modelo configurado en este entorno. El inventario completo de capacidades de Gentle Shell (23 métodos y 9 eventos) y la corrección sobre Extension UI están en [`../P4_PROVIDER_MATRIX.md`](../P4_PROVIDER_MATRIX.md) §5 y [`../P4_RPC_RESEARCH.md`](../P4_RPC_RESEARCH.md) §2–§3. Las evidencias P0 se conservan sin modificar.
+
 ## Versiones y evidencia
 
 | Dato | Valor | Evidencia |

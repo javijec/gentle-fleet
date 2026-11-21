@@ -3,6 +3,8 @@
 Documento de investigación. **No fija el contrato Fleet ni ratifica decisiones.**
 Plataforma de todas las pruebas: **Linux x86_64**. Windows no fue probado.
 
+> **Nota P4.0 (22/11/2026):** las versiones de esta tabla son las del spike P0. El `pi` estándar medido en P4.0 es **`1.6.0`**, distinto del Pi `1.5.2` que envuelve Gentle Shell `4.8.0`. Codex sigue en `0.171.0` (714 definiciones de esquema v2) y OpenCode en `2.3.2`. La matriz por versión y las contradicciones resueltas están en [`../P4_PROVIDER_MATRIX.md`](../P4_PROVIDER_MATRIX.md) §1 y §5.
+
 ## Convenciones de evidencia
 
 | Etiqueta | Significado |

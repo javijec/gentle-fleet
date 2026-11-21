@@ -106,6 +106,17 @@ La recuperación exacta después de reinicio de host depende del proveedor, no s
 
 En MVP fijar valores configurables moderados: máximo 4 runners activos, 2 operaciones en ejecución por host en el primer driver, colas por cliente y spool con límites explícitos. Cuando se saturen, rechazar o pausar con error estable; no crear un hilo OS por cliente sin control de admisión.
 
+## P4.0 — puntos de extensión investigados (sin cambios de código)
+
+La investigación de P4.0 (22/11/2026) confirma que la topología actual aguanta tres proveedores nuevos sin tocar `SessionManager`: el driver vive dentro de `fleet-runner`, el daemon solo habla el wire tipado y `ProviderRegistry` es el único registro. Las brechas no son de forma general sino de contrato: faltan descriptores de control, decisiones de aprobación tipadas y operaciones de adopción/importación con procedencia. El análisis con alternativas y recomendaciones está en [`P4_CONTRACT_DESIGN.md`](P4_CONTRACT_DESIGN.md); la evidencia por proveedor y versión en [`P4_PROVIDER_MATRIX.md`](P4_PROVIDER_MATRIX.md) y [`P4_RPC_RESEARCH.md`](P4_RPC_RESEARCH.md).
+
+Dos consecuencias arquitectónicas a respetar en los próximos cortes:
+
+- La elección de propiedad no cambia: el runner que posee el proceso sigue siendo dueño del spool y del ACK; `fleetd` no importa protocolos nativos. Las nuevas operaciones (control, adopción, importación) deben viajar por el mismo `RunnerCommand`/`RunnerRequest` tipados y ser idempotentes por `operation_key`.
+- La recuperación deja de ser un bool: importar historial, reanudar un proceso nativo, reattach de un runner vivo y recuperar un turno en vuelo son operaciones distintas. Solo el reattach está demostrado (P3); Codex no ofrece turno en vuelo entre procesos y Pi/Gentle dependen del runner poseedor.
+
+No se han creado crates, tablas ni migraciones en P4.0: la tabla de vínculo de adopción (V4) y las operaciones wire se propondrán solo cuando un corte ejecute el caso de uso real. Tampoco se toma Gentle Shell GPUI como referencia (P4-F17).
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

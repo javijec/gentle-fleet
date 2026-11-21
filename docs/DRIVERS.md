@@ -61,3 +61,13 @@ A cada driver se le aplican los mismos tests de contrato: discover, start en cwd
 ## Selección de implementación
 
 P0 mide qué driver puede completar el primer flujo con menos traducción y sin hacks. Elegir uno para P1 **por evidencia, no por familiaridad**. Los otros dos se implementan en P4 reutilizando pruebas de contrato, sin tocar SessionManager ni el wire Fleet.
+
+## P4.0 — resultado de la investigación (22/11/2026)
+
+El núcleo de esta interfaz se mantiene: `AgentDriver`, `DriverFactory` y `ProviderRegistry` siguen siendo el punto de extensión y `SessionManager` no gana ramas por proveedor. P4.0 **no ha cambiado firmas ni ha creado crates**. La investigación sí demostró tres carencias que los nuevos drivers encontrarían de inmediato: (1) no hay forma de consultar/cambiar modelo, esfuerzo, modo o perfil; (2) las aprobaciones se reducen a `Vec<String>` + un `decision: String`, insuficiente para las decisiones parametrizadas de Codex; (3) no existe enumeración/adopción de sesiones nativas ni importación de historial con procedencia.
+
+Las propuestas con alternativas, severidad y impacto están en [`P4_CONTRACT_DESIGN.md`](P4_CONTRACT_DESIGN.md); el inventario de capacidades verificado por versión en [`P4_PROVIDER_MATRIX.md`](P4_PROVIDER_MATRIX.md) y el detalle de protocolos en [`P4_RPC_RESEARCH.md`](P4_RPC_RESEARCH.md). Los nombres concretos de traits y operaciones **no están ratificados**: se fijarán en el corte que implemente cada caso de uso probado (P4_SPEC §5 y §98).
+
+Correcciones locales recomendadas antes de P4.1: redactar los IDs nativos en las rutas de `stop` (hoy `fleet-core` publica `error`/`reason` crudos) y conectar el `RunnerCommand::Interrupt` ya existente a `AgentDriver::interrupt`, que hoy es no-op en ambos bucles. Ambas tienen prueba de regresión prevista en [`P4_TEST_PLAN.md`](P4_TEST_PLAN.md).
+
+Nota de versión: los datos P0 de esta sección corresponden a Pi `1.5.2` dentro de Gentle Shell `4.8.0` y Codex `0.171.0`. El `pi` estándar del PATH es **`1.6.0`**; ver matriz P4 antes de atribuir capacidades a "Pi".

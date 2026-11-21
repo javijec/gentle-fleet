@@ -44,6 +44,10 @@ pub trait RunnerHandle: Send + Sync {
     fn submit(&self, command: RunnerCommand) -> Result<(), AgentError>;
     fn recv(&self, timeout: Duration) -> Result<Option<RunnerEvent>, AgentError>;
     fn ack(&self, runner_seq: u64) -> Result<(), AgentError>;
+    /// Probe the provider, not merely whether its IPC socket still exists.
+    fn provider_alive(&self) -> Result<bool, AgentError> {
+        Ok(true) // local FakeDriver contract; process runner overrides it
+    }
     fn close(&self) -> Result<(), AgentError>;
 }
 

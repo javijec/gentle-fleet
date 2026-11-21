@@ -199,6 +199,16 @@ impl RunnerHandle for ProcessHandle {
         Ok(())
     }
 
+    fn provider_alive(&self) -> Result<bool, AgentError> {
+        match self.rpc(RunnerRequest::Status)? {
+            RunnerResponse::Status { provider_alive, .. } => Ok(provider_alive),
+            other => Err(AgentError {
+                code: "unexpected_runner_response".into(),
+                message: format!("{other:?}"),
+            }),
+        }
+    }
+
     fn close(&self) -> Result<(), AgentError> {
         self.rpc(RunnerRequest::Shutdown)?;
         if let Some(mut child) = self.child.lock().expect("child poisoned").take() {

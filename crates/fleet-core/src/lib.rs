@@ -708,19 +708,20 @@ impl SessionManager {
             updated_at_ms: now_ms(),
         };
         let committed = match runner_source {
-            Some((runner_id, runner_seq)) => self.store
-                .commit_runner_event(runner_id, runner_seq, &event, &projection, approval)
-                .map(|created| created),
+            Some((runner_id, runner_seq)) => self
+                .store
+                .commit_runner_event(runner_id, runner_seq, &event, &projection, approval),
             None => self.store.commit_event(&event, &projection, approval).map(|_| true),
         };
-        if let Err(error) = committed {
-            // The driver may still have side effects, but Fleet cannot safely
-            // acknowledge or start another operation while durable evidence is
-            // unavailable. The next daemon start marks in-flight work uncertain.
-            state.storage_fault = Some(error.message.clone());
-            return Err(to_agent_error(error));
-        }
-        if committed.expect("committed event checked").then_some(()).is_some() {
+        let created = match committed {
+            Ok(created) => created,
+            Err(error) => {
+                // Do not publish or advance the sequence on failed persistence.
+                state.storage_fault = Some(error.message.clone());
+                return Err(to_agent_error(error));
+            }
+        };
+        if created {
             state
                 .sessions
                 .get_mut(session_id)

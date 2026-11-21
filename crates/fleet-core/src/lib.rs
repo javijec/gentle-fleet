@@ -1171,9 +1171,10 @@ impl SessionManager {
                     if !scoped_turn(&turn_id) {
                         return Ok(None);
                     }
-                    operation_update = record.current_operation.clone().map(|id| {
-                        (id, OperationStatus::Uncertain, Some(reason.clone()))
-                    });
+                    operation_update = record
+                        .current_operation
+                        .clone()
+                        .map(|id| (id, OperationStatus::Uncertain, Some(reason.clone())));
                     record.summary.turn_state = TurnState::Uncertain;
                     EventKind::TurnUncertain {
                         turn_id,

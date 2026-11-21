@@ -4,6 +4,7 @@ mod spool;
 
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -82,12 +83,9 @@ fn token_file(runner_id: &str) -> PathBuf {
 fn prepare_token(runner_id: &str) -> io::Result<String> {
     use std::os::unix::fs::PermissionsExt;
     let path = token_file(runner_id);
-    if let Ok(token) = std::fs::read_to_string(&path) {
-        if !token.is_empty() {
-            return Ok(token);
-        }
-    }
-    let token = format!("runner-{}-{}", runner_id, std::process::id());
+    // A newly spawned runner must have a fresh secret. Old PID-based tokens
+    // were predictable; token continuity is only needed while THIS process lives.
+    let token = uuid::Uuid::new_v4().to_string();
     std::fs::write(&path, token.as_bytes())?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     Ok(token)
@@ -95,8 +93,8 @@ fn prepare_token(runner_id: &str) -> io::Result<String> {
 
 fn main() -> io::Result<()> {
     let args = parse_args();
-    let token = prepare_token(&args.runner_id)?;
     let listener = LocalListener::bind_named(&format!("fleet-runner-{}", args.runner_id))?;
+    let token = prepare_token(&args.runner_id)?;
     let spool = Arc::new(
         Spool::open(&runtime_dir().join(format!("fleet-runner-{}.spool.sqlite", args.runner_id)))
             .map_err(io::Error::other)?,
@@ -106,7 +104,7 @@ fn main() -> io::Result<()> {
         session_id: args.session_id.clone(),
         provider_id: args.provider_id.clone(),
         host_id: std::env::var("FLEET_HOST_ID").unwrap_or_else(|_| "local-host".into()),
-        boot_id: format!("boot-{}", std::process::id()),
+        boot_id: uuid::Uuid::new_v4().to_string(),
         pid: std::process::id(),
         protocol_version: RUNNER_WIRE.into(),
         generation: 1,
@@ -118,6 +116,8 @@ fn main() -> io::Result<()> {
 
     let (commands, command_rx) = mpsc::channel();
     let (closed_tx, closed_rx) = mpsc::channel();
+    let (startup_tx, startup_rx) = mpsc::channel();
+    let provider_alive = Arc::new(AtomicBool::new(false));
     let closed_rx = Arc::new(Mutex::new(closed_rx));
     let pending_approvals: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     spawn_driver_loop(
@@ -126,8 +126,14 @@ fn main() -> io::Result<()> {
         command_rx,
         Arc::clone(&spool),
         Arc::clone(&pending_approvals),
+        Arc::clone(&provider_alive),
+        startup_tx,
         closed_tx,
     );
+    startup_rx
+        .recv_timeout(Duration::from_secs(60))
+        .map_err(|error| io::Error::other(format!("driver startup unconfirmed: {error}")))?
+        .map_err(io::Error::other)?;
 
     loop {
         match listener.accept() {
@@ -140,6 +146,7 @@ fn main() -> io::Result<()> {
                     commands.clone(),
                     Arc::clone(&pending_approvals),
                     Arc::clone(&closed_rx),
+                    Arc::clone(&provider_alive),
                 ) {
                     eprintln!("runner connection ended: {error}");
                 }
@@ -155,12 +162,23 @@ fn spawn_driver_loop(
     commands: Receiver<DriverCommand>,
     spool: Arc<Spool>,
     pending_approvals: Arc<Mutex<Vec<String>>>,
+    provider_alive: Arc<AtomicBool>,
+    startup: Sender<Result<(), String>>,
     closed_tx: Sender<()>,
 ) {
     std::thread::spawn(move || {
+        // Panic or unexpected thread exit must not leave a stale true flag.
+        struct AliveGuard(Arc<AtomicBool>);
+        impl Drop for AliveGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _guard = AliveGuard(Arc::clone(&provider_alive));
         let mut driver = match registry.create(&args.provider_id) {
             Ok(driver) => driver,
             Err(error) => {
+                let _ = startup.send(Err(error.to_string()));
                 eprintln!("runner cannot create driver: {error}");
                 return;
             }
@@ -169,10 +187,20 @@ fn spawn_driver_loop(
             workspace: args.workspace.clone(),
             mode: fleet_domain::RunnerMode::Auto,
         }) {
+            let _ = startup.send(Err(error.to_string()));
             eprintln!("runner driver open failed: {error}");
             return;
         }
+        provider_alive.store(true, Ordering::Release);
+        let _ = startup.send(Ok(()));
+        let mut last_probe = std::time::Instant::now();
         loop {
+            // inspect_recovery is called on the worker (never on the IPC
+            // thread), so IPC Status remains responsive even for a slow probe.
+            if last_probe.elapsed() >= Duration::from_secs(2) {
+                provider_alive.store(driver.inspect_recovery().session_alive, Ordering::Release);
+                last_probe = std::time::Instant::now();
+            }
             match commands.recv_timeout(Duration::from_millis(20)) {
                 Ok(DriverCommand::Prompt { text, turn_id }) => {
                     if let Err(error) = driver.send(fleet_agent::AgentInput { text, turn_id }) {
@@ -209,8 +237,15 @@ fn spawn_driver_loop(
                 }
                 Ok(DriverCommand::Interrupt { .. }) => {}
                 Ok(DriverCommand::Stop) => {
-                    let _ = driver.close();
-                    let _ = closed_tx.send(());
+                    match driver.close() {
+                        Ok(()) => {
+                            provider_alive.store(false, Ordering::Release);
+                            let _ = closed_tx.send(());
+                        }
+                        Err(error) => {
+                            eprintln!("runner driver close not confirmed: {error}");
+                        }
+                    }
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -299,6 +334,7 @@ fn serve_daemon(
     commands: Sender<DriverCommand>,
     pending_approvals: Arc<Mutex<Vec<String>>>,
     closed_rx: Arc<Mutex<Receiver<()>>>,
+    provider_alive: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut writer = BufWriter::new(stream);
@@ -341,17 +377,24 @@ fn serve_daemon(
         let result: Result<RunnerResponse, String> = match request {
             RunnerRequest::Hello { .. } => Ok(RunnerResponse::Hello {
                 identity: identity.clone(),
-                status: RunnerStatus::Active.as_str().into(),
+                status: if provider_alive.load(Ordering::Acquire) {
+                    RunnerStatus::Active.as_str()
+                } else {
+                    RunnerStatus::Uncertain.as_str()
+                }.into(),
                 last_ack_seq: spool.last_ack()?,
                 pending_count: spool.pending_count()?,
                 protocol_version: RUNNER_WIRE.into(),
             }),
-            RunnerRequest::Status => Ok(RunnerResponse::Status {
-                status: RunnerStatus::Active.as_str().into(),
-                last_ack_seq: spool.last_ack()?,
-                pending_count: spool.pending_count()?,
-                provider_alive: true,
-            }),
+            RunnerRequest::Status => {
+                let alive = provider_alive.load(Ordering::Acquire);
+                Ok(RunnerResponse::Status {
+                    status: if alive { RunnerStatus::Active } else { RunnerStatus::Uncertain }.as_str().into(),
+                    last_ack_seq: spool.last_ack()?,
+                    pending_count: spool.pending_count()?,
+                    provider_alive: alive,
+                })
+            },
             RunnerRequest::Pending { since_seq, limit } => Ok(RunnerResponse::Pending {
                 events: spool.pending(since_seq, limit.min(MAX_SPOOL_EVENTS))?,
             }),
@@ -361,7 +404,7 @@ fn serve_daemon(
                     status: RunnerStatus::Active.as_str().into(),
                     last_ack_seq: spool.last_ack()?,
                     pending_count: spool.pending_count()?,
-                    provider_alive: true,
+                    provider_alive: provider_alive.load(Ordering::Acquire),
                 })
             }
             RunnerRequest::Submit {

@@ -842,13 +842,22 @@ impl AgentDriver for OpenCodeDriver {
     }
 
     fn inspect_recovery(&self) -> RecoveryEvidence {
+        // A native session ID alone does not prove the service is alive.
+        let session_alive = match (&self.base_url, &self.native_session_id, self.auth()) {
+            (Some(base), Some(native), Ok(auth)) => self
+                .client()
+                .get(format!("{base}/api/session/{native}"))
+                .header("Authorization", auth)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .is_ok_and(|response| response.status().is_success()),
+            _ => false,
+        };
         RecoveryEvidence {
-            session_alive: self.native_session_id.is_some(),
+            session_alive,
             detail: format!(
-                "mode={:?} version={} native_session_present={}",
-                self.descriptor.mode,
-                self.descriptor.version.text,
-                self.native_session_id.is_some()
+                "mode={:?} version={} native_session_reachable={session_alive}",
+                self.descriptor.mode, self.descriptor.version.text,
             ),
         }
     }

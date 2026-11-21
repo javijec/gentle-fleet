@@ -15,3 +15,4 @@ fleet-protocol = { path = "../fleet-protocol" }
 fleet-driver-opencode = { path = "../fleet-driver-opencode" }
 rusqlite.workspace = true
 serde_json.workspace = true
+uuid.workspace = true

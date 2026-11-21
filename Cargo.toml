@@ -8,6 +8,7 @@ members = [
   "crates/fleet-store-sqlite",
   "crates/fleet-driver-opencode",
   "crates/fleet-driver-codex",
+  "crates/fleet-driver-pi",
   "crates/fleet-providers",
   "crates/fleetd",
   "crates/fleetctl",

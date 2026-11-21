@@ -1,0 +1,12 @@
+[package]
+name = "fleet-driver-pi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }
+fleet-agent = { path = "../fleet-agent" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

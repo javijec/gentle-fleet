@@ -128,6 +128,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-driver-pi"
+version = "0.1.0"
+dependencies = [
+ "fleet-agent",
+ "fleet-domain",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "fleet-protocol"
 version = "0.1.0"
 dependencies = [
@@ -145,6 +156,7 @@ dependencies = [
  "fleet-domain",
  "fleet-driver-codex",
  "fleet-driver-opencode",
+ "fleet-driver-pi",
 ]
 
 [[package]]

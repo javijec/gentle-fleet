@@ -1975,6 +1975,9 @@ impl SessionManager {
             .into_iter()
             .find(|control| control.name == name)
             .ok_or_else(|| AgentError::unsupported(name))?;
+        if !control.mutable {
+            return Err(AgentError::unsupported("read-only native control"));
+        }
         if !control.available.iter().any(|item| item == value) {
             return Err(AgentError {
                 code: "InvalidArgument".into(),

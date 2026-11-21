@@ -411,7 +411,14 @@ impl SessionStore for SqliteStore {
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         tx.execute(
-            "UPDATE sessions SET state='needs_reconciliation', turn_state='uncertain',
+            "UPDATE sessions SET state='needs_reconciliation',
+                turn_state=CASE
+                    WHEN EXISTS(
+                        SELECT 1 FROM turns
+                        WHERE turns.session_id=sessions.session_id AND turns.state='uncertain'
+                    ) THEN 'uncertain'
+                    ELSE sessions.turn_state
+                END,
                 updated_at=?1
              WHERE state IN ('running','stopping','stop_unconfirmed')",
             params![now_ms() as i64],

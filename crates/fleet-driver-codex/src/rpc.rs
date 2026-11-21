@@ -199,14 +199,20 @@ impl RpcClient {
                 }
                 match read_line_bounded(&mut reader) {
                     Ok(Some(line)) => {
-                        if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                            classify(
+                        match serde_json::from_str::<Value>(&line) {
+                            Ok(value) => classify(
                                 value,
                                 &reader_pending,
                                 &notification_tx,
                                 &server_tx,
                                 &reader_dropped,
-                            );
+                            ),
+                            Err(_) => {
+                                // Un frame inválido invalida la correlación y
+                                // puede esconder un terminal. Fallar cerrado:
+                                // next_event observa reader_alive=false.
+                                break;
+                            }
                         }
                     }
                     Ok(None) => break,
@@ -331,6 +337,12 @@ impl RpcClient {
                     ));
                 }
                 Err(TryRecvError::Empty) => {}
+            }
+            if !self.reader_alive.load(Ordering::Acquire) {
+                break Err(RpcError::new(
+                    "provider_gone",
+                    "Codex RPC reader stopped before request completion",
+                ));
             }
             // Mientras esperamos un ACK, el productor puede enviar deltas y
             // requests de aprobación. Liberar ambas colas mantiene al lector

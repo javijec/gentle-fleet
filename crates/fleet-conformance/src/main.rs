@@ -23,9 +23,18 @@ fn main() {
                 .collect()
         });
 
+    let workspace_id = args.iter().position(|arg| arg == "--workspace")
+        .and_then(|index| args.get(index + 1))
+        .filter(|id| !id.starts_with('-') && !id.is_empty())
+        .cloned();
+    if workspace_id.is_none() {
+        eprintln!("ERROR: --workspace <registered-workspace-id> is required; refusing to run on a personal project");
+        std::process::exit(2);
+    }
     let options = Options {
         real,
         timeout: Duration::from_secs(120),
+        workspace_id,
     };
     let results = run_all(&providers, &options);
 
@@ -44,7 +53,16 @@ fn main() {
             );
         }
     }
-    if results.iter().any(|result| result.status == Status::Fail) {
+    let unsafe_result = results.iter().any(|result| result.status == Status::Fail)
+        || providers.iter().any(|provider| {
+            !results.iter().any(|r| r.provider == *provider
+                && r.check == "session_lifecycle" && r.status == Status::Pass)
+                || !results.iter().any(|r| r.provider == *provider
+                    && r.check == "two_client_replay" && r.status == Status::Pass)
+                || (real && !results.iter().any(|r| r.provider == *provider
+                    && r.check == "real_chat" && r.status == Status::Pass))
+        });
+    if unsafe_result {
         std::process::exit(1);
     }
 }

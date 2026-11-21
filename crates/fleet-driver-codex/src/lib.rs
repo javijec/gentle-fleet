@@ -459,7 +459,7 @@ impl AgentDriver for CodexDriver {
                         message: format!("unsupported turn control: {other}"),
                     });
                     return Ok(SendReceipt { accepted: false });
-                },
+                }
             }
         }
         let mut params = json!({

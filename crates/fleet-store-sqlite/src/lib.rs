@@ -1631,6 +1631,46 @@ mod tests {
     }
 
     #[test]
+    fn v3_database_migrates_to_v4_without_losing_persisted_sessions() {
+        let (store, path) = temp_store();
+        store
+            .save_workspace(&WorkspaceRecord {
+                id: "ws-v3".into(),
+                path: "/tmp/v3-workspace".into(),
+            })
+            .unwrap();
+        store
+            .save_session(&fleet_domain::store::SessionRecord {
+                session_id: "ses-v3".into(),
+                workspace_id: "ws-v3".into(),
+                provider_id: "opencode".into(),
+                state: SessionState::Running,
+                turn_state: TurnState::Idle,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+        drop(store);
+        // Simula una base escrita por la versión anterior del esquema.
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection
+                .execute_batch("DROP TABLE IF EXISTS session_controls; PRAGMA user_version = 3;")
+                .unwrap();
+        }
+        let migrated = SqliteStore::open(path).unwrap();
+        assert_eq!(migrated.health().unwrap().schema_version, 4);
+        assert!(migrated.get_session("ses-v3").unwrap().is_some());
+        migrated
+            .save_session_control("ses-v3", "effort", "high")
+            .unwrap();
+        let controls = migrated.list_session_controls("ses-v3").unwrap();
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].name, "effort");
+        assert_eq!(controls[0].value, "high");
+    }
+
+    #[test]
     fn events_are_durable_and_paged_by_cursor() {
         let (store, _) = temp_store();
         for seq in 1..=5 {

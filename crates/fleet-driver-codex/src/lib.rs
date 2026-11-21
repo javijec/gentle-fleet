@@ -800,6 +800,8 @@ impl DriverFactory for CodexFactory {
                     state: status.clone(),
                     activity: text(&thread, "updatedAt").unwrap_or_else(|| "unknown".into()),
                     can_resume_history: true,
+                    model: text(&thread, "model"),
+                    effort: text(&thread, "reasoningEffort"),
                     externally_active: loaded_ids.contains(&thread_id)
                         || status == "active"
                         || thread

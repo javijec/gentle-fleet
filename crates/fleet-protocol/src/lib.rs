@@ -290,6 +290,15 @@ mod tests {
     }
 
     #[test]
+    fn legacy_native_session_frames_still_deserialize() {
+        let old = r#"{"native_ref":"cx-1","workspace_hint":"/tmp/ws","state":"notLoaded","activity":"unknown","can_resume_history":true,"externally_active":false}"#;
+        let session: fleet_domain::NativeSessionInfo = serde_json::from_str(old).unwrap();
+        assert!(session.model.is_none());
+        assert!(session.effort.is_none());
+        assert!(!session.externally_active);
+    }
+
+    #[test]
     fn frame_roundtrip() {
         let frame = Frame::Request {
             request_id: "r1".into(),

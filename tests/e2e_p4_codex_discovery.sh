@@ -23,7 +23,7 @@ SES="$("$BIN/fleetctl" session create --workspace "$WS" --provider codex | cut -
 timeout 120 "$BIN/fleetctl" watch "$SES" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
 WATCH_PID=$!
 sleep 1
-"$BIN/fleetctl" prompt "$SES" 'Reply with exactly: HISTORY SEED.' >/dev/null
+"$BIN/fleetctl" prompt "$SES" 'Run the shell command `pwd` in the temporary workspace, then reply with exactly: HISTORY SEED.' >/dev/null
 wait "$WATCH_PID"
 grep -q $'turn_completed\tCompleted' "$RUNTIME/watch.out" || { echo "FAIL: seed turn incomplete"; exit 1; }
 echo '--- native sessions ---'
@@ -38,6 +38,10 @@ grep -Eq $'^imported\t[1-9][0-9]*$' "$RUNTIME/import.out" || { cat "$RUNTIME/imp
 "$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-before.out"
 BEFORE="$(grep -c $'history\t' "$RUNTIME/timeline-before.out" || true)"
 [[ "$BEFORE" -gt 0 ]] || { echo "FAIL: history events missing"; exit 1; }
+grep -q $'history\ttool\t' "$RUNTIME/timeline-before.out" || {
+  echo "FAIL: structured tool history was not imported"; cat "$RUNTIME/timeline-before.out"; exit 1;
+}
+echo 'PASS: structured tool events imported with provenance'
 "$BIN/fleetctl" import-history "$SES2" codex "$REF" fixed-op-key >"$RUNTIME/reimport.out"
 cmp -s "$RUNTIME/import.out" "$RUNTIME/reimport.out" || { echo "FAIL: reimport result changed"; exit 1; }
 "$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-after.out"

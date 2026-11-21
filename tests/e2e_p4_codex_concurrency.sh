@@ -37,4 +37,16 @@ grep -q 'turn_completed' "$RUNTIME/cx.out" || { echo "FAIL: Codex no terminal"; 
 # Ninguna sesión debe contaminar la timeline de la otra.
 ! grep -q 'CODEX OK' "$RUNTIME/oc.out" || { echo "FAIL: cross-provider leak"; exit 1; }
 ! grep -q 'OPENCODE OK' "$RUNTIME/cx.out" || { echo "FAIL: cross-provider leak"; exit 1; }
+echo '--- kill the Codex runner; OpenCode must keep working ---'
+CX_RUNNER="$(pgrep -f "fleet-runner --runner-id runner-$CX" | head -1)"
+[[ -n "$CX_RUNNER" ]] || { echo "FAIL: no Codex runner to fail"; exit 1; }
+kill -9 "$CX_RUNNER"
+sleep 1
+timeout 120 "$BIN/fleetctl" watch "$OC" --until-turn-end >"$RUNTIME/oc2.out" 2>"$RUNTIME/oc2.err" &
+W3=$!
+"$BIN/fleetctl" prompt "$OC" 'Reply with exactly: STILL ALIVE.' >/dev/null
+wait "$W3" || { echo "FAIL: OpenCode stopped after Codex runner died"; exit 1; }
+grep -q 'turn_completed' "$RUNTIME/oc2.out" || { echo "FAIL: no OpenCode terminal after provider failure"; exit 1; }
+echo 'PASS: Codex runner failure did not stop OpenCode'
+
 echo "PASS: concurrent OpenCode and Codex sessions"

@@ -203,11 +203,13 @@ fn native_sessions(args: &[String]) -> Result<(), String> {
         Response::NativeSessions { sessions } => {
             for session in sessions {
                 println!(
-                    "{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     session.native_ref,
                     session.workspace_hint.unwrap_or_else(|| "unknown".into()),
                     session.state,
                     session.activity,
+                    session.model.unwrap_or_else(|| "unknown".into()),
+                    session.effort.unwrap_or_else(|| "unknown".into()),
                     session.externally_active
                 );
             }

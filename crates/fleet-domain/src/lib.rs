@@ -13,6 +13,12 @@ pub struct NativeSessionInfo {
     pub state: String,
     pub activity: String,
     pub can_resume_history: bool,
+    /// Estado efectivo informado por el proveedor; la preferencia guardada en
+    /// Fleet no se presenta como valores aplicados sin esta evidencia.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
     /// No implica que Fleet pueda adoptar el proceso (F11/F12).
     pub externally_active: bool,
 }

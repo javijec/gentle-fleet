@@ -20,9 +20,8 @@ use fleet_agent::{
     NativeHistoryMessage, NativeSessionInfo, ProviderRegistry, RecoveryEvidence, SendReceipt,
 };
 use fleet_domain::{
-    ApprovalArgument, ControlState, DomainEvent, ProviderAvailability,
-    ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode, SessionState,
-    TurnStatus, VersionRange,
+    ApprovalArgument, ControlState, DomainEvent, ProviderAvailability, ProviderCapabilities,
+    ProviderDescriptor, ProviderVersion, RunnerMode, SessionState, TurnStatus, VersionRange,
 };
 use fleet_rpc_jsonl::{JsonlRpc, UiRequest};
 use serde_json::{json, Value};
@@ -386,7 +385,8 @@ impl GentleShellDriver {
                     match result {
                         Ok(data) if self.reconcile_desktop_snapshot(&data) => {
                             self.emit(DomainEvent::AgentNotice {
-                                message: "Desktop RPC snapshot reconciled for the current session".into(),
+                                message: "Desktop RPC snapshot reconciled for the current session"
+                                    .into(),
                             });
                         }
                         Ok(_) | Err(_) => {
@@ -401,7 +401,9 @@ impl GentleShellDriver {
             if event.event == "session_snapshot" {
                 if !self.reconcile_desktop_snapshot(&event.data) {
                     self.emit(DomainEvent::AgentNotice {
-                        message: "ignored Desktop RPC snapshot without matching native session identity".into(),
+                        message:
+                            "ignored Desktop RPC snapshot without matching native session identity"
+                                .into(),
                     });
                 }
                 continue;
@@ -496,7 +498,10 @@ impl AgentDriver for GentleShellDriver {
                 if uncertain {
                     self.emit(DomainEvent::TurnUncertain {
                         turn_id: input.turn_id.clone(),
-                        reason: format!("Gentle Shell native control outcome uncertain: {}", error.code),
+                        reason: format!(
+                            "Gentle Shell native control outcome uncertain: {}",
+                            error.code
+                        ),
                     });
                 } else {
                     self.emit(DomainEvent::TurnFailed {
@@ -506,9 +511,7 @@ impl AgentDriver for GentleShellDriver {
                 }
                 return Ok(SendReceipt { accepted: false });
             }
-            if self.get_control(&control.name)?.current.as_deref()
-                != Some(control.value.as_str())
-            {
+            if self.get_control(&control.name)?.current.as_deref() != Some(control.value.as_str()) {
                 self.emit(DomainEvent::TurnFailed {
                     turn_id: input.turn_id.clone(),
                     message: "Gentle Shell did not confirm the requested native control".into(),
@@ -587,7 +590,8 @@ impl AgentDriver for GentleShellDriver {
             }
             if let Some(frame) = frame {
                 if frame.get("type").and_then(Value::as_str) == Some("rpc_fatal_error") {
-                    let reason = text(&frame, "message").unwrap_or_else(|| "RPC framing failed".into());
+                    let reason =
+                        text(&frame, "message").unwrap_or_else(|| "RPC framing failed".into());
                     if let Some(turn_id) = self.mapper.fleet_turn.take() {
                         self.emit(DomainEvent::TurnUncertain {
                             turn_id,
@@ -748,17 +752,21 @@ impl AgentDriver for GentleShellDriver {
         self.rpc_mut()?
             .call(command, params, CALL_TIMEOUT)
             .map_err(map_rpc)?;
-        let models = self.rpc_mut()?
+        let models = self
+            .rpc_mut()?
             .call("get_available_models", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
-        let levels = self.rpc_mut()?
+        let levels = self
+            .rpc_mut()?
             .call("get_available_thinking_levels", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
-        let state = self.rpc_mut()?
+        let state = self
+            .rpc_mut()?
             .call("get_state", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
         let embedded = self
-            .descriptor.controls
+            .descriptor
+            .controls
             .iter()
             .find(|item| item.name == "embedded_pi")
             .cloned();
@@ -784,7 +792,6 @@ impl AgentDriver for GentleShellDriver {
         }
         Ok(effective)
     }
-
 }
 
 pub struct GentleShellFactory;
@@ -834,19 +841,16 @@ impl DriverFactory for GentleShellFactory {
         // del cache estático de una sesión abierta en otro proceso.
         let args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
-        let mut rpc = JsonlRpc::spawn_with_widgets(
-            &std::env::temp_dir(),
-            PROGRAM,
-            &args,
-            &environment,
-            true,
-        )
-        .map_err(map_rpc)?;
+        let mut rpc =
+            JsonlRpc::spawn_with_widgets(&std::env::temp_dir(), PROGRAM, &args, &environment, true)
+                .map_err(map_rpc)?;
         let mut desktop = DesktopClient::new();
         let result = (|| -> Result<Vec<NativeSessionInfo>, AgentError> {
             desktop.negotiate(&mut rpc).map_err(AgentError::from)?;
             if !desktop.capabilities.supports("list_sessions") {
-                return Err(AgentError::unsupported("Gentle Shell native session listing"));
+                return Err(AgentError::unsupported(
+                    "Gentle Shell native session listing",
+                ));
             }
             let data = desktop
                 .call(&mut rpc, "list_sessions", &json!({}), CALL_TIMEOUT)
@@ -860,8 +864,7 @@ impl DriverFactory for GentleShellFactory {
                 })?;
             let mut result = Vec::new();
             for item in sessions {
-                let Some(id) = text(item, "id").or_else(|| text(item, "sessionId"))
-                else {
+                let Some(id) = text(item, "id").or_else(|| text(item, "sessionId")) else {
                     continue;
                 };
                 result.push(NativeSessionInfo {
@@ -890,7 +893,6 @@ impl DriverFactory for GentleShellFactory {
         // Fallar cerrado antes que importar datos de otra sesión.
         Err(AgentError::unsupported(HISTORY_UNSUPPORTED))
     }
-
 }
 
 pub fn register_gentle_shell(registry: &mut ProviderRegistry) {
@@ -918,13 +920,11 @@ mod tests {
     fn snapshot_reconciliation_requires_native_session_identity() {
         let mut driver = GentleShellDriver::new();
         driver.native_session_id = Some("local-session".into());
-        assert!(!driver.reconcile_desktop_snapshot(
-            &json!({"seq": 24, "sessionId":"foreign-session"})
-        ));
+        assert!(
+            !driver.reconcile_desktop_snapshot(&json!({"seq": 24, "sessionId":"foreign-session"}))
+        );
         assert!(!driver.reconcile_desktop_snapshot(&json!({"seq":24})));
-        assert!(!driver.reconcile_desktop_snapshot(
-            &json!({"seq":0, "sessionId":"local-session"})
-        ));
+        assert!(!driver.reconcile_desktop_snapshot(&json!({"seq":0, "sessionId":"local-session"})));
         assert!(driver.reconcile_desktop_snapshot(
             &json!({"seq":24, "sessionId":"local-session", "permissionMode":"normal"})
         ));

@@ -407,24 +407,48 @@ mod tests {
     #[test]
     fn sequence_tracker_detects_duplicates_gaps_and_resets() {
         let mut tracker = SequenceTracker::default();
-        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Event);
-        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Duplicate);
-        assert_eq!(tracker.observe_with_reset_marker(3, false), SequenceOutcome::Gap);
+        assert_eq!(
+            tracker.observe_with_reset_marker(1, false),
+            SequenceOutcome::Event
+        );
+        assert_eq!(
+            tracker.observe_with_reset_marker(1, false),
+            SequenceOutcome::Duplicate
+        );
+        assert_eq!(
+            tracker.observe_with_reset_marker(3, false),
+            SequenceOutcome::Gap
+        );
         tracker.resync(3);
-        assert_eq!(tracker.observe_with_reset_marker(4, false), SequenceOutcome::Event);
+        assert_eq!(
+            tracker.observe_with_reset_marker(4, false),
+            SequenceOutcome::Event
+        );
     }
 
     #[test]
     fn seq_one_requires_native_snapshot_before_reset() {
         let mut tracker = SequenceTracker::default();
-        assert_eq!(tracker.observe_with_reset_marker(8, false), SequenceOutcome::Event);
-        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Gap);
+        assert_eq!(
+            tracker.observe_with_reset_marker(8, false),
+            SequenceOutcome::Event
+        );
+        assert_eq!(
+            tracker.observe_with_reset_marker(1, false),
+            SequenceOutcome::Gap
+        );
         assert_eq!(
             tracker.observe_with_reset_marker(1, true),
             SequenceOutcome::Reset
         );
-        assert_eq!(tracker.observe_with_reset_marker(2, false), SequenceOutcome::Event);
-        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Duplicate);
+        assert_eq!(
+            tracker.observe_with_reset_marker(2, false),
+            SequenceOutcome::Event
+        );
+        assert_eq!(
+            tracker.observe_with_reset_marker(1, false),
+            SequenceOutcome::Duplicate
+        );
     }
 
     #[cfg(unix)]
@@ -455,14 +479,9 @@ mod tests {
              IFS= read -r line\n"
         );
         let args = vec!["-c".to_string(), script];
-        let mut rpc = JsonlRpc::spawn_with_widgets(
-            std::path::Path::new("/tmp"),
-            "sh",
-            &args,
-            &[],
-            true,
-        )
-        .unwrap();
+        let mut rpc =
+            JsonlRpc::spawn_with_widgets(std::path::Path::new("/tmp"), "sh", &args, &[], true)
+                .unwrap();
         let mut client = DesktopClient::new();
         let result = client
             .call(&mut rpc, "capabilities", &json!({}), Duration::from_secs(5))

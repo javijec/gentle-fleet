@@ -103,6 +103,17 @@ pub enum SequenceOutcome {
 
 impl SequenceTracker {
     pub fn observe(&mut self, seq: u64) -> SequenceOutcome {
+        self.observe_with_reset_marker(seq, false)
+    }
+
+    /// El contador por sí solo no demuestra un reset: seq=1 también puede
+    /// ser un evento retrasado. Solo un snapshot nativo explícito autoriza
+    /// reiniciar la época; en otros casos se pide reconciliación.
+    pub fn observe_with_reset_marker(
+        &mut self,
+        seq: u64,
+        session_snapshot: bool,
+    ) -> SequenceOutcome {
         let Some(expected) = self.expected else {
             self.expected = Some(seq.saturating_add(1));
             return SequenceOutcome::Event;
@@ -110,11 +121,16 @@ impl SequenceTracker {
         if seq == expected {
             self.expected = Some(seq.saturating_add(1));
             SequenceOutcome::Event
+        } else if seq == 1 && expected > 2 {
+            if session_snapshot {
+                self.expected = Some(2);
+                self.reconciliations += 1;
+                SequenceOutcome::Reset
+            } else {
+                SequenceOutcome::Gap
+            }
         } else if seq < expected {
             SequenceOutcome::Duplicate
-        } else if self.reconciliations == 0 && seq == 1 {
-            self.expected = Some(2);
-            SequenceOutcome::Reset
         } else {
             SequenceOutcome::Gap
         }
@@ -232,6 +248,13 @@ impl DesktopClient {
         // se bombea el transporte para no interbloquear el hilo lector.
         let deadline = std::time::Instant::now() + timeout;
         loop {
+            // La cola ordinaria también puede llenarse durante una petición
+            // Desktop RPC. Mantenerla drenada en el buffer acotado de JSONL
+            // sin publicar eventos fuera de orden ni perder terminales.
+            if let Err(error) = rpc.buffer_events() {
+                self.pending.remove(&request_id);
+                return Err(DesktopError::new(error.code, error.message));
+            }
             while let Some(ui) = rpc.try_ui_request() {
                 if ui.method == "setWidget"
                     && ui.value.get("widgetKey").and_then(Value::as_str)
@@ -336,7 +359,10 @@ impl DesktopClient {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                match self.sequence.observe(seq) {
+                match self
+                    .sequence
+                    .observe_with_reset_marker(seq, event == "session_snapshot")
+                {
                     SequenceOutcome::Event | SequenceOutcome::Reset => {
                         self.events.push_back(DesktopEvent {
                             seq,
@@ -390,6 +416,19 @@ mod tests {
         assert_eq!(tracker.observe(3), SequenceOutcome::Gap);
         tracker.resync(3);
         assert_eq!(tracker.observe(4), SequenceOutcome::Event);
+    }
+
+    #[test]
+    fn seq_one_requires_native_snapshot_before_reset() {
+        let mut tracker = SequenceTracker::default();
+        assert_eq!(tracker.observe(8), SequenceOutcome::Event);
+        assert_eq!(tracker.observe(1), SequenceOutcome::Gap);
+        assert_eq!(
+            tracker.observe_with_reset_marker(1, true),
+            SequenceOutcome::Reset
+        );
+        assert_eq!(tracker.observe(2), SequenceOutcome::Event);
+        assert_eq!(tracker.observe(1), SequenceOutcome::Duplicate);
     }
 
     #[test]

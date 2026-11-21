@@ -9,7 +9,7 @@ use crate::rpc::UiRequest;
 #[derive(Debug, Clone, Default)]
 pub struct EventMapper {
     pub fleet_turn: Option<String>,
-    emitted_delta: bool,
+    message_delta_seen: bool,
 }
 
 fn as_text(value: &serde_json::Value) -> String {
@@ -44,7 +44,7 @@ fn text(value: &serde_json::Value, key: &str) -> String {
 impl EventMapper {
     pub fn begin_turn(&mut self, turn: String) {
         self.fleet_turn = Some(turn);
-        self.emitted_delta = false;
+        self.message_delta_seen = false;
     }
 
     pub fn end_turn(&mut self) {
@@ -66,6 +66,12 @@ impl EventMapper {
             return Vec::new();
         };
         match kind {
+            "message_start" => {
+                // Pi delimita cada mensaje; el streaming de uno no debe
+                // suprimir el texto final de un mensaje posterior.
+                self.message_delta_seen = false;
+                Vec::new()
+            }
             "message_update" => {
                 let update = field(event, "assistantMessageEvent")
                     .cloned()
@@ -76,7 +82,7 @@ impl EventMapper {
                     .unwrap_or("");
                 match update_type {
                     "text_delta" => {
-                        self.emitted_delta = true;
+                        self.message_delta_seen = true;
                         let delta = text(&update, "delta");
                         if delta.is_empty() {
                             return Vec::new();
@@ -115,7 +121,8 @@ impl EventMapper {
             "message_end" => {
                 let message = field(event, "message").cloned().unwrap_or_default();
                 let role = text(&message, "role");
-                if role != "assistant" || self.emitted_delta {
+                let had_deltas = std::mem::replace(&mut self.message_delta_seen, false);
+                if role != "assistant" || had_deltas {
                     return Vec::new();
                 }
                 let body = as_text(field(&message, "content").unwrap_or(&serde_json::Value::Null));
@@ -430,6 +437,29 @@ mod tests {
         );
         let final_message = json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hola"}]}});
         assert!(mapper.map(&final_message).is_empty());
+    }
+
+    #[test]
+    fn a_streamed_message_does_not_hide_the_next_assistant_message() {
+        let mut mapper = EventMapper::default();
+        mapper.begin_turn("turn-2".into());
+        mapper.map(&json!({"type":"message_start","message":{"role":"assistant"}}));
+        mapper.map(&json!({
+            "type":"message_update",
+            "assistantMessageEvent":{"type":"text_delta","delta":"first"}
+        }));
+        assert!(mapper.map(&json!({
+            "type":"message_end",
+            "message":{"role":"assistant","content":[{"type":"text","text":"first"}]}
+        })).is_empty());
+        let second = mapper.map(&json!({
+            "type":"message_end",
+            "message":{"role":"assistant","content":[{"type":"text","text":"second"}]}
+        }));
+        assert!(matches!(
+            &second[0].kind,
+            DomainEvent::AssistantMessage {text, ..} if text == "second"
+        ));
     }
 
     #[test]

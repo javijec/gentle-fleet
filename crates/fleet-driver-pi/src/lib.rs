@@ -127,6 +127,11 @@ fn parse_model_controls(models: &Value, levels: &Value, state: &Value) -> Vec<Co
             .and_then(|m| m.get("id"))
             .and_then(Value::as_str)
             == Some(id.as_str())
+            && state
+                .get("model")
+                .and_then(|model| model.get("provider"))
+                .and_then(Value::as_str)
+                == Some(provider.as_str())
         {
             current = Some(value.clone());
         }
@@ -282,6 +287,14 @@ impl PiDriver {
     }
 
     fn handle_ui(&mut self, request: UiRequest) {
+        // Estas Extension UI son notificaciones, no solicitudes de decisión.
+        // Enviar cancelled inventaría una respuesta que Pi no pidió.
+        if matches!(
+            request.method.as_str(),
+            "notify" | "setStatus" | "setWidget"
+        ) {
+            return;
+        }
         let Some(approval) = parse_ui_request(&request) else {
             let _ = self.rpc_mut().and_then(|r| {
                 r.respond_ui(&request.id, json!({"cancelled": true}))
@@ -305,6 +318,21 @@ impl PiDriver {
     }
 
     fn handle_internal_event(&mut self, event: &Value) -> bool {
+        if event.get("type").and_then(Value::as_str) == Some("rpc_fatal_error") {
+            let reason = text(event, "message").unwrap_or_else(|| "Pi RPC protocol failure".into());
+            if let Some(turn_id) = self.mapper.fleet_turn.take() {
+                self.emit(DomainEvent::TurnUncertain {
+                    turn_id,
+                    reason: redact_provider_error(&reason),
+                });
+                self.mapper.end_turn();
+            } else {
+                self.emit(DomainEvent::AgentError {
+                    message: redact_provider_error(&reason),
+                });
+            }
+            return true;
+        }
         if event.get("type").and_then(Value::as_str) == Some("agent_error") {
             let message = text(event, "message").unwrap_or_else(|| "Pi protocol error".into());
             self.emit(DomainEvent::AgentError {
@@ -357,14 +385,29 @@ impl AgentDriver for PiDriver {
         // Los controles se aplican al proceso Pi ANTES del prompt: la API
         // estable de Pi solo permite cambiarlos cuando no hay turno activo.
         for control in &input.controls {
-            self.set_control(&control.name, &control.value, "turn")?;
+            if let Err(error) = self.set_control(&control.name, &control.value, "turn") {
+                self.emit(DomainEvent::TurnFailed {
+                    turn_id: input.turn_id.clone(),
+                    message: redact_provider_error(&error.message),
+                });
+                return Ok(SendReceipt { accepted: false });
+            }
         }
         self.mapper.begin_turn(input.turn_id.clone());
         let params = json!({"message": input.text});
-        let response = self
-            .rpc_mut()?
-            .call("prompt", params, CALL_TIMEOUT)
-            .map_err(map_rpc)?;
+        let response = match self.rpc_mut()?.call("prompt", params, CALL_TIMEOUT) {
+            Ok(response) => response,
+            Err(error) => {
+                // El comando pudo ejecutarse sin que el ACK llegara. P3
+                // prohíbe reintentar automáticamente operaciones ambiguas.
+                self.emit(DomainEvent::TurnUncertain {
+                    turn_id: input.turn_id,
+                    reason: format!("Pi prompt outcome uncertain: {}", error.code),
+                });
+                self.mapper.end_turn();
+                return Ok(SendReceipt { accepted: false });
+            }
+        };
         let disposition = text(&response, "disposition").unwrap_or_default();
         if disposition == "handled" {
             // Ninguna ejecución del modelo: el turno se cierra aquí y no se
@@ -376,11 +419,12 @@ impl AgentDriver for PiDriver {
             });
             self.mapper.end_turn();
         } else if disposition.is_empty() {
-            self.mapper.end_turn();
-            return Err(AgentError {
-                code: "provider_protocol".into(),
-                message: "prompt response did not report a disposition".into(),
+            self.emit(DomainEvent::TurnUncertain {
+                turn_id: input.turn_id,
+                reason: "Pi prompt response did not report its disposition".into(),
             });
+            self.mapper.end_turn();
+            return Ok(SendReceipt { accepted: false });
         }
         Ok(SendReceipt { accepted: true })
     }
@@ -394,11 +438,11 @@ impl AgentDriver for PiDriver {
         }
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if let Some(request) = self.rpc()?.try_ui_request() {
+            if let Some(request) = self.rpc_mut()?.try_ui_request() {
                 self.handle_ui(request);
                 return Ok(self.pending_events.pop_front());
             }
-            if let Some(frame) = self.rpc()?.try_event() {
+            if let Some(frame) = self.rpc_mut()?.try_event() {
                 if !self.handle_internal_event(&frame) {
                     for event in self.mapper.map(&frame) {
                         self.pending_events.push_back(event);
@@ -408,9 +452,9 @@ impl AgentDriver for PiDriver {
             }
             if !self.rpc()?.alive() && self.mapper.fleet_turn.is_some() {
                 let turn = self.mapper.fleet_turn.take().unwrap_or_default();
-                self.emit(DomainEvent::TurnFailed {
+                self.emit(DomainEvent::TurnUncertain {
                     turn_id: turn,
-                    message: "Pi process closed before agent_settled".into(),
+                    reason: "Pi RPC reader closed before agent_settled".into(),
                 });
                 self.mapper.end_turn();
                 return Ok(self.pending_events.pop_front());
@@ -780,6 +824,34 @@ mod tests {
         let descriptor = factory.metadata();
         assert!(!descriptor.capabilities.can_attach_service);
         assert!(descriptor.capabilities.cancel_turn);
+    }
+
+    #[test]
+    fn active_model_requires_provider_and_id_match() {
+        let models = json!({"models":[
+            {"id":"shared","provider":"alpha"},
+            {"id":"shared","provider":"beta"}
+        ]});
+        let levels = json!({"levels":["off"]});
+        let state = json!({"model":{"id":"shared","provider":"beta"}});
+        let controls = parse_model_controls(&models, &levels, &state);
+        assert_eq!(controls[0].current.as_deref(), Some("beta:shared"));
+        let unknown = json!({"model":{"id":"shared"}});
+        assert!(parse_model_controls(&models, &levels, &unknown)[0].current.is_none());
+    }
+
+    #[test]
+    fn notification_methods_do_not_create_pending_approvals() {
+        let mut driver = PiDriver::new();
+        for method in ["notify", "setStatus", "setWidget"] {
+            driver.handle_ui(UiRequest {
+                id: String::new(),
+                method: method.into(),
+                value: json!({"type":"extension_ui_request","method":method}),
+            });
+        }
+        assert!(driver.pending.is_empty());
+        assert!(driver.pending_events.is_empty());
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! proceso Pi y de su directorio de sesiones aislado.
 
 mod events;
-mod rpc;
+use fleet_rpc_jsonl as rpc;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read};
@@ -25,7 +25,10 @@ use fleet_domain::{
 use serde_json::{json, Value};
 
 use events::{build_ui_answer, parse_ui_request, EventMapper, NativeApproval};
-use rpc::{PiRpc, RpcError, UiRequest};
+use rpc::{JsonlRpc, RpcError, UiRequest};
+
+/// Alias local para no reescribir el driver Pi tras extraer el transporte.
+type PiRpc = JsonlRpc;
 
 pub const COMPATIBILITY: VersionRange = VersionRange {
     min_major: 1,
@@ -188,7 +191,13 @@ fn discover_controls() -> Vec<ControlState> {
         return Vec::new();
     }
     let result = (|| -> Result<Vec<ControlState>, AgentError> {
-        let mut rpc = PiRpc::spawn(Path::new(&dir), &dir).map_err(map_rpc)?;
+        let args = vec![
+            "--mode".to_string(),
+            "rpc".to_string(),
+            "--session-dir".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ];
+        let mut rpc = PiRpc::spawn(Path::new(&dir), "pi", &args, &[]).map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), Duration::from_secs(5))
             .map_err(map_rpc)?;
@@ -383,7 +392,13 @@ impl AgentDriver for PiDriver {
             code: "session_dir_unavailable".into(),
             message: error.to_string(),
         })?;
-        let mut rpc = PiRpc::spawn(&ctx.workspace, &session_dir).map_err(map_rpc)?;
+        let args = vec![
+            "--mode".to_string(),
+            "rpc".to_string(),
+            "--session-dir".to_string(),
+            session_dir.to_string_lossy().into_owned(),
+        ];
+        let mut rpc = PiRpc::spawn(&ctx.workspace, "pi", &args, &[]).map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;

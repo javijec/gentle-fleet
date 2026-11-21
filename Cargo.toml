@@ -9,6 +9,7 @@ members = [
   "crates/fleet-driver-opencode",
   "crates/fleet-driver-codex",
   "crates/fleet-driver-pi",
+  "crates/fleet-rpc-jsonl",
   "crates/fleet-providers",
   "crates/fleetd",
   "crates/fleetctl",

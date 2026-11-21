@@ -133,6 +133,7 @@ version = "0.1.0"
 dependencies = [
  "fleet-agent",
  "fleet-domain",
+ "fleet-rpc-jsonl",
  "serde",
  "serde_json",
  "uuid",
@@ -157,6 +158,13 @@ dependencies = [
  "fleet-driver-codex",
  "fleet-driver-opencode",
  "fleet-driver-pi",
+]
+
+[[package]]
+name = "fleet-rpc-jsonl"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

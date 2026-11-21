@@ -113,6 +113,26 @@ fn text(value: &Value, key: &str) -> Option<String> {
 fn parse_model_controls(models: &Value, levels: &Value, state: &Value) -> Vec<ControlState> {
     let mut available = Vec::new();
     let mut current = None;
+    let state_id = state
+        .get("model")
+        .and_then(|model| model.get("id"))
+        .and_then(Value::as_str);
+    let state_provider = state
+        .get("model")
+        .and_then(|model| model.get("provider"))
+        .and_then(Value::as_str);
+    // Pi 1.6.0 puede omitir el provider en get_state. En ese caso
+    // solo inferimos modelo actual si el ID es único en el catálogo.
+    let candidates = models
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("id").and_then(Value::as_str) == state_id)
+                .count()
+        })
+        .unwrap_or_default();
     for model in models
         .get("models")
         .and_then(Value::as_array)
@@ -123,16 +143,9 @@ fn parse_model_controls(models: &Value, levels: &Value, state: &Value) -> Vec<Co
             continue;
         };
         let value = format!("{provider}:{id}");
-        if state
-            .get("model")
-            .and_then(|m| m.get("id"))
-            .and_then(Value::as_str)
-            == Some(id.as_str())
-            && state
-                .get("model")
-                .and_then(|model| model.get("provider"))
-                .and_then(Value::as_str)
-                == Some(provider.as_str())
+        if state_id == Some(id.as_str())
+            && (state_provider == Some(provider.as_str())
+                || (state_provider.is_none() && candidates == 1))
         {
             current = Some(value.clone());
         }

@@ -410,18 +410,19 @@ impl AgentDriver for CodexDriver {
                     .and_then(|control| control.current.clone());
             }
         }
-        let approval_policy =
-            std::env::var("FLEET_CODEX_APPROVAL_POLICY").unwrap_or_else(|_| "on-request".into());
-        let sandbox =
-            std::env::var("FLEET_CODEX_SANDBOX").unwrap_or_else(|_| "workspace-write".into());
+        // Por defecto Codex debe usar sus políticas nativas. Fleet solo
+        // anula sandbox/aprobación ante un override explícito del usuario.
+        let mut thread_params = json!({"cwd": ctx.workspace.to_string_lossy()});
+        if let Ok(value) = std::env::var("FLEET_CODEX_APPROVAL_POLICY") {
+            thread_params["approvalPolicy"] = json!(value);
+        }
+        if let Ok(value) = std::env::var("FLEET_CODEX_SANDBOX") {
+            thread_params["sandbox"] = json!(value);
+        }
         let started = rpc
             .call(
                 "thread/start",
-                json!({
-                    "cwd": ctx.workspace.to_string_lossy(),
-                    "approvalPolicy": approval_policy,
-                    "sandbox": sandbox
-                }),
+                thread_params,
                 CALL_TIMEOUT,
             )
             .map_err(to_agent_error)?;
@@ -498,11 +499,11 @@ impl AgentDriver for CodexDriver {
         }
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if let Some(request) = self.rpc()?.recv_server_request(Duration::from_millis(0)) {
+            if let Some(request) = self.rpc_mut()?.recv_server_request(Duration::from_millis(0)) {
                 self.handle_server_request(request);
                 return Ok(self.local_events.pop_front());
             }
-            if let Some(notification) = self.rpc()?.try_notification() {
+            if let Some(notification) = self.rpc_mut()?.try_notification() {
                 self.handle_notification(notification);
                 return Ok(self.local_events.pop_front());
             }

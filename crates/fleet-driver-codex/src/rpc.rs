@@ -5,12 +5,12 @@
 //! notificaciones y requests iniciados por el servidor (aprobaciones). Es el
 //! requisito que evita el deadlock descrito en `P4_RPC_RESEARCH.md` §1.2.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,6 +19,10 @@ use serde_json::{json, Value};
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 const NOTIFICATION_QUEUE: usize = 256;
 const SERVER_REQUEST_QUEUE: usize = 64;
+// Buffer para mensajes que llegan mientras una llamada síncrona espera su ACK.
+// Nunca descartar eventos: al llegar al límite, fallar explícitamente.
+const MAX_DEFERRED_FRAMES: usize = 512;
+const MAX_DEFERRED_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcError {
@@ -64,6 +68,9 @@ pub struct RpcClient {
     reader_alive: Arc<AtomicBool>,
     dropped_notifications: Arc<AtomicU64>,
     last_stderr: Arc<Mutex<Vec<String>>>,
+    deferred_notifications: VecDeque<Value>,
+    deferred_requests: VecDeque<ServerRequest>,
+    deferred_bytes: usize,
 }
 
 fn read_line_bounded<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
@@ -81,9 +88,13 @@ fn read_line_bounded<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
         if one[0] == b'\n' {
             return Ok(Some(String::from_utf8_lossy(&bytes).into_owned()));
         }
-        if bytes.len() < MAX_LINE_BYTES {
-            bytes.push(one[0]);
+        if bytes.len() >= MAX_LINE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Codex JSON-RPC frame exceeded maximum length",
+            ));
         }
+        bytes.push(one[0]);
     }
 }
 
@@ -112,12 +123,11 @@ fn classify(
             // hasta que el driver drena la cola acotada.
             let _ = server_requests.send(request);
         } else {
-            match notifications.try_send(value) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_)) => {}
+            // Backpressure real: no eliminar mensajes al llenar la cola.
+            // call() drena esta cola mientras espera respuestas propias,
+            // evitando el deadlock con turn/start y requests del servidor.
+            if notifications.send(value).is_err() {
+                dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
         return;
@@ -236,6 +246,9 @@ impl RpcClient {
             reader_alive,
             dropped_notifications,
             last_stderr,
+            deferred_notifications: VecDeque::new(),
+            deferred_requests: VecDeque::new(),
+            deferred_bytes: 0,
         })
     }
 
@@ -253,6 +266,34 @@ impl RpcClient {
             .map_err(|error| RpcError::new("rpc_transport", error.to_string()))
     }
 
+    fn defer_notification(&mut self, frame: Value) -> Result<(), RpcError> {
+        let bytes = serde_json::to_vec(&frame)
+            .map_err(|error| RpcError::new("serialization_failed", error.to_string()))?
+            .len();
+        if self.deferred_notifications.len() >= MAX_DEFERRED_FRAMES
+            || self.deferred_bytes.saturating_add(bytes) > MAX_DEFERRED_BYTES
+        {
+            return Err(RpcError::new(
+                "rpc_backpressure",
+                "Codex produced too many events during a synchronous call; result is uncertain",
+            ));
+        }
+        self.deferred_bytes += bytes;
+        self.deferred_notifications.push_back(frame);
+        Ok(())
+    }
+
+    fn defer_request(&mut self, request: ServerRequest) -> Result<(), RpcError> {
+        if self.deferred_requests.len() >= SERVER_REQUEST_QUEUE {
+            return Err(RpcError::new(
+                "rpc_backpressure",
+                "Codex sent too many server requests during a synchronous call; result is uncertain",
+            ));
+        }
+        self.deferred_requests.push_back(request);
+        Ok(())
+    }
+
     pub fn call(
         &mut self,
         method: &str,
@@ -260,38 +301,58 @@ impl RpcClient {
         timeout: Duration,
     ) -> Result<Value, RpcError> {
         if !self.reader_alive.load(Ordering::Acquire) {
-            return Err(RpcError::new(
-                "provider_gone",
-                "App Server closed its stdout",
-            ));
+            return Err(RpcError::new("provider_gone", "App Server closed its stdout"));
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::sync_channel(1);
-        self.pending
-            .lock()
-            .expect("rpc pending poisoned")
-            .insert(id, tx);
+        self.pending.lock().expect("rpc pending poisoned").insert(id, tx);
         let frame = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
         if let Err(error) = self.write_frame(&frame) {
-            self.pending
-                .lock()
-                .expect("rpc pending poisoned")
-                .remove(&id);
+            self.pending.lock().expect("rpc pending poisoned").remove(&id);
             return Err(error);
         }
-        match rx.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(_) => {
-                self.pending
-                    .lock()
-                    .expect("rpc pending poisoned")
-                    .remove(&id);
-                Err(RpcError::new(
+        let deadline = std::time::Instant::now() + timeout;
+        let outcome = loop {
+            match rx.try_recv() {
+                Ok(response) => break response,
+                Err(TryRecvError::Disconnected) => {
+                    break Err(RpcError::new("provider_gone", "RPC reply channel disconnected"));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            // Mientras esperamos un ACK, el productor puede enviar deltas y
+            // requests de aprobación. Liberar ambas colas mantiene al lector
+            // capaz de recibir la respuesta sin descartar información.
+            let mut deferred_result = Ok(());
+            while let Ok(notification) = self.notifications.try_recv() {
+                if let Err(error) = self.defer_notification(notification) {
+                    deferred_result = Err(error);
+                    break;
+                }
+            }
+            if deferred_result.is_ok() {
+                while let Ok(request) = self.server_requests.try_recv() {
+                    if let Err(error) = self.defer_request(request) {
+                        deferred_result = Err(error);
+                        break;
+                    }
+                }
+            }
+            if let Err(error) = deferred_result {
+                // No declarar éxito si el buffering no puede garantizar la
+                // entrega. El runner debe reconciliar el estado del turno.
+                break Err(error);
+            }
+            if std::time::Instant::now() >= deadline {
+                break Err(RpcError::new(
                     "rpc_timeout",
                     format!("no response for {method} within {} ms", timeout.as_millis()),
-                ))
+                ));
             }
-        }
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        self.pending.lock().expect("rpc pending poisoned").remove(&id);
+        outcome
     }
 
     pub fn notify(&mut self, method: &str, params: Value) -> Result<(), RpcError> {
@@ -312,12 +373,20 @@ impl RpcClient {
         }))
     }
 
-    pub fn try_notification(&self) -> Option<Value> {
+    pub fn try_notification(&mut self) -> Option<Value> {
+        if let Some(frame) = self.deferred_notifications.pop_front() {
+            self.deferred_bytes = self.deferred_bytes.saturating_sub(
+                serde_json::to_vec(&frame).map(|bytes| bytes.len()).unwrap_or(0),
+            );
+            return Some(frame);
+        }
         self.notifications.try_recv().ok()
     }
 
-    pub fn recv_server_request(&self, timeout: Duration) -> Option<ServerRequest> {
-        self.server_requests.recv_timeout(timeout).ok()
+    pub fn recv_server_request(&mut self, timeout: Duration) -> Option<ServerRequest> {
+        self.deferred_requests
+            .pop_front()
+            .or_else(|| self.server_requests.recv_timeout(timeout).ok())
     }
 
     pub fn dropped_notifications(&self) -> u64 {

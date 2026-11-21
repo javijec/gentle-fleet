@@ -577,11 +577,13 @@ impl SessionStore for SqliteStore {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runner_events WHERE runner_id=?1 AND runner_seq=?2)",
-            params![runner_id, runner_seq as i64],
-            |row| row.get(0),
-        ).map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM runner_events WHERE runner_id=?1 AND runner_seq=?2)",
+                params![runner_id, runner_seq as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
         if exists {
             return Ok(false);
         }
@@ -591,14 +593,22 @@ impl SessionStore for SqliteStore {
         tx.execute(
             "INSERT INTO runner_events(runner_id,runner_seq,fleet_event_id,created_at)
              VALUES(?1,?2,?3,?4)",
-            params![runner_id, runner_seq as i64, event.event_id, now_ms() as i64],
-        ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            params![
+                runner_id,
+                runner_seq as i64,
+                event.event_id,
+                now_ms() as i64
+            ],
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         tx.execute(
             "UPDATE runners SET last_ack_seq=MAX(last_ack_seq, ?2),updated_at=?3
              WHERE runner_id=?1",
             params![runner_id, runner_seq as i64, now_ms() as i64],
-        ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        tx.commit().map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+        )
+        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
         Ok(true)
     }
 
@@ -1075,7 +1085,8 @@ impl SessionStore for SqliteStore {
         fleet_event_id: &str,
     ) -> StoreResult<bool> {
         let mut connection = self.connection()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
         let changed = tx.execute(
             "INSERT OR IGNORE INTO runner_events(runner_id, runner_seq, fleet_event_id, created_at)
@@ -1087,9 +1098,11 @@ impl SessionStore for SqliteStore {
                 "UPDATE runners SET last_ack_seq=MAX(last_ack_seq,?2),updated_at=?3
                  WHERE runner_id=?1",
                 params![runner_id, runner_seq as i64, now_ms() as i64],
-            ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         }
-        tx.commit().map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
         Ok(changed == 1)
     }
 
@@ -1120,140 +1133,140 @@ fn commit_event_tx(
     session: &SessionRecord,
     approval: Option<&ApprovalRequest>,
 ) -> StoreResult<()> {
-        // Redelivery of the same durable event is a no-op. Check BEFORE any
-        // projection: re-running approval INSERT or ApprovalResolved UPDATE
-        // would fail and poison a healthy manager with StorageUnavailable.
-        let existing_event: Option<String> = tx
-            .query_row(
-                "SELECT event_id FROM events WHERE session_id=?1 AND seq=?2",
-                params![event.session_id, event.seq as i64],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
-        if let Some(event_id) = existing_event {
-            if event_id == event.event_id {
-                return Ok(()); // transaction drops without writes
-            }
-            return Err(StoreError::new(
-                "sequence_conflict",
-                format!("seq {} already used in {}", event.seq, event.session_id),
-            ));
+    // Redelivery of the same durable event is a no-op. Check BEFORE any
+    // projection: re-running approval INSERT or ApprovalResolved UPDATE
+    // would fail and poison a healthy manager with StorageUnavailable.
+    let existing_event: Option<String> = tx
+        .query_row(
+            "SELECT event_id FROM events WHERE session_id=?1 AND seq=?2",
+            params![event.session_id, event.seq as i64],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+    if let Some(event_id) = existing_event {
+        if event_id == event.event_id {
+            return Ok(()); // transaction drops without writes
         }
-        // The projections and the visible event have one durability boundary.
-        if let Some(approval) = approval {
-            tx.execute(
-                "INSERT INTO approvals(approval_id, session_id, turn_id, kind, message, resources,
+        return Err(StoreError::new(
+            "sequence_conflict",
+            format!("seq {} already used in {}", event.seq, event.session_id),
+        ));
+    }
+    // The projections and the visible event have one durability boundary.
+    if let Some(approval) = approval {
+        tx.execute(
+            "INSERT INTO approvals(approval_id, session_id, turn_id, kind, message, resources,
                     allowed_decisions, status, native_request_id, decision, created_at, resolved_at)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-                params![
-                    approval.approval_id,
-                    approval.session_id,
-                    approval.turn_id,
-                    approval.kind,
-                    approval.message,
-                    serde_json::to_string(&approval.resources)
-                        .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
-                    serde_json::to_string(&approval.allowed_decisions)
-                        .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
-                    approval_text(approval.status),
-                    approval.native_request_id,
-                    approval.decision,
-                    approval.created_at_ms as i64,
-                    approval.resolved_at_ms.map(|x| x as i64),
-                ],
-            )
-            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        }
-        // Session state is durable together with the event that announces it.
-        tx.execute(
-            "UPDATE sessions SET state=?2, turn_state=?3, updated_at=?4 WHERE session_id=?1",
             params![
-                session.session_id,
-                state_text(session.state),
-                turn_text(session.turn_state),
-                now_ms() as i64,
+                approval.approval_id,
+                approval.session_id,
+                approval.turn_id,
+                approval.kind,
+                approval.message,
+                serde_json::to_string(&approval.resources)
+                    .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
+                serde_json::to_string(&approval.allowed_decisions)
+                    .map_err(|e| StoreError::new("serialization_failed", e.to_string()))?,
+                approval_text(approval.status),
+                approval.native_request_id,
+                approval.decision,
+                approval.created_at_ms as i64,
+                approval.resolved_at_ms.map(|x| x as i64),
             ],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        match &event.kind {
-            fleet_domain::EventKind::TurnCompleted { turn_id, status } => {
-                let state = match status {
-                    fleet_domain::TurnStatus::Completed => TurnState::Completed,
-                    fleet_domain::TurnStatus::Failed => TurnState::Failed,
-                    fleet_domain::TurnStatus::Interrupted => TurnState::Interrupted,
-                };
-                tx.execute(
-                    "UPDATE turns SET state=?2, updated_at=?3 WHERE turn_id=?1",
-                    params![turn_id, turn_text(state), now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-                let operation_status = if state == TurnState::Completed {
-                    OperationStatus::Completed
-                } else {
-                    OperationStatus::Failed
-                };
-                tx.execute(
-                    "UPDATE operations SET status=?2, updated_at=?3 WHERE operation_id IN
+    }
+    // Session state is durable together with the event that announces it.
+    tx.execute(
+        "UPDATE sessions SET state=?2, turn_state=?3, updated_at=?4 WHERE session_id=?1",
+        params![
+            session.session_id,
+            state_text(session.state),
+            turn_text(session.turn_state),
+            now_ms() as i64,
+        ],
+    )
+    .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+    match &event.kind {
+        fleet_domain::EventKind::TurnCompleted { turn_id, status } => {
+            let state = match status {
+                fleet_domain::TurnStatus::Completed => TurnState::Completed,
+                fleet_domain::TurnStatus::Failed => TurnState::Failed,
+                fleet_domain::TurnStatus::Interrupted => TurnState::Interrupted,
+            };
+            tx.execute(
+                "UPDATE turns SET state=?2, updated_at=?3 WHERE turn_id=?1",
+                params![turn_id, turn_text(state), now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            let operation_status = if state == TurnState::Completed {
+                OperationStatus::Completed
+            } else {
+                OperationStatus::Failed
+            };
+            tx.execute(
+                "UPDATE operations SET status=?2, updated_at=?3 WHERE operation_id IN
                         (SELECT operation_id FROM turns WHERE turn_id=?1)",
-                    params![turn_id, operation_text(operation_status), now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-            }
-            fleet_domain::EventKind::TurnUncertain { turn_id, reason } => {
-                tx.execute(
-                    "UPDATE turns SET state='uncertain', updated_at=?2 WHERE turn_id=?1",
-                    params![turn_id, now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-                tx.execute(
-                    "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
-                     WHERE operation_id IN (SELECT operation_id FROM turns WHERE turn_id=?1)",
-                    params![turn_id, reason, now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-            }
-            fleet_domain::EventKind::ApprovalRequested { turn_id, .. } => {
-                tx.execute(
-                    "UPDATE turns SET state='awaiting_approval', updated_at=?2
-                     WHERE turn_id=?1",
-                    params![turn_id, now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-            }
-            fleet_domain::EventKind::ApprovalResolved {
-                approval_id,
-                decision,
-                ..
-            } => {
-                let status = if decision == "reject" {
-                    "rejected"
-                } else {
-                    "accepted"
-                };
-                let changed = tx
-                    .execute(
-                        "UPDATE approvals SET status=?2, decision=?3, resolved_at=?4
-                     WHERE approval_id=?1 AND status='dispatching' AND decision=?3",
-                        params![approval_id, status, decision, now_ms() as i64],
-                    )
-                    .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-                if changed != 1 {
-                    return Err(StoreError::new(
-                        "approval_conflict",
-                        "approval is not awaiting native delivery confirmation",
-                    ));
-                }
-                tx.execute(
-                    "UPDATE operations SET status='completed', updated_at=?2
-                     WHERE kind='answer_approval' AND target_id=?1 AND status='accepted'",
-                    params![approval_id, now_ms() as i64],
-                )
-                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-            }
-            _ => {}
+                params![turn_id, operation_text(operation_status), now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         }
-        append_event_tx(tx, event)?;
+        fleet_domain::EventKind::TurnUncertain { turn_id, reason } => {
+            tx.execute(
+                "UPDATE turns SET state='uncertain', updated_at=?2 WHERE turn_id=?1",
+                params![turn_id, now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            tx.execute(
+                "UPDATE operations SET status='uncertain', message=?2, updated_at=?3
+                     WHERE operation_id IN (SELECT operation_id FROM turns WHERE turn_id=?1)",
+                params![turn_id, reason, now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        }
+        fleet_domain::EventKind::ApprovalRequested { turn_id, .. } => {
+            tx.execute(
+                "UPDATE turns SET state='awaiting_approval', updated_at=?2
+                     WHERE turn_id=?1",
+                params![turn_id, now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        }
+        fleet_domain::EventKind::ApprovalResolved {
+            approval_id,
+            decision,
+            ..
+        } => {
+            let status = if decision == "reject" {
+                "rejected"
+            } else {
+                "accepted"
+            };
+            let changed = tx
+                .execute(
+                    "UPDATE approvals SET status=?2, decision=?3, resolved_at=?4
+                     WHERE approval_id=?1 AND status='dispatching' AND decision=?3",
+                    params![approval_id, status, decision, now_ms() as i64],
+                )
+                .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+            if changed != 1 {
+                return Err(StoreError::new(
+                    "approval_conflict",
+                    "approval is not awaiting native delivery confirmation",
+                ));
+            }
+            tx.execute(
+                "UPDATE operations SET status='completed', updated_at=?2
+                     WHERE kind='answer_approval' AND target_id=?1 AND status='accepted'",
+                params![approval_id, now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        }
+        _ => {}
+    }
+    append_event_tx(tx, event)?;
     Ok(())
 }
 
@@ -1491,10 +1504,16 @@ mod tests {
             session_id: session.session_id.clone(),
             seq: 1,
             created_at_ms: 1,
-            kind: EventKind::AgentNotice { message: "hello".into() },
+            kind: EventKind::AgentNotice {
+                message: "hello".into(),
+            },
         };
-        assert!(store.commit_runner_event("runner_1", 1, &event, &session, None).unwrap());
-        assert!(!store.commit_runner_event("runner_1", 1, &event, &session, None).unwrap());
+        assert!(store
+            .commit_runner_event("runner_1", 1, &event, &session, None)
+            .unwrap());
+        assert!(!store
+            .commit_runner_event("runner_1", 1, &event, &session, None)
+            .unwrap());
         assert_eq!(store.read_events("ses_1", 0, 100).unwrap().len(), 1);
         assert!(store.runner_event_exists("runner_1", 1).unwrap());
         assert_eq!(store.get_runner("ses_1").unwrap().unwrap().last_ack_seq, 1);

@@ -48,7 +48,10 @@ impl ProcessHandle {
         let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
         let handle = Self {
             identity,
-            io: Mutex::new(RunnerIo { writer: stream, reader }),
+            io: Mutex::new(RunnerIo {
+                writer: stream,
+                reader,
+            }),
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(child),
@@ -68,10 +71,12 @@ impl ProcessHandle {
             } if identity == handle.identity && protocol_version == RUNNER_WIRE => {
                 handle.last_seq.store(last_ack_seq, Ordering::SeqCst);
             }
-            other => return Err(AgentError {
-                code: "runner_identity_invalid".into(),
-                message: format!("unexpected runner hello response: {other:?}"),
-            }),
+            other => {
+                return Err(AgentError {
+                    code: "runner_identity_invalid".into(),
+                    message: format!("unexpected runner hello response: {other:?}"),
+                })
+            }
         }
         Ok(handle)
     }

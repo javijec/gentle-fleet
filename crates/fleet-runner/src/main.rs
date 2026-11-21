@@ -381,7 +381,8 @@ fn serve_daemon(
                     RunnerStatus::Active.as_str()
                 } else {
                     RunnerStatus::Uncertain.as_str()
-                }.into(),
+                }
+                .into(),
                 last_ack_seq: spool.last_ack()?,
                 pending_count: spool.pending_count()?,
                 protocol_version: RUNNER_WIRE.into(),
@@ -389,12 +390,18 @@ fn serve_daemon(
             RunnerRequest::Status => {
                 let alive = provider_alive.load(Ordering::Acquire);
                 Ok(RunnerResponse::Status {
-                    status: if alive { RunnerStatus::Active } else { RunnerStatus::Uncertain }.as_str().into(),
+                    status: if alive {
+                        RunnerStatus::Active
+                    } else {
+                        RunnerStatus::Uncertain
+                    }
+                    .as_str()
+                    .into(),
                     last_ack_seq: spool.last_ack()?,
                     pending_count: spool.pending_count()?,
                     provider_alive: alive,
                 })
-            },
+            }
             RunnerRequest::Pending { since_seq, limit } => Ok(RunnerResponse::Pending {
                 events: spool.pending(since_seq, limit.min(MAX_SPOOL_EVENTS))?,
             }),

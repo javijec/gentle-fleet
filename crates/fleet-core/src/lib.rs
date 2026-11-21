@@ -640,7 +640,10 @@ impl SessionManager {
             let session_id = record.identity.session_id.clone();
             let shared: Arc<dyn RunnerHandle> = Arc::from(handle);
             // Query before handing the reader to the ingress thread.
-            let active = self.store.active_turn_for_session(&session_id).map_err(to_agent_error)?;
+            let active = self
+                .store
+                .active_turn_for_session(&session_id)
+                .map_err(to_agent_error)?;
             let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&shared));
             {
                 let mut state = self.state.lock().expect("manager poisoned");
@@ -662,14 +665,20 @@ impl SessionManager {
                     self.publish_locked(
                         &mut state,
                         &session_id,
-                        EventKind::SessionStateChanged { state: SessionState::Running },
+                        EventKind::SessionStateChanged {
+                            state: SessionState::Running,
+                        },
                     )?;
                 }
             }
             self.store
                 .update_runner_status(
                     &runner_id,
-                    if active.is_some() { RunnerStatus::Recovering } else { RunnerStatus::Active },
+                    if active.is_some() {
+                        RunnerStatus::Recovering
+                    } else {
+                        RunnerStatus::Active
+                    },
                 )
                 .map_err(to_agent_error)?;
             recovered.push(session_id);
@@ -729,10 +738,14 @@ impl SessionManager {
             updated_at_ms: now_ms(),
         };
         let committed = match runner_source {
-            Some((runner_id, runner_seq)) => self
+            Some((runner_id, runner_seq)) => {
+                self.store
+                    .commit_runner_event(runner_id, runner_seq, &event, &projection, approval)
+            }
+            None => self
                 .store
-                .commit_runner_event(runner_id, runner_seq, &event, &projection, approval),
-            None => self.store.commit_event(&event, &projection, approval).map(|_| true),
+                .commit_event(&event, &projection, approval)
+                .map(|_| true),
         };
         let created = match committed {
             Ok(created) => created,
@@ -1030,8 +1043,11 @@ impl SessionManager {
                 record.summary.state = SessionState::Running;
             }
             self.publish_locked(
-                &mut state, session_id,
-                EventKind::SessionStateChanged { state: SessionState::Running },
+                &mut state,
+                session_id,
+                EventKind::SessionStateChanged {
+                    state: SessionState::Running,
+                },
             )?;
             if let Some(runner_id) = runner_source.map(|(id, _)| id) {
                 self.store
@@ -2213,7 +2229,8 @@ mod tests {
             session: &fleet_domain::store::SessionRecord,
             approval: Option<&ApprovalRequest>,
         ) -> fleet_domain::store::StoreResult<bool> {
-            self.inner.commit_runner_event(runner_id, runner_seq, event, session, approval)
+            self.inner
+                .commit_runner_event(runner_id, runner_seq, event, session, approval)
         }
         fn read_events(
             &self,

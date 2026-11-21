@@ -1322,12 +1322,8 @@ impl SessionManager {
                 message: format!("`{decision}` is not allowed for `{approval_id}`"),
             });
         }
-        let fingerprint = approval_answer_fingerprint(
-            &approval.session_id,
-            approval_id,
-            &decision,
-            &arguments,
-        );
+        let fingerprint =
+            approval_answer_fingerprint(&approval.session_id, approval_id, &decision, &arguments);
         // Idempotent replay must work even after a storage fault: it does not
         // dispatch again, so it is not a new provider effect.
         if let Some(existing) = self
@@ -1753,16 +1749,13 @@ impl SessionManager {
     /// P4.1-E: controles disponibles para la sesión, con valores descubiertos
     /// del proveedor. No se aplican cambios de forma silenciosa.
     pub fn list_controls(&self, session_id: &str) -> Result<Vec<ControlState>, AgentError> {
-        let provider = {
+        let (provider, desired) = {
             let state = self.state.lock().expect("manager poisoned");
-            state
-                .sessions
-                .get(session_id)
-                .map(|record| record.summary.provider_id.clone())
-                .ok_or_else(|| AgentError {
-                    code: "not_found".into(),
-                    message: format!("unknown session `{session_id}`"),
-                })?
+            let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: format!("unknown session `{session_id}`"),
+            })?;
+            (record.summary.provider_id.clone(), record.desired_controls.clone())
         };
         let descriptor = self
             .registry
@@ -1770,7 +1763,17 @@ impl SessionManager {
             .into_iter()
             .find(|descriptor| descriptor.id == provider)
             .ok_or_else(|| AgentError::unsupported("native controls"))?;
-        Ok(descriptor.controls)
+        let mut controls = descriptor.controls;
+        for requested in desired {
+            if let Some(control) = controls
+                .iter_mut()
+                .find(|control| control.name == requested.name)
+            {
+                control.current = Some(requested.value);
+                control.status = "deferred".into();
+            }
+        }
+        Ok(controls)
     }
 
     /// Selecciona modelo/esfuerzo para el SIGUIENTE turno. Codex expone

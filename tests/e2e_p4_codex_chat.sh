@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 if [[ "${GF_E2E_REAL:-}" != "1" ]]; then
   echo "SKIP: set GF_E2E_REAL=1 to run real Codex smoke (billable model calls)"
   exit 0
@@ -27,12 +27,14 @@ echo "workspace=$WS session=$SES"
 timeout 240 "$BIN/fleetctl" watch "$SES" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
 WATCH_PID=$!
 sleep 1
-"$BIN/fleetctl" prompt "$SES" 'Reply with exactly: P4 CODEX OK. Do not use tools.' || true
-if wait "$WATCH_PID"; then echo 'watch ok'; else echo "watch FAILED exit=$?"; fi
+"$BIN/fleetctl" prompt "$SES" 'Reply with exactly: P4 CODEX OK. Do not use tools.'
+wait "$WATCH_PID"
+echo 'watch ok'
 echo '--- watch stderr ---'; cat "$RUNTIME/watch.err"
 echo '--- watch stdout ---'; cat "$RUNTIME/watch.out"
 grep -qF $'delta\t' "$RUNTIME/watch.out" || { echo "FAIL: no assistant deltas"; exit 1; }
 grep -qF 'turn_completed	Completed' "$RUNTIME/watch.out" || { echo "FAIL: no terminal completion"; exit 1; }
+grep -qi 'P4 CODEX OK' "$RUNTIME/watch.out" || { echo "FAIL: assistant response text missing"; exit 1; }
 echo '--- timeline ---'; "$BIN/fleetctl" timeline "$SES" --limit 100 || true
 echo '--- daemon err tail ---'; tail -20 "$RUNTIME/daemon.err"
 echo "RUNTIME=$RUNTIME"

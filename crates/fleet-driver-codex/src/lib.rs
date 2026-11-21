@@ -179,6 +179,7 @@ fn discover_controls() -> Vec<ControlState> {
 struct PendingApproval {
     request_id: Value,
     method: String,
+    params: Value,
     options: Vec<fleet_domain::ApprovalOptionSpec>,
 }
 
@@ -276,6 +277,7 @@ impl CodexDriver {
                     native_request_id,
                     request_id,
                     method,
+                    params,
                     message,
                     resources,
                     options,
@@ -289,6 +291,7 @@ impl CodexDriver {
                     PendingApproval {
                         request_id,
                         method,
+                        params,
                         options: options.clone(),
                     },
                 );
@@ -527,7 +530,13 @@ impl AgentDriver for CodexDriver {
             code: "not_found".into(),
             message: "approval request is no longer pending".into(),
         })?;
-        let answer = build_native_answer(&pending.method, &decision, &pending.options, &args)?;
+        let answer = build_native_answer(
+            &pending.method,
+            &decision,
+            &pending.options,
+            &args,
+            &pending.params,
+        )?;
         let response_id = pending.request_id.clone();
         let method = pending.method.clone();
         self.rpc_mut()?

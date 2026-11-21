@@ -239,6 +239,7 @@ pub struct NativeApproval {
     pub native_request_id: String,
     pub request_id: Value,
     pub method: String,
+    pub params: Value,
     pub message: String,
     pub resources: Vec<String>,
     pub options: Vec<ApprovalOptionSpec>,
@@ -367,7 +368,25 @@ pub fn parse_approval_request(request: &ServerRequest) -> Option<NativeApproval>
     if !support.contains(&request.method.as_str()) {
         return None;
     }
-    let options = announced_options(&request.method, &request.params);
+    // Construir el esquema de preguntas con sus IDs nativos reales.
+    let options = if request.method == "item/tool/requestUserInput" {
+        let questions = request.params.get("questions")?.as_array()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut fields = Vec::new();
+        for question in questions {
+            let id = text(question, "id")?;
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            fields.push(arg(&format!("question:{id}"), "text_list", true));
+        }
+        if fields.is_empty() {
+            return None;
+        }
+        vec![option("answer", "Answer questions", fields)]
+    } else {
+        announced_options(&request.method, &request.params)
+    };
     if options.is_empty() {
         return None;
     }
@@ -397,6 +416,7 @@ pub fn parse_approval_request(request: &ServerRequest) -> Option<NativeApproval>
         native_request_id,
         request_id: request.id.clone(),
         method: request.method.clone(),
+        params: request.params.clone(),
         message: redact_provider_error(&message),
         resources: resources
             .into_iter()
@@ -419,6 +439,7 @@ pub fn build_native_answer(
     option_id: &str,
     options: &[ApprovalOptionSpec],
     args: &[ApprovalArgument],
+    params: &Value,
 ) -> Result<Value, AgentError> {
     let spec = options
         .iter()
@@ -427,6 +448,20 @@ pub fn build_native_answer(
             code: "InvalidDecision".into(),
             message: "decision was not announced for this approval".into(),
         })?;
+    let mut used = std::collections::HashSet::new();
+    for input in args {
+        if !used.insert(input.name.as_str()) {
+            return Err(AgentError { code: "InvalidArgument".into(), message: "duplicate argument".into() });
+        }
+        let field = spec.args.iter().find(|field| field.name == input.name)
+            .ok_or_else(|| AgentError { code: "InvalidArgument".into(), message: "argument not announced".into() })?;
+        if input.values.is_empty() || input.values.iter().any(String::is_empty)
+            || (field.kind == "text" && input.values.len() != 1)
+            || !matches!(field.kind.as_str(), "text" | "text_list")
+        {
+            return Err(AgentError { code: "InvalidArgument".into(), message: "invalid argument type or values".into() });
+        }
+    }
     for required in spec.args.iter().filter(|arg| arg.required) {
         if arg_values(args, &required.name).is_empty() {
             return Err(AgentError {
@@ -458,24 +493,51 @@ pub fn build_native_answer(
             }
         }),
         "answer" => {
-            let values = arg_values(args, "answers");
-            if values.is_empty() {
+            let mut answer_map = serde_json::Map::new();
+            for field in &spec.args {
+                let id = field.name.strip_prefix("question:").ok_or_else(|| AgentError {
+                    code: "InvalidArgument".into(),
+                    message: "unrecognized question identifier".into(),
+                })?;
+                let values = arg_values(args, &field.name);
+                if values.is_empty() {
+                    return Err(AgentError {
+                        code: "InvalidArgument".into(),
+                        message: "a required native question was not answered".into(),
+                    });
+                }
+                answer_map.insert(id.to_string(), json!({"answers": values}));
+            }
+            json!({"answers": answer_map})
+        }
+        "grant" => {
+            let allowed = strings(params.get("permissions"));
+            let requested = arg_values(args, "permissions");
+            if allowed.is_empty()
+                || requested.is_empty()
+                || !requested.iter().all(|value| allowed.contains(value))
+            {
                 return Err(AgentError {
                     code: "InvalidArgument".into(),
-                    message: "answers must not be empty".into(),
+                    message: "permission grant must be a subset of the native request".into(),
                 });
             }
-            let key = args
-                .iter()
-                .find(|arg| arg.name == "question")
-                .map(|arg| arg.values.first().cloned().unwrap_or_else(|| "q0".into()))
-                .unwrap_or_else(|| "q0".into());
-            json!({"answers": {key: {"answers": values}}})
+            let scope = arg_values(args, "scope")
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "turn".into());
+            let scopes = strings(params.get("availableScopes"));
+            if !matches!(scope.as_str(), "turn" | "session")
+                || (scopes.is_empty() && scope != "turn")
+                || (!scopes.is_empty() && !scopes.contains(&scope))
+            {
+                return Err(AgentError {
+                    code: "InvalidArgument".into(),
+                    message: "permission scope is not allowed by native request".into(),
+                });
+            }
+            json!({"permissions": requested, "scope": scope})
         }
-        "grant" => json!({
-            "permissions": arg_values(args, "permissions"),
-            "scope": arg_values(args, "scope").first().cloned().unwrap_or_else(|| "turn".into())
-        }),
         _ => {
             return Err(AgentError::unsupported("approval decision"));
         }
@@ -574,9 +636,9 @@ mod tests {
             .options
             .iter()
             .any(|o| o.option_id == "amend_execpolicy"));
-        assert!(build_native_answer(&approval.method, "decline", &approval.options, &[]).is_err());
+        assert!(build_native_answer(&approval.method, "decline", &approval.options, &[], &request.params).is_err());
         assert!(
-            build_native_answer(&approval.method, "amend_execpolicy", &approval.options, &[])
+            build_native_answer(&approval.method, "amend_execpolicy", &approval.options, &[], &request.params)
                 .is_err()
         );
         let answer = build_native_answer(
@@ -587,8 +649,57 @@ mod tests {
                 name: "execpolicy_amendment".into(),
                 values: vec!["allow cargo test".into()],
             }],
+            &request.params,
         )
         .unwrap();
         assert!(answer.to_string().contains("acceptWithExecpolicyAmendment"));
     }
+    #[test]
+    fn native_user_question_ids_are_preserved() {
+        let request = ServerRequest {
+            id: json!(19),
+            method: "item/tool/requestUserInput".into(),
+            params: json!({"questions":[{"id":"language"},{"id":"style"}]}),
+        };
+        let approval = parse_approval_request(&request).unwrap();
+        let answer = build_native_answer(
+            &approval.method,
+            "answer",
+            &approval.options,
+            &[
+                ApprovalArgument { name: "question:language".into(), values: vec!["Rust".into()] },
+                ApprovalArgument { name: "question:style".into(), values: vec!["compact".into()] },
+            ],
+            &request.params,
+        ).unwrap();
+        assert_eq!(answer["answers"]["language"]["answers"][0], "Rust");
+        assert_eq!(answer["answers"]["style"]["answers"][0], "compact");
+    }
+
+    #[test]
+    fn native_permission_grant_rejects_broader_scope_and_resources() {
+        let options = vec![option("grant", "Grant", vec![
+            arg("permissions", "text_list", true),
+            arg("scope", "text", false),
+        ])];
+        let params = json!({"permissions":["read"],"availableScopes":["turn"]});
+        assert!(build_native_answer(
+            "item/permissions/requestApproval",
+            "grant",
+            &options,
+            &[ApprovalArgument { name: "permissions".into(), values: vec!["write".into()] }],
+            &params,
+        ).is_err());
+        assert!(build_native_answer(
+            "item/permissions/requestApproval",
+            "grant",
+            &options,
+            &[
+                ApprovalArgument { name: "permissions".into(), values: vec!["read".into()] },
+                ApprovalArgument { name: "scope".into(), values: vec!["session".into()] },
+            ],
+            &params,
+        ).is_err());
+    }
+
 }

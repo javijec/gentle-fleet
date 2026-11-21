@@ -556,13 +556,16 @@ impl SessionManager {
             let _ = handle.ack(runner_seq);
             return Ok(());
         }
-        let event_id = self.publish_agent(session_id, event)?;
-        if let Some(event_id) = event_id {
+        let event_id =
+            self.publish_agent_from_runner(session_id, event, Some((runner_id, runner_seq)))?;
+        if event_id.is_none() {
+            // No public event (stale step / redundant native TurnStarted), but
+            // its runner sequence must still be durably recorded before ACK.
             self.store
-                .record_runner_event(runner_id, runner_seq, &event_id)
+                .record_runner_event(runner_id, runner_seq, "")
                 .map_err(to_agent_error)?;
         }
-        let _ = handle.ack(runner_seq);
+        handle.ack(runner_seq)?;
         Ok(())
     }
 
@@ -671,6 +674,17 @@ impl SessionManager {
         kind: EventKind,
         approval: Option<&ApprovalRequest>,
     ) -> Result<(), AgentError> {
+        self.publish_locked_with_runner(state, session_id, kind, approval, None)
+    }
+
+    fn publish_locked_with_runner(
+        &self,
+        state: &mut ManagerState,
+        session_id: &str,
+        kind: EventKind,
+        approval: Option<&ApprovalRequest>,
+        runner_source: Option<(&str, u64)>,
+    ) -> Result<(), AgentError> {
         Self::ensure_writable(state)?;
         let record = state
             .sessions
@@ -693,19 +707,27 @@ impl SessionManager {
             created_at_ms: now_ms(),
             updated_at_ms: now_ms(),
         };
-        if let Err(error) = self.store.commit_event(&event, &projection, approval) {
+        let committed = match runner_source {
+            Some((runner_id, runner_seq)) => self.store
+                .commit_runner_event(runner_id, runner_seq, &event, &projection, approval)
+                .map(|created| created),
+            None => self.store.commit_event(&event, &projection, approval).map(|_| true),
+        };
+        if let Err(error) = committed {
             // The driver may still have side effects, but Fleet cannot safely
             // acknowledge or start another operation while durable evidence is
             // unavailable. The next daemon start marks in-flight work uncertain.
             state.storage_fault = Some(error.message.clone());
             return Err(to_agent_error(error));
         }
-        state
-            .sessions
-            .get_mut(session_id)
-            .expect("session checked")
-            .next_seq += 1;
-        self.bus.publish(&event);
+        if committed.expect("committed event checked").then_some(()).is_some() {
+            state
+                .sessions
+                .get_mut(session_id)
+                .expect("session checked")
+                .next_seq += 1;
+            self.bus.publish(&event);
+        }
         Ok(())
     }
 
@@ -756,6 +778,15 @@ impl SessionManager {
         &self,
         session_id: &str,
         event: AgentEvent,
+    ) -> Result<Option<String>, AgentError> {
+        self.publish_agent_from_runner(session_id, event, None)
+    }
+
+    fn publish_agent_from_runner(
+        &self,
+        session_id: &str,
+        event: AgentEvent,
+        runner_source: Option<(&str, u64)>,
     ) -> Result<Option<String>, AgentError> {
         let next_approval_id = self.next_id("appr");
         let mut state = self.state.lock().expect("manager poisoned");
@@ -942,7 +973,13 @@ impl SessionManager {
 
         // Keep the manager lock across the native event transition; no other
         // client may change the approval between checking and committing it.
-        self.publish_locked_with_approval(&mut state, session_id, kind, new_approval.as_ref())?;
+        self.publish_locked_with_runner(
+            &mut state,
+            session_id,
+            kind,
+            new_approval.as_ref(),
+            runner_source,
+        )?;
         if let Some(approval) = new_approval {
             state
                 .approvals
@@ -2121,6 +2158,16 @@ mod tests {
             approval: Option<&ApprovalRequest>,
         ) -> fleet_domain::store::StoreResult<()> {
             self.inner.commit_event(event, session, approval)
+        }
+        fn commit_runner_event(
+            &self,
+            runner_id: &str,
+            runner_seq: u64,
+            event: &Event,
+            session: &fleet_domain::store::SessionRecord,
+            approval: Option<&ApprovalRequest>,
+        ) -> fleet_domain::store::StoreResult<bool> {
+            self.inner.commit_runner_event(runner_id, runner_seq, event, session, approval)
         }
         fn read_events(
             &self,

@@ -182,6 +182,16 @@ pub trait SessionStore: Send + Sync {
         session: &SessionRecord,
         approval: Option<&ApprovalRequest>,
     ) -> StoreResult<()>;
+    /// Atomically commit the public event + projections + runner dedup key.
+    /// false means a previously committed runner sequence was redelivered.
+    fn commit_runner_event(
+        &self,
+        runner_id: &str,
+        runner_seq: u64,
+        event: &Event,
+        session: &SessionRecord,
+        approval: Option<&ApprovalRequest>,
+    ) -> StoreResult<bool>;
     fn read_events(
         &self,
         session_id: &str,

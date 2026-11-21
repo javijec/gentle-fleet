@@ -82,7 +82,7 @@ Leyenda: ✅ VERIFIED · ◐ OBSERVED · ○ UNTESTED · ✗ UNSUPPORTED · — 
 ## 5. Contradicciones con documentación anterior y actualización propuesta
 
 1. **Deriva Pi (P0 vs P4.0):** `docs/research/PI.md:12-13`, `PROVIDER_COMPARISON.md:24` y `KNOWN_LIMITATIONS.md` fijan `pi 1.5.2`. Sigue siendo correcto para el Pi embebido en Gentle Shell; es incompleto para el `pi` del PATH, que es 1.6.0. **Propuesta:** añadir a esos documentos una nota `P4.0: Pi estándar 1.6.0 (distinto del Pi 1.5.2 embebido en Gentle Shell)` sin borrar las líneas P0.
-2. **`PI.md:84`** ("capabilities invocada pero no se conservó la lista") — resuelto en P4.0: inventario completo de 23 métodos y 9 eventos capturado. Proponer nota de resolución.
+2. **`PI.md:84`** ("capabilities invocada pero no se conservó la lista") — resuelto en P4.0: inventario de 23 métodos y 8 eventos anunciados en sesión efímera capturado; el noveno, `session_snapshot`, está documentado como condicional. Proponer nota de resolución.
 3. **`PI.md:94-95` / `KNOWN_LIMITATIONS.md`** (`new_session` UNTESTED, `list_sessions` "anunciado pero sin probar") — `new_session` VERIFIED en 1.6.0; `list_sessions` probado con `sessions_unavailable` en sesión efímera. `abort`, `steer`, `follow_up` siguen UNTESTED.
 4. **Extension UI:** `PI.md:80-84` la describe como no nativa de Pi. Correcto para el diálogo *Gentle*, incorrecto si se lee como ausencia de Extension UI: Pi 1.6.0 documenta `rpc-extension-ui.md` con `select/confirm/input/editor`.
 5. **Comandos nuevos en 1.6.0:** `get_entries`, `get_tree`, `get_last_assistant_text`, `bash`, `export_html`, `set_*_mode`, compact/retry. La investigación debe citarse por versión, no globalmente.

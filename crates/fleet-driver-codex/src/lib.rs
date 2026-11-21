@@ -822,55 +822,107 @@ impl DriverFactory for CodexFactory {
                 message: "native session reference is no longer available; rediscover it".into(),
             })?;
         let mut rpc = connect_probe()?;
-        let turns = rpc
-            .call(
-                "thread/turns/list",
-                json!({"threadId": thread_id, "limit": 100, "itemsView": "full"}),
-                CALL_TIMEOUT,
-            )
-            .map_err(to_agent_error)?;
         let mut messages = Vec::new();
-        let turn_list = turns
-            .get("data")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for turn in turn_list {
-            // `itemsView:"full"` devuelve los ítems dentro de cada turno;
-            // `thread/items/list` envuelve cada uno en `{item: ...}` y no es
-            // necesario para la importación.
-            let item_list = turn
-                .get("items")
+        let mut cursor: Option<String> = None;
+        let mut seen_cursors = std::collections::HashSet::new();
+        loop {
+            let mut params = json!({
+                "threadId": thread_id,
+                "limit": 100,
+                "itemsView": "full",
+                "sortDirection": "asc"
+            });
+            if let Some(value) = &cursor {
+                params["cursor"] = json!(value);
+            }
+            let turns = rpc
+                .call("thread/turns/list", params, CALL_TIMEOUT)
+                .map_err(to_agent_error)?;
+            let page = turns
+                .get("data")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for item in item_list {
-                let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-                let role = if item_type.contains("user") {
-                    "user"
-                } else if item_type.contains("agent") {
-                    "assistant"
-                } else {
-                    continue;
-                };
-                let body = text(&item, "text").or_else(|| {
-                    item.get("content")
-                        .and_then(Value::as_array)
-                        .map(|parts| {
-                            parts
-                                .iter()
-                                .filter_map(|part| text(part, "text"))
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .filter(|joined| !joined.is_empty())
-                });
-                if let Some(body) = body {
-                    messages.push(NativeHistoryMessage {
-                        role: role.into(),
-                        text: body,
-                    });
+                .ok_or_else(|| AgentError {
+                    code: "HistoryMalformed".into(),
+                    message: "Codex history response has no turn array".into(),
+                })?;
+            for turn in page {
+                let items = turn
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| AgentError {
+                        code: "HistoryMalformed".into(),
+                        message: "Codex turn history is missing items".into(),
+                    })?;
+                for item in items {
+                    let kind = item.get("type").and_then(Value::as_str).unwrap_or("");
+                    let role = match kind {
+                        "userMessage" | "userInput" => "user",
+                        "agentMessage" => "assistant",
+                        "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => "tool",
+                        "reasoning" => "reasoning",
+                        _ => {
+                            return Err(AgentError {
+                                code: "HistoryUnsupportedItem".into(),
+                                message: "Codex history contains a structured item type Fleet cannot yet import".into(),
+                            });
+                        }
+                    };
+                    let content_text = || {
+                        item.get("content")
+                            .and_then(Value::as_array)
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .filter_map(|part| text(part, "text"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .filter(|value| !value.is_empty())
+                    };
+                    let body = if role == "tool" {
+                        let mut fields = Vec::new();
+                        fields.push(format!("tool_type: {kind}"));
+                        if let Some(command) = text(item, "command").or_else(|| text(item, "query")) {
+                            fields.push(format!("input: {command}"));
+                        }
+                        if let Some(output) = text(item, "aggregatedOutput")
+                            .or_else(|| text(item, "output"))
+                            .or_else(|| text(item, "result"))
+                        {
+                            fields.push(format!("output: {output}"));
+                        }
+                        if let Some(status) = text(item, "status") {
+                            fields.push(format!("status: {status}"));
+                        }
+                        fields.join("\n")
+                    } else {
+                        text(item, "text").or_else(content_text).unwrap_or_default()
+                    };
+                    // Un objeto sin texto no se transforma en un resultado
+                    // ficticio: se registra solo si hay contenido verificable.
+                    if !body.is_empty() {
+                        messages.push(NativeHistoryMessage {
+                            role: role.into(),
+                            text: body,
+                        });
+                    }
                 }
+            }
+            cursor = text(&turns, "nextCursor");
+            if cursor.is_none() {
+                break;
+            }
+            if !seen_cursors.insert(cursor.clone().unwrap_or_default()) {
+                return Err(AgentError {
+                    code: "HistoryPaginationCycle".into(),
+                    message: "Codex returned a repeated history cursor".into(),
+                });
+            }
+            if messages.len() > 100_000 {
+                return Err(AgentError {
+                    code: "HistoryResultLimit".into(),
+                    message: "history exceeds Fleet's safe in-memory page limit".into(),
+                });
             }
         }
         let _ = rpc.close();

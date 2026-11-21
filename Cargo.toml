@@ -11,6 +11,7 @@ members = [
   "crates/fleet-driver-pi",
   "crates/fleet-rpc-jsonl",
   "crates/fleet-driver-gentle-shell",
+  "crates/fleet-conformance",
   "crates/fleet-providers",
   "crates/fleetd",
   "crates/fleetctl",

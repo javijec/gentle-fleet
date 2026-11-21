@@ -1,0 +1,15 @@
+[package]
+name = "fleet-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fleet-conformance"
+path = "src/main.rs"
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }
+fleet-protocol = { path = "../fleet-protocol" }
+serde.workspace = true
+serde_json.workspace = true

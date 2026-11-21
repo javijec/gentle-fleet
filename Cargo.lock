@@ -92,6 +92,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-conformance"
+version = "0.1.0"
+dependencies = [
+ "fleet-domain",
+ "fleet-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fleet-core"
 version = "0.1.0"
 dependencies = [

@@ -42,5 +42,13 @@ BEFORE="$(grep -c $'history\t' "$RUNTIME/timeline-before.out" || true)"
 cmp -s "$RUNTIME/import.out" "$RUNTIME/reimport.out" || { echo "FAIL: reimport result changed"; exit 1; }
 "$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-after.out"
 [[ "$(grep -c $'history\t' "$RUNTIME/timeline-after.out" || true)" == "$BEFORE" ]] || { echo "FAIL: duplicate history"; exit 1; }
+"$BIN/fleetctl" import-history "$SES2" codex "$REF" independent-op-key >"$RUNTIME/import-different-key.out"
+grep -q $'^imported\t0$' "$RUNTIME/import-different-key.out" || {
+  echo "FAIL: different operation key duplicated native items"; cat "$RUNTIME/import-different-key.out"; exit 1
+}
+"$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-different-key.out"
+[[ "$(grep -c $'history\t' "$RUNTIME/timeline-different-key.out" || true)" == "$BEFORE" ]] || {
+  echo "FAIL: history was duplicated across distinct operation keys"; exit 1
+}
 echo "PASS: native history import idempotent ($BEFORE events)"
 echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"

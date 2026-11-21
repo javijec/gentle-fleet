@@ -22,6 +22,7 @@ Las versiones se detectan en runtime; no se hardcodean como constantes de compat
 | `85e13ff` | Extracción del transporte JSONL neutral a `fleet-rpc-jsonl` |
 | `fa17ae8` | Driver Gentle Shell, Desktop RPC, eventos, controles y seis E2E |
 | `f179bf5` | Descubrimiento nativo de solo lectura desde `list_sessions` |
+| `617a94d` | Corrección CI: test de sondeo independiente del binario instalado |
 
 ## 3. Protocolo real negociado
 
@@ -66,7 +67,7 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 | Supervivencia P3 | **PASS** | `e2e_p4_gs_recovery.sh`: runner vivo tras SIGKILL de `fleetd`, reattach y timeline sin duplicados |
 | Concurrencia | **PASS** | `e2e_p4_gs_concurrency.sh`: matar el runner Gentle Shell no detiene Codex |
 | Regresiones anteriores | **PASS** | 14 E2E deterministas P1–P3, 8 smokes Codex y 8 smokes Pi |
-| GitHub Actions | **PASS** | CI verde sobre el commit final |
+| GitHub Actions | **PASS** | CI `44950955792` sobre `617a94d` → success (los commits anteriores fallaron por un test dependiente del entorno, corregido en `617a94d`) |
 
 ## 6. Pruebas ejecutadas
 

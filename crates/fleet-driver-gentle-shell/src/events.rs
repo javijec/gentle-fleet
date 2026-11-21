@@ -488,6 +488,63 @@ mod tests {
             .any(|e| matches!(&e.kind, DomainEvent::ToolCompleted { success: true, .. })));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn synthetic_native_select_roundtrip_delivers_explicit_deny() {
+        // El productor sintético pide permiso. Fleet debe responder con la
+        // opción seleccionada, nunca autoaprobar ni cambiar el modo del usuario.
+        let script = r#"IFS= read -r command
+printf '%s\n' '{"type":"response","id":"fleet-1","success":true,"data":{"disposition":"handled"}}'
+printf '%s\n' '{"type":"extension_ui_request","id":"permission-fixture","method":"select","title":"Allow harmless fixture?","options":["Allow once","Deny"]}'
+IFS= read -r answer
+case "$answer" in
+  *'"value":"Deny"'*) printf '%s\n' '{"type":"agent_settled","aborted":false}' ;;
+  *) printf '%s\n' '{"type":"rpc_fatal_error","message":"wrong permission response"}' ;;
+esac
+"#;
+        let args = vec!["-c".into(), script.into()];
+        let mut rpc = crate::rpc::JsonlRpc::spawn_with_widgets(
+            std::path::Path::new("/tmp"),
+            "sh",
+            &args,
+            &[],
+            true,
+        )
+        .unwrap();
+        rpc.call(
+            "prompt",
+            json!({"message":"synthetic approval fixture"}),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        let request = (0..200)
+            .find_map(|_| {
+                let value = rpc.try_ui_request();
+                if value.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                value
+            })
+            .expect("native request should arrive");
+        let approval = parse_ui_request(&request).unwrap();
+        assert_eq!(approval.options[0].label, "Allow once");
+        assert_eq!(approval.options[1].label, "Deny");
+        let answer = build_ui_answer(&approval, "opt_1", &[]).unwrap();
+        assert_eq!(answer["value"], "Deny");
+        rpc.respond_ui(&request.id, answer).unwrap();
+        let terminal = (0..200)
+            .find_map(|_| {
+                let value = rpc.try_event();
+                if value.is_none() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                value
+            })
+            .expect("fixture must report terminal event");
+        assert_eq!(terminal["type"], "agent_settled");
+        let _ = rpc.close();
+    }
+
     #[test]
     fn extension_ui_becomes_typed_approval_without_native_ids() {
         let request = UiRequest {

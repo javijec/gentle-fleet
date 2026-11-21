@@ -163,6 +163,12 @@ impl RunnerHandle for ProcessHandle {
             | RunnerCommand::Answer { operation_key, .. } => {
                 (format!("runner-op-{operation_key}"), operation_key.clone())
             }
+            // P4.1-A.2: la interrupción es idempotente por turno; una clave
+            // aleatoria permitiría despachar la misma interrupción dos veces.
+            RunnerCommand::Interrupt { turn_id } => (
+                format!("runner-op-interrupt-{turn_id}"),
+                format!("interrupt:{turn_id}"),
+            ),
             _ => {
                 let operation_id = format!("runner-op-{}", uuid::Uuid::new_v4());
                 (

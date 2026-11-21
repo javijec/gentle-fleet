@@ -35,6 +35,10 @@ pub enum Request {
         text: String,
         operation_key: OperationId,
     },
+    InterruptTurn {
+        session_id: SessionId,
+        turn_id: String,
+    },
     SubscribeTimeline {
         session_id: SessionId,
         since_seq: u64,
@@ -85,6 +89,10 @@ pub enum Response {
     },
     PromptAccepted {
         operation_id: String,
+        session_id: SessionId,
+        turn_id: String,
+    },
+    TurnInterrupted {
         session_id: SessionId,
         turn_id: String,
     },
@@ -217,6 +225,31 @@ mod tests {
         let text = serde_json::to_string(&frame).unwrap();
         assert!(!text.contains("native_request_id"));
         assert!(!text.contains("native-sensitive-secret"));
+    }
+
+    #[test]
+    fn legacy_client_frames_still_deserialize_after_interrupt_was_added() {
+        // P4.1-A.4: ampliar el enum con una variante nueva no debe romper
+        // clientes antiguos. Este JSON es el emitido por fleetctl antes de P4.1.
+        let legacy = r#"{"kind":"request","request_id":"r-old","request":{"type":"send_prompt","session_id":"ses-1","text":"hola","operation_key":"op-1"}}"#;
+        let frame: Frame = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(
+            frame,
+            Frame::Request {
+                request: Request::SendPrompt { .. },
+                ..
+            }
+        ));
+        let interrupt = Frame::Request {
+            request_id: "r-new".into(),
+            request: Request::InterruptTurn {
+                session_id: "ses-1".into(),
+                turn_id: "turn-1".into(),
+            },
+        };
+        let text = serde_json::to_string(&interrupt).unwrap();
+        assert_eq!(serde_json::from_str::<Frame>(&text).unwrap(), interrupt);
+        assert_eq!(WIRE, "fleet-v1-p2");
     }
 
     #[test]

@@ -23,6 +23,11 @@ pub struct FakeConfig {
     pub emit_terminal_failure: bool,
     pub emit_approval: bool,
     pub fail_answer: bool,
+    /// P4.1-A.2: palancas para probar interrupción, errores y carreras.
+    pub fail_interrupt: bool,
+    pub interrupt_without_terminal: bool,
+    /// El turno no termina hasta que llegue una interrupción explícita.
+    pub defer_terminal_until_interrupt: bool,
     /// Pausa entre el primer delta y el resto: permite matar fleetd con un
     /// turno activo y comprobar que el runner sigue produciendo eventos.
     pub slow_turn_ms: u64,
@@ -55,7 +60,7 @@ impl FakeDriver {
             tool_events: true,
             session_history: true,
             native_turn_ids: true,
-            cancel_turn: false,
+            cancel_turn: true,
             approvals: false,
             can_own_process: false,
             can_attach_service: false,
@@ -167,7 +172,10 @@ impl AgentDriver for FakeDriver {
                 turn_id: turn.clone(),
                 text: "Hello from fake".into(),
             }));
-        if self.config.emit_terminal_failure {
+        if self.config.defer_terminal_until_interrupt {
+            // Sin terminal propio: la única terminalidad válida vendrá de
+            // `interrupt` (P4.1-A.2).
+        } else if self.config.emit_terminal_failure {
             self.pending.push_back(Self::event(DomainEvent::TurnFailed {
                 turn_id: turn.clone(),
                 message: "injected terminal failure".into(),
@@ -221,6 +229,24 @@ impl AgentDriver for FakeDriver {
                 }));
         } else {
             self.pending.append(&mut self.deferred);
+        }
+        Ok(())
+    }
+
+    fn interrupt(&mut self, turn_id: String) -> Result<(), AgentError> {
+        if self.config.fail_interrupt {
+            return Err(AgentError {
+                code: "interrupt_delivery_failed".into(),
+                message: "injected fake interrupt failure".into(),
+            });
+        }
+        self.deferred.clear();
+        if !self.config.interrupt_without_terminal {
+            self.pending
+                .push_back(Self::event(DomainEvent::TurnCompleted {
+                    turn_id,
+                    status: TurnStatus::Interrupted,
+                }));
         }
         Ok(())
     }
@@ -299,7 +325,7 @@ impl DriverFactory for FakeFactory {
                 tool_events: true,
                 session_history: true,
                 native_turn_ids: true,
-                cancel_turn: false,
+                cancel_turn: true,
                 approvals: false,
                 can_own_process: false,
                 can_attach_service: false,

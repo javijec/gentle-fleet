@@ -1632,6 +1632,70 @@ impl SessionManager {
         })
     }
 
+    /// P4.1-A.2: solicita la cancelación del turno activo. No fija un estado
+    /// terminal por sí misma: solo el evento del driver puede completar el
+    /// turno como `Interrupted`. Una carrera con `stop_session` se resuelve
+    /// bajo el mismo lock y el evento tardío se descarta en la ingesta.
+    pub fn interrupt_turn(&self, session_id: &str, turn_id: &str) -> Result<(), AgentError> {
+        let runner = {
+            let mut state = self.state.lock().expect("manager poisoned");
+            let record = state
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| AgentError {
+                    code: "not_found".into(),
+                    message: format!("unknown session `{session_id}`"),
+                })?;
+            if record.summary.state != SessionState::Running || record.runner.is_none() {
+                return Err(AgentError {
+                    code: "session_stopped".into(),
+                    message: format!("session `{session_id}` has no live runner"),
+                });
+            }
+            match record.active_turn.as_deref() {
+                Some(active) if active == turn_id => {}
+                Some(_) => {
+                    return Err(AgentError {
+                        code: "TurnMismatch".into(),
+                        message: "the requested turn is not the active turn".into(),
+                    })
+                }
+                None => {
+                    return Err(AgentError {
+                        code: "NoActiveTurn".into(),
+                        message: "session has no active turn to interrupt".into(),
+                    })
+                }
+            }
+            if !matches!(
+                record.summary.turn_state,
+                TurnState::Running | TurnState::AwaitingApproval
+            ) {
+                return Err(AgentError {
+                    code: "TurnNotInterruptible".into(),
+                    message: "turn is not in an interruptible state".into(),
+                });
+            }
+            let runner = record.runner.clone().expect("runner checked");
+            let _ = self.publish_locked(
+                &mut state,
+                session_id,
+                EventKind::AgentNotice {
+                    message: format!("interrupt requested for turn {turn_id}"),
+                },
+            );
+            runner
+        };
+        runner
+            .submit(RunnerCommand::Interrupt {
+                turn_id: turn_id.to_string(),
+            })
+            .map_err(|error| AgentError {
+                code: "InterruptDispatchFailed".into(),
+                message: redact_provider_error(&format!("interrupt was not dispatched: {error}")),
+            })
+    }
+
     /// Suscribe antes de copiar el snapshot; publicaciones concurrentes quedan
     /// bloqueadas por el lock de sesión, así que no hay hueco ni duplicado.
     pub fn subscribe(
@@ -1723,13 +1787,11 @@ impl SessionManager {
             EventKind::SessionStateChanged { state: new_state },
         );
         if let Err(error) = result {
-            let _ = self.publish_locked(
-                &mut state,
-                session_id,
-                EventKind::AgentError {
-                    message: format!("driver close could not be confirmed: {error}"),
-                },
-            );
+            // El error del driver puede contener URLs y IDs nativos del
+            // proveedor. Solo se publica una versión redactada (P4.1-A.1).
+            let message =
+                redact_provider_error(&format!("driver close could not be confirmed: {error}"));
+            let _ = self.publish_locked(&mut state, session_id, EventKind::AgentError { message });
         }
         drop(state);
         self.persist_session_state(session_id);
@@ -1771,7 +1833,7 @@ impl SessionManager {
             &mut state,
             session_id,
             EventKind::AgentNotice {
-                message: reason.to_string(),
+                message: redact_provider_error(reason),
             },
         );
         drop(state);
@@ -2202,7 +2264,7 @@ mod tests {
                 tool_events: true,
                 session_history: true,
                 native_turn_ids: true,
-                cancel_turn: false,
+                cancel_turn: true,
                 approvals: false,
                 can_own_process: false,
                 can_attach_service: false,
@@ -2900,5 +2962,169 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "ack_failed");
         manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn stop_path_public_events_redact_native_ids_and_urls() {
+        let manager = manager(FakeConfig::default());
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        {
+            let mut state = manager.state.lock().expect("manager poisoned");
+            state.sessions.get_mut(&ses.id).unwrap().summary.state = SessionState::Stopping;
+        }
+
+        manager.mark_stop_unconfirmed(
+            &ses.id,
+            "close failed at http://127.0.0.1:1/api/session/ses_secret/per_secret",
+        );
+        let notice = manager
+            .read_timeline(&ses.id, 0, 128)
+            .unwrap()
+            .into_iter()
+            .find_map(|event| match event.kind {
+                EventKind::AgentNotice { message } => Some(message),
+                _ => None,
+            })
+            .expect("AgentNotice must be published for an unconfirmed stop");
+        assert!(!notice.contains("ses_secret"));
+        assert!(!notice.contains("per_secret"));
+        assert!(!notice.contains("http://"));
+
+        {
+            let mut state = manager.state.lock().expect("manager poisoned");
+            state.sessions.get_mut(&ses.id).unwrap().summary.state = SessionState::Stopping;
+        }
+        manager.finish_stop(
+            &ses.id,
+            &Err(AgentError {
+                code: "close_failed".into(),
+                message: "close failed https://host.example/api/exec_exc/msg_secret".into(),
+            }),
+        );
+        let public_error = manager
+            .read_timeline(&ses.id, 0, 128)
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                EventKind::AgentError { message } => Some(message),
+                _ => None,
+            })
+            .find(|message| message.contains("close failed"))
+            .expect("AgentError must be published for a failed close");
+        assert!(public_error.contains("[url redacted]"));
+        assert!(!public_error.contains("exec_exc"));
+        assert!(!public_error.contains("msg_secret"));
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn interrupt_reaches_driver_and_completes_turn() {
+        let manager = manager(FakeConfig {
+            defer_terminal_until_interrupt: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let (subscription, _, _) = manager.subscribe(&ses.id, 0, 64).unwrap();
+        let receipt = manager
+            .send_prompt(&ses.id, "long running task".into(), "op-interrupt-ok")
+            .unwrap();
+
+        manager
+            .interrupt_turn(&ses.id, &receipt.turn_id)
+            .expect("interrupt must be accepted for the active turn");
+        let events = collect_terminal(&subscription);
+        assert!(events.iter().any(|event| matches!(
+            event.kind,
+            EventKind::TurnCompleted {
+                status: TurnStatus::Interrupted,
+                ..
+            }
+        )));
+        // Una segunda interrupción sobre un turno ya terminal se rechaza;
+        // no produce una segunda terminalidad ni reenvía nada.
+        assert_eq!(
+            manager
+                .interrupt_turn(&ses.id, &receipt.turn_id)
+                .unwrap_err()
+                .code,
+            "NoActiveTurn"
+        );
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn interrupt_rejects_wrong_turn_and_failed_delivery_is_not_terminal() {
+        let manager = manager(FakeConfig {
+            defer_terminal_until_interrupt: true,
+            fail_interrupt: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let receipt = manager
+            .send_prompt(&ses.id, "task".into(), "op-interrupt-fail")
+            .unwrap();
+
+        assert_eq!(
+            manager
+                .interrupt_turn(&ses.id, "turn-not-active")
+                .unwrap_err()
+                .code,
+            "TurnMismatch"
+        );
+        manager
+            .interrupt_turn(&ses.id, &receipt.turn_id)
+            .expect("dispatch itself succeeds; delivery failure arrives as event");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut saw_delivery_error = false;
+        while std::time::Instant::now() < deadline {
+            let events = manager.read_timeline(&ses.id, 0, 128).unwrap();
+            saw_delivery_error = events.iter().any(|event| matches!(
+                &event.kind,
+                EventKind::AgentError { message } if message.contains("interrupt_delivery_failed")
+            ));
+            if saw_delivery_error {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            saw_delivery_error,
+            "failed interrupt delivery must be a public error event"
+        );
+        let events = manager.read_timeline(&ses.id, 0, 128).unwrap();
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::TurnCompleted { .. })));
+        manager.stop_session(&ses.id).unwrap();
+    }
+
+    #[test]
+    fn interrupt_does_not_resurrect_turn_after_stop() {
+        let manager = manager(FakeConfig {
+            defer_terminal_until_interrupt: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        let receipt = manager
+            .send_prompt(&ses.id, "task".into(), "op-interrupt-stop-race")
+            .unwrap();
+        manager.stop_session(&ses.id).unwrap();
+        // El turno quedó Uncertain al cerrar; una interrupción posterior no
+        // debe resucitarlo ni generar una terminalidad tardía.
+        manager
+            .interrupt_turn(&ses.id, &receipt.turn_id)
+            .expect_err("stopped session must reject new interrupts");
+        let events = manager.read_timeline(&ses.id, 0, 128).unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event.kind,
+            EventKind::TurnCompleted {
+                status: TurnStatus::Interrupted,
+                ..
+            }
+        )));
     }
 }

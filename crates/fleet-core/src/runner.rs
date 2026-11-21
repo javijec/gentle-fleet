@@ -232,7 +232,19 @@ fn spawn_in_process_driver(
                         );
                     }
                 }
-                Ok(RunnerCommand::Interrupt { .. }) => {}
+                Ok(RunnerCommand::Interrupt { turn_id }) => {
+                    // P4.1-A.2: Interrupt es una operación real, no un no-op.
+                    if let Err(error) = driver.interrupt(turn_id) {
+                        emit(
+                            &events,
+                            &runner_id,
+                            &mut runner_seq,
+                            DomainEvent::AgentError {
+                                message: error.to_string(),
+                            },
+                        );
+                    }
+                }
                 Ok(RunnerCommand::Stop) => {
                     let _ = driver.close();
                     let _ = closed.send(());

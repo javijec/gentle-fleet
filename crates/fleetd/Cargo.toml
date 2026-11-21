@@ -14,6 +14,7 @@ fleet-protocol = { path = "../fleet-protocol" }
 fleet-agent = { path = "../fleet-agent" }
 fleet-core = { path = "../fleet-core" }
 fleet-driver-opencode = { path = "../fleet-driver-opencode" }
+fleet-providers = { path = "../fleet-providers" }
 fleet-store-sqlite = { path = "../fleet-store-sqlite" }
 serde_json.workspace = true
 uuid.workspace = true

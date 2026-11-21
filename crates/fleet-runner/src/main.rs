@@ -9,12 +9,11 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fleet_agent::fake::FakeFactory;
 use fleet_agent::ProviderRegistry;
 use fleet_domain::{AgentEvent, DomainEvent, RunnerIdentity, RunnerStatus, SessionId};
-use fleet_driver_opencode::OpenCodeFactory;
 use fleet_protocol::runner::*;
 use fleet_protocol::transport::{runtime_dir, LocalListener, LocalStream};
+use fleet_providers::builtin_registry_from_env;
 
 use spool::Spool;
 
@@ -63,25 +62,7 @@ fn parse_args() -> Args {
 }
 
 fn build_registry() -> ProviderRegistry {
-    let mut registry = ProviderRegistry::new();
-    let config = fleet_agent::fake::FakeConfig {
-        block_send: std::env::var("FLEET_FAKE_BLOCK_SEND").is_ok(),
-        block_close: std::env::var("FLEET_FAKE_BLOCK_CLOSE").is_ok(),
-        fail_send: std::env::var("FLEET_FAKE_FAIL_SEND").is_ok(),
-        emit_provider_error: std::env::var("FLEET_FAKE_PROVIDER_ERROR").is_ok(),
-        emit_terminal_failure: std::env::var("FLEET_FAKE_TERMINAL_FAILURE").is_ok(),
-        emit_approval: std::env::var("FLEET_FAKE_APPROVAL").is_ok(),
-        fail_answer: std::env::var("FLEET_FAKE_FAIL_ANSWER").is_ok(),
-        slow_turn_ms: std::env::var("FLEET_FAKE_SLOW_TURN_MS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0),
-    };
-    registry.register(Box::new(FakeFactory::with_config(config)));
-    registry.register(Box::new(OpenCodeFactory::with_ask_shell(
-        std::env::var("FLEET_OPENCODE_ASK_SHELL").is_ok(),
-    )));
-    registry
+    builtin_registry_from_env()
 }
 
 fn token_file(runner_id: &str) -> PathBuf {
@@ -267,7 +248,18 @@ fn spawn_driver_loop(
                     }
                     let _ = done.send(outcome);
                 }
-                Ok(DriverCommand::Interrupt { .. }) => {}
+                Ok(DriverCommand::Interrupt { turn_id }) => {
+                    if let Err(error) = driver.interrupt(turn_id) {
+                        append_with_backpressure(
+                            &spool,
+                            AgentEvent {
+                                kind: DomainEvent::AgentError {
+                                    message: error.to_string(),
+                                },
+                            },
+                        );
+                    }
+                }
                 Ok(DriverCommand::Stop) => {
                     match driver.close() {
                         Ok(()) => {
@@ -353,7 +345,7 @@ enum DriverCommand {
         done: std::sync::mpsc::Sender<Result<(), String>>,
     },
     Interrupt {
-        _turn_id: String,
+        turn_id: String,
     },
     Stop,
 }
@@ -484,7 +476,7 @@ fn serve_daemon(
                             )
                         }
                         RunnerCommand::Interrupt { turn_id } => {
-                            (DriverCommand::Interrupt { _turn_id: turn_id }, None)
+                            (DriverCommand::Interrupt { turn_id }, None)
                         }
                         RunnerCommand::Stop => (DriverCommand::Stop, None),
                     };

@@ -5,13 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fleet_agent::fake::{FakeConfig, FakeFactory};
 use fleet_agent::ProviderRegistry;
 use fleet_core::runner::{InProcessRunnerLauncher, RunnerLauncher};
 use fleet_core::{SessionManager, Subscription, SubscriptionHandle, SUBSCRIBER_LIMIT};
-use fleet_driver_opencode::OpenCodeFactory;
 use fleet_protocol::transport::{expected_token, LocalListener, LocalStream};
 use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response, WIRE};
+use fleet_providers::builtin_registry_from_env;
 use fleet_store_sqlite::SqliteStore;
 
 mod process_runner;
@@ -38,24 +37,7 @@ fn database_path() -> std::path::PathBuf {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut registry = ProviderRegistry::new();
-    let fake_config = FakeConfig {
-        block_send: std::env::var("FLEET_FAKE_BLOCK_SEND").is_ok(),
-        block_close: std::env::var("FLEET_FAKE_BLOCK_CLOSE").is_ok(),
-        fail_send: std::env::var("FLEET_FAKE_FAIL_SEND").is_ok(),
-        emit_provider_error: std::env::var("FLEET_FAKE_PROVIDER_ERROR").is_ok(),
-        emit_terminal_failure: std::env::var("FLEET_FAKE_TERMINAL_FAILURE").is_ok(),
-        emit_approval: std::env::var("FLEET_FAKE_APPROVAL").is_ok(),
-        fail_answer: std::env::var("FLEET_FAKE_FAIL_ANSWER").is_ok(),
-        slow_turn_ms: std::env::var("FLEET_FAKE_SLOW_TURN_MS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0),
-    };
-    registry.register(Box::new(FakeFactory::with_config(fake_config)));
-    registry.register(Box::new(OpenCodeFactory::with_ask_shell(
-        std::env::var("FLEET_OPENCODE_ASK_SHELL").is_ok(),
-    )));
+    let registry = builtin_registry_from_env();
     let store = Arc::new(
         SqliteStore::open(database_path())
             .map_err(|e| std::io::Error::other(format!("{}: {}", e.code, e.message)))?,
@@ -233,6 +215,15 @@ fn handle_client(
                     operation_id: receipt.operation_id,
                     session_id: receipt.session_id,
                     turn_id: receipt.turn_id,
+                }),
+            Request::InterruptTurn {
+                session_id,
+                turn_id,
+            } => manager
+                .interrupt_turn(&session_id, &turn_id)
+                .map(|_| Response::TurnInterrupted {
+                    session_id,
+                    turn_id,
                 }),
             Request::StopSession { session_id } => manager
                 .stop_session(&session_id)

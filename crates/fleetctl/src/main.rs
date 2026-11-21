@@ -86,6 +86,7 @@ fn run() -> Result<(), String> {
         "workspace" => workspace(&args[1..]),
         "session" => session(&args[1..]),
         "prompt" => prompt(&args[1..]),
+        "interrupt" => interrupt(&args[1..]),
         "watch" => watch(&args[1..]),
         "stop" => stop(&args[1..]),
         "timeline" => timeline(&args[1..]),
@@ -118,7 +119,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
         .into()
 }
 
@@ -187,6 +188,26 @@ fn session(args: &[String]) -> Result<(), String> {
             other => Err(format!("unexpected response: {other:?}")),
         },
         _ => Err(usage()),
+    }
+}
+
+fn interrupt(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let turn_id = args.get(1).ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::InterruptTurn {
+        session_id,
+        turn_id,
+    })? {
+        Response::TurnInterrupted {
+            session_id,
+            turn_id,
+        } => {
+            println!("interrupted\t{session_id}\t{turn_id}");
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
     }
 }
 

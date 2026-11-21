@@ -393,7 +393,6 @@ impl AgentDriver for CodexDriver {
             self.effort = std::env::var("FLEET_CODEX_EFFORT")
                 .ok()
                 .filter(|v| efforts.contains(v));
-
         }
         // Por defecto Codex debe usar sus políticas nativas. Fleet solo
         // anula sandbox/aprobación ante un override explícito del usuario.

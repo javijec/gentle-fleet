@@ -461,7 +461,6 @@ impl WaitTimeout for Child {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

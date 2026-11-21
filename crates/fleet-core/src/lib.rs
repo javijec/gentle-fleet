@@ -1168,11 +1168,12 @@ impl SessionManager {
                     {
                         return Ok(None);
                     }
-                    let status = if matches!(decision.as_str(), "reject" | "decline" | "cancel" | "abort") {
-                        ApprovalStatus::Rejected
-                    } else {
-                        ApprovalStatus::Accepted
-                    };
+                    let status =
+                        if matches!(decision.as_str(), "reject" | "decline" | "cancel" | "abort") {
+                            ApprovalStatus::Rejected
+                        } else {
+                            ApprovalStatus::Accepted
+                        };
                     approval_update = Some((approval.clone(), status));
                     EventKind::ApprovalResolved {
                         approval_id: approval.approval_id,
@@ -3437,5 +3438,4 @@ mod tests {
             "s\0a\0once"
         );
     }
-
 }

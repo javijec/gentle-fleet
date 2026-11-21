@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 fleet-agent = { path = "../fleet-agent" }
 fleet-driver-opencode = { path = "../fleet-driver-opencode" }
+fleet-driver-codex = { path = "../fleet-driver-codex" }
 
 [dev-dependencies]
 fleet-domain = { path = "../fleet-domain" }

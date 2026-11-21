@@ -39,6 +39,24 @@ pub enum Request {
         session_id: SessionId,
         turn_id: String,
     },
+    ListControls {
+        session_id: SessionId,
+    },
+    SetControl {
+        session_id: SessionId,
+        name: String,
+        value: String,
+        scope: String,
+    },
+    ListNativeSessions {
+        provider_id: ProviderId,
+    },
+    ImportNativeHistory {
+        session_id: SessionId,
+        provider_id: ProviderId,
+        native_ref: String,
+        operation_key: OperationId,
+    },
     SubscribeTimeline {
         session_id: SessionId,
         since_seq: u64,
@@ -96,6 +114,18 @@ pub enum Response {
         session_id: SessionId,
         turn_id: String,
     },
+    Controls {
+        controls: Vec<fleet_domain::ControlState>,
+    },
+    ControlChanged {
+        control: fleet_domain::ControlState,
+    },
+    NativeSessions {
+        sessions: Vec<fleet_domain::NativeSessionInfo>,
+    },
+    HistoryImported {
+        count: usize,
+    },
     Subscribed {
         session_id: SessionId,
         latest_seq: u64,
@@ -147,6 +177,8 @@ pub struct AgentSummary {
     pub availability: String,
     pub capabilities: fleet_domain::ProviderCapabilities,
     pub mode: String,
+    #[serde(default)]
+    pub controls: Vec<fleet_domain::ControlState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +281,9 @@ mod tests {
         };
         let text = serde_json::to_string(&interrupt).unwrap();
         assert_eq!(serde_json::from_str::<Frame>(&text).unwrap(), interrupt);
+        let legacy_agent = r#"{"id":"fake","version":"0.1.0","availability":"Available","capabilities":{"streaming_text":true,"tool_events":true,"session_history":true,"native_turn_ids":true,"cancel_turn":false,"approvals":false,"can_own_process":false,"can_attach_service":false},"mode":"Owned"}"#;
+        let summary: AgentSummary = serde_json::from_str(legacy_agent).unwrap();
+        assert!(summary.controls.is_empty());
         assert_eq!(WIRE, "fleet-v1-p2");
     }
 

@@ -72,6 +72,7 @@ impl FakeDriver {
                 capabilities,
                 mode: RunnerMode::Owned,
                 availability: ProviderAvailability::Available,
+                controls: vec![],
             },
             config,
             pending: VecDeque::new(),
@@ -129,6 +130,18 @@ impl AgentDriver for FakeDriver {
                     message: "allow fake command?".into(),
                     resources: vec![input.text.clone()],
                     allowed_decisions: vec!["once".into(), "reject".into()],
+                    options: vec![
+                        fleet_domain::ApprovalOptionSpec {
+                            option_id: "once".into(),
+                            label: "Allow once".into(),
+                            args: vec![],
+                        },
+                        fleet_domain::ApprovalOptionSpec {
+                            option_id: "reject".into(),
+                            label: "Deny".into(),
+                            args: vec![],
+                        },
+                    ],
                 }));
         }
         if self.config.emit_provider_error {
@@ -332,6 +345,7 @@ impl DriverFactory for FakeFactory {
             },
             mode: RunnerMode::Owned,
             availability: ProviderAvailability::Available,
+            controls: vec![],
         }
     }
 }
@@ -354,6 +368,7 @@ mod tests {
             .send(AgentInput {
                 text: "hi".into(),
                 turn_id: "turn-1".into(),
+                controls: vec![],
             })
             .unwrap();
         let mut kinds = Vec::new();

@@ -20,8 +20,9 @@ use fleet_domain::store::{
     OperationReservation, OperationStatus, RunnerRecord, SessionStore, StoreError, TurnRecord,
 };
 use fleet_domain::{
-    AgentEvent, DomainEvent, Event, EventKind, HostId, ProviderDescriptor, ProviderId, RunnerEvent,
-    RunnerMode, RunnerStatus, SessionId, SessionState, TurnState, TurnStatus, WorkspaceId,
+    AgentEvent, ControlState, DomainEvent, Event, EventKind, HostId, ProviderDescriptor,
+    ProviderId, RunnerEvent, RunnerMode, RunnerStatus, SessionId, SessionState, TurnState,
+    TurnStatus, WorkspaceId,
 };
 use runner::{RunnerCommand, RunnerHandle, RunnerLaunchContext, RunnerLauncher};
 
@@ -59,6 +60,9 @@ struct SessionRecord {
     ingress: Option<JoinHandle<()>>,
     active_turn: Option<String>,
     current_operation: Option<String>,
+    /// Controles deseados por el usuario; se aplican al SIGUIENTE turno.
+    /// En memoria: no se persisten porque no son una autoridad durable.
+    desired_controls: Vec<fleet_domain::RequestedControl>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,6 +317,7 @@ impl SessionManager {
                     ingress: None,
                     active_turn: None,
                     current_operation: None,
+                    desired_controls: Vec::new(),
                 },
             );
         }
@@ -475,6 +480,7 @@ impl SessionManager {
                     ingress: Some(ingress),
                     active_turn: None,
                     current_operation: None,
+                    desired_controls: Vec::new(),
                 },
             );
             self.publish_locked(
@@ -1085,6 +1091,7 @@ impl SessionManager {
                     message,
                     resources,
                     allowed_decisions,
+                    options,
                 } => {
                     let Some(turn_id) = active.clone() else {
                         return Ok(None);
@@ -1112,6 +1119,7 @@ impl SessionManager {
                         message,
                         resources,
                         allowed_decisions,
+                        options,
                     }
                 }
                 DomainEvent::ApprovalResolved {
@@ -1569,12 +1577,13 @@ impl SessionManager {
                 .map_err(to_agent_error)?;
             return Err(to_agent_error(error));
         }
-        let runner = {
+        let (runner, controls) = {
             let record = state.sessions.get_mut(session_id).expect("session checked");
             record.active_turn = Some(turn_id.clone());
             record.current_operation = Some(operation_id.clone());
             record.summary.turn_state = TurnState::Running;
-            record.runner.clone().expect("runner checked")
+            let controls = record.desired_controls.clone();
+            (record.runner.clone().expect("runner checked"), controls)
         };
         // The prompt cannot reach the provider before both startup events are
         // committed. A failure makes the operation uncertain, never replayable.
@@ -1611,6 +1620,7 @@ impl SessionManager {
             text,
             turn_id: turn_id.clone(),
             operation_key: operation_key.to_string(),
+            controls,
         }) {
             self.fail_turn(
                 session_id,
@@ -1694,6 +1704,199 @@ impl SessionManager {
                 code: "InterruptDispatchFailed".into(),
                 message: redact_provider_error(&format!("interrupt was not dispatched: {error}")),
             })
+    }
+
+    /// P4.1-E: controles disponibles para la sesión, con valores descubiertos
+    /// del proveedor. No se aplican cambios de forma silenciosa.
+    pub fn list_controls(&self, session_id: &str) -> Result<Vec<ControlState>, AgentError> {
+        let provider = {
+            let state = self.state.lock().expect("manager poisoned");
+            state
+                .sessions
+                .get(session_id)
+                .map(|record| record.summary.provider_id.clone())
+                .ok_or_else(|| AgentError {
+                    code: "not_found".into(),
+                    message: format!("unknown session `{session_id}`"),
+                })?
+        };
+        let descriptor = self
+            .registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == provider)
+            .ok_or_else(|| AgentError::unsupported("native controls"))?;
+        Ok(descriptor.controls)
+    }
+
+    /// Selecciona modelo/esfuerzo para el SIGUIENTE turno. Codex expone
+    /// configuración por turno; cambiar un turno activo requiere una API
+    /// experimental que Fleet no habilita, así que el estado es `deferred`.
+    pub fn set_control(
+        &self,
+        session_id: &str,
+        name: &str,
+        value: &str,
+        scope: &str,
+    ) -> Result<ControlState, AgentError> {
+        if !matches!(scope, "turn" | "session") {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "scope must be `turn` or `session`".into(),
+            });
+        }
+        let controls = self.list_controls(session_id)?;
+        let control = controls
+            .into_iter()
+            .find(|control| control.name == name)
+            .ok_or_else(|| AgentError::unsupported(name))?;
+        if !control.available.iter().any(|item| item == value) {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: format!("value `{value}` is not available for `{name}`"),
+            });
+        }
+        let mut state = self.state.lock().expect("manager poisoned");
+        let record = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: format!("unknown session `{session_id}`"),
+            })?;
+        if record.runner.is_none() || record.summary.state != SessionState::Running {
+            return Err(AgentError {
+                code: "session_stopped".into(),
+                message: "session has no live runner".into(),
+            });
+        }
+        record
+            .desired_controls
+            .retain(|requested| requested.name != name);
+        record
+            .desired_controls
+            .push(fleet_domain::RequestedControl {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+        Ok(ControlState {
+            name: name.to_string(),
+            current: Some(value.to_string()),
+            available: control.available,
+            mutable: true,
+            status: "deferred".into(),
+        })
+    }
+
+    /// P4.1-F: enumeración no intrusiva de sesiones nativas. No crea runner,
+    /// no adopta procesos y no expone IDs nativos. La adopción con escritura
+    /// sigue bloqueada porque Codex no ofrece garantía de exclusividad.
+    pub fn list_native_sessions(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<fleet_agent::NativeSessionInfo>, AgentError> {
+        self.registry.list_native_sessions(provider_id)
+    }
+
+    /// Importa historial con procedencia explícita. Idempotente por
+    /// `operation_key`: un reintento con la misma clave no duplica eventos.
+    pub fn import_native_history(
+        &self,
+        session_id: &str,
+        provider_id: &str,
+        native_ref: &str,
+        operation_key: &str,
+    ) -> Result<usize, AgentError> {
+        Self::ensure_writable(&self.state.lock().expect("manager poisoned"))?;
+        let fingerprint = format!("{session_id}\0{provider_id}\0{native_ref}");
+        if let Some(existing) = self
+            .store
+            .get_operation(operation_key)
+            .map_err(to_agent_error)?
+        {
+            if existing.kind != OperationKind::ImportHistory
+                || existing.session_id != session_id
+                || existing.fingerprint != fingerprint
+            {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key belongs to a different import".into(),
+                });
+            }
+            if matches!(
+                existing.status,
+                OperationStatus::Reserved | OperationStatus::Uncertain
+            ) {
+                return Err(AgentError {
+                    code: "NeedsReconciliation".into(),
+                    message: "previous import outcome is uncertain".into(),
+                });
+            }
+            if existing.status == OperationStatus::Completed {
+                return Ok(existing
+                    .message
+                    .and_then(|message| message.parse().ok())
+                    .unwrap_or(0));
+            }
+        }
+        let operation = OperationRecord {
+            operation_id: self.next_id("op"),
+            operation_key: operation_key.to_string(),
+            kind: OperationKind::ImportHistory,
+            session_id: session_id.to_string(),
+            target_id: Some(native_ref.to_string()),
+            fingerprint,
+            status: OperationStatus::Reserved,
+            message: None,
+            created_at_ms: now_ms(),
+            updated_at_ms: now_ms(),
+        };
+        match self
+            .store
+            .reserve_operation(&operation)
+            .map_err(to_agent_error)?
+        {
+            OperationReservation::Created(_) | OperationReservation::Existing(_) => {}
+            OperationReservation::Conflict => {
+                return Err(AgentError {
+                    code: "Conflict".into(),
+                    message: "operation key belongs to a different import".into(),
+                })
+            }
+        }
+        let messages = self
+            .registry
+            .import_native_history(provider_id, native_ref)
+            .inspect_err(|error| {
+                let _ = self.store.update_operation(
+                    &operation.operation_id,
+                    OperationStatus::Failed,
+                    Some(redact_provider_error(&error.message)),
+                );
+            })?;
+        let count = messages.len();
+        {
+            let mut state = self.state.lock().expect("manager poisoned");
+            for message in messages {
+                let _ = self.publish_locked(
+                    &mut state,
+                    session_id,
+                    EventKind::HistoryMessage {
+                        role: message.role,
+                        text: message.text,
+                        provenance: "imported_from_provider".into(),
+                    },
+                );
+            }
+        }
+        self.store
+            .update_operation(
+                &operation.operation_id,
+                OperationStatus::Completed,
+                Some(count.to_string()),
+            )
+            .map_err(to_agent_error)?;
+        Ok(count)
     }
 
     /// Suscribe antes de copiar el snapshot; publicaciones concurrentes quedan

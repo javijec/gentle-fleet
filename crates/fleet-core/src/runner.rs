@@ -26,6 +26,7 @@ pub enum RunnerCommand {
         text: String,
         turn_id: String,
         operation_key: String,
+        controls: Vec<fleet_domain::RequestedControl>,
     },
     Answer {
         approval_id: String,
@@ -204,8 +205,13 @@ fn spawn_in_process_driver(
                     text,
                     turn_id,
                     operation_key: _,
+                    controls,
                 }) => {
-                    if let Err(error) = driver.send(AgentInput { text, turn_id }) {
+                    if let Err(error) = driver.send(AgentInput {
+                        text,
+                        turn_id,
+                        controls,
+                    }) {
                         emit(
                             &events,
                             &runner_id,

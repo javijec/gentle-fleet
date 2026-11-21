@@ -4,6 +4,25 @@ use serde::{Deserialize, Serialize};
 
 pub mod store;
 
+/// Sesión nativa descubierta de forma no intrusiva. `native_ref` es opaco
+/// para Fleet: un identificador de correlación, nunca el ID nativo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionInfo {
+    pub native_ref: String,
+    pub workspace_hint: Option<String>,
+    pub state: String,
+    pub activity: String,
+    pub can_resume_history: bool,
+    /// No implica que Fleet pueda adoptar el proceso (F11/F12).
+    pub externally_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeHistoryMessage {
+    pub role: String,
+    pub text: String,
+}
+
 pub type ProviderId = String;
 pub type WorkspaceId = String;
 pub type SessionId = String;
@@ -11,6 +30,25 @@ pub type TurnId = String;
 pub type OperationId = String;
 pub type RunnerId = String;
 pub type HostId = String;
+
+/// Control nativo descubierto y tipado por Fleet (P4-F09/F14).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlState {
+    pub name: String,
+    pub current: Option<String>,
+    #[serde(default)]
+    pub available: Vec<String>,
+    pub mutable: bool,
+    /// `applied`, `deferred` (aplica al siguiente turno) o `rejected`.
+    pub status: String,
+}
+
+/// Valor que el cliente desea aplicar al siguiente turno.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestedControl {
+    pub name: String,
+    pub value: String,
+}
 
 /// Versión nativa de un proveedor, conservada como texto y como números.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +126,8 @@ pub struct ProviderDescriptor {
     pub capabilities: ProviderCapabilities,
     pub mode: RunnerMode,
     pub availability: ProviderAvailability,
+    #[serde(default)]
+    pub controls: Vec<ControlState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +211,32 @@ pub enum TurnStatus {
     Interrupted,
 }
 
+/// Opción pública de Fleet dentro de una aprobación. `option_id` es estable
+/// dentro de esa aprobación y NO es un ID nativo del proveedor (P4-F08).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalOptionSpec {
+    pub option_id: String,
+    pub label: String,
+    #[serde(default)]
+    pub args: Vec<ApprovalArgSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalArgSpec {
+    pub name: String,
+    /// `text` o `text_list`: tipos Fleet versionados, nunca JSON nativo.
+    pub kind: String,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Argumento tipado enviado por el cliente junto a la decisión.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalArgument {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
 // Eventos nativos traducidos por los drivers. Son datos puros: el protocolo
 // daemon-runner los serializa sin depender de `fleet-agent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +304,10 @@ pub enum DomainEvent {
         message: String,
         resources: Vec<String>,
         allowed_decisions: Vec<String>,
+        /// Opciones públicas Fleet. `allowed_decisions` conserva solo los
+        /// `option_id` para compatibilidad con clientes P1–P3.
+        #[serde(default)]
+        options: Vec<ApprovalOptionSpec>,
     },
     /// Confirmación nativa de que la decisión fue entregada.
     ApprovalResolved {
@@ -308,6 +378,13 @@ pub enum EventKind {
     AgentError {
         message: String,
     },
+    /// Mensaje recuperado del repositorio nativo del proveedor. Nunca se
+    /// presenta como un delta observado en vivo (P4-F13).
+    HistoryMessage {
+        role: String,
+        text: String,
+        provenance: String,
+    },
     /// El turno quedó sin evidencia suficiente; no se reenvía.
     TurnUncertain {
         turn_id: TurnId,
@@ -324,6 +401,8 @@ pub enum EventKind {
         message: String,
         resources: Vec<String>,
         allowed_decisions: Vec<String>,
+        #[serde(default)]
+        options: Vec<ApprovalOptionSpec>,
     },
     ApprovalResolved {
         approval_id: String,

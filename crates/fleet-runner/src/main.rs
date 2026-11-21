@@ -215,8 +215,16 @@ fn spawn_driver_loop(
                 last_probe = std::time::Instant::now();
             }
             match commands.recv_timeout(Duration::from_millis(20)) {
-                Ok(DriverCommand::Prompt { text, turn_id }) => {
-                    if let Err(error) = driver.send(fleet_agent::AgentInput { text, turn_id }) {
+                Ok(DriverCommand::Prompt {
+                    text,
+                    turn_id,
+                    controls,
+                }) => {
+                    if let Err(error) = driver.send(fleet_agent::AgentInput {
+                        text,
+                        turn_id,
+                        controls,
+                    }) {
                         append_with_backpressure(
                             &spool,
                             AgentEvent {
@@ -337,6 +345,7 @@ enum DriverCommand {
     Prompt {
         text: String,
         turn_id: String,
+        controls: Vec<fleet_domain::RequestedControl>,
     },
     Answer {
         _approval_id: String,
@@ -457,7 +466,15 @@ fn serve_daemon(
                             text,
                             turn_id,
                             operation_key: _,
-                        } => (DriverCommand::Prompt { text, turn_id }, None),
+                            controls,
+                        } => (
+                            DriverCommand::Prompt {
+                                text,
+                                turn_id,
+                                controls,
+                            },
+                            None,
+                        ),
                         RunnerCommand::Answer {
                             approval_id,
                             native_request_id,

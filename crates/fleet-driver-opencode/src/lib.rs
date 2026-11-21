@@ -82,6 +82,7 @@ impl OpenCodeDriver {
                 capabilities,
                 mode: RunnerMode::Auto,
                 availability: ProviderAvailability::Unknown,
+                controls: vec![],
             },
             mode: RunnerMode::Auto,
             workspace: None,
@@ -501,6 +502,23 @@ fn map_stream_event(value: &Value, native_session_id: &str) -> Option<Vec<AgentE
                 })
                 .unwrap_or_default(),
             allowed_decisions: vec!["once".into(), "always".into(), "reject".into()],
+            options: vec![
+                fleet_domain::ApprovalOptionSpec {
+                    option_id: "once".into(),
+                    label: "Allow once".into(),
+                    args: vec![],
+                },
+                fleet_domain::ApprovalOptionSpec {
+                    option_id: "always".into(),
+                    label: "Allow for this session".into(),
+                    args: vec![],
+                },
+                fleet_domain::ApprovalOptionSpec {
+                    option_id: "reject".into(),
+                    label: "Deny".into(),
+                    args: vec![],
+                },
+            ],
         }],
         "permission.replied" => vec![DomainEvent::ApprovalResolved {
             native_request_id: text_field("requestID"),
@@ -918,6 +936,7 @@ impl DriverFactory for OpenCodeFactory {
             },
             mode: RunnerMode::Auto,
             availability: ProviderAvailability::Unknown,
+            controls: vec![],
         }
     }
 

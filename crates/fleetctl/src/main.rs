@@ -87,6 +87,10 @@ fn run() -> Result<(), String> {
         "session" => session(&args[1..]),
         "prompt" => prompt(&args[1..]),
         "interrupt" => interrupt(&args[1..]),
+        "controls" => controls(&args[1..]),
+        "set-control" => set_control(&args[1..]),
+        "native-sessions" => native_sessions(&args[1..]),
+        "import-history" => import_history(&args[1..]),
         "watch" => watch(&args[1..]),
         "stop" => stop(&args[1..]),
         "timeline" => timeline(&args[1..]),
@@ -119,7 +123,7 @@ fn run() -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision>\n  fleetctl agents"
         .into()
 }
 
@@ -188,6 +192,98 @@ fn session(args: &[String]) -> Result<(), String> {
             other => Err(format!("unexpected response: {other:?}")),
         },
         _ => Err(usage()),
+    }
+}
+
+fn native_sessions(args: &[String]) -> Result<(), String> {
+    let provider_id = args.first().ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::ListNativeSessions { provider_id })? {
+        Response::NativeSessions { sessions } => {
+            for session in sessions {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    session.native_ref,
+                    session.workspace_hint.unwrap_or_else(|| "unknown".into()),
+                    session.state,
+                    session.activity,
+                    session.externally_active
+                );
+            }
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn import_history(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let provider_id = args.get(1).ok_or_else(usage)?.clone();
+    let native_ref = args.get(2).ok_or_else(usage)?.clone();
+    let operation_key = args.get(3).cloned().unwrap_or_else(|| {
+        std::env::var("FLEET_OPERATION_KEY").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+    });
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::ImportNativeHistory {
+        session_id,
+        provider_id,
+        native_ref,
+        operation_key,
+    })? {
+        Response::HistoryImported { count } => {
+            println!("imported\t{count}");
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn controls(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::ListControls { session_id })? {
+        Response::Controls { controls } => {
+            for control in controls {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    control.name,
+                    control.current.unwrap_or_else(|| "unknown".into()),
+                    control.available.join(","),
+                    control.status
+                );
+            }
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
+    }
+}
+
+fn set_control(args: &[String]) -> Result<(), String> {
+    let session_id = args.first().ok_or_else(usage)?.clone();
+    let name = args.get(1).ok_or_else(usage)?.clone();
+    let value = args.get(2).ok_or_else(usage)?.clone();
+    let scope = args.get(3).cloned().unwrap_or_else(|| "turn".into());
+    let mut client = Client::connect()?;
+    client.call(Client::hello())?;
+    match client.call(Request::SetControl {
+        session_id,
+        name,
+        value,
+        scope,
+    })? {
+        Response::ControlChanged { control } => {
+            println!(
+                "{}\t{}\t{}",
+                control.name,
+                control.current.unwrap_or_default(),
+                control.status
+            );
+            Ok(())
+        }
+        other => Err(format!("unexpected response: {other:?}")),
     }
 }
 
@@ -326,6 +422,11 @@ fn describe(kind: &EventKind) -> String {
         EventKind::TurnCompleted { status, .. } => format!("turn_completed\t{status:?}"),
         EventKind::AgentNotice { message } => format!("agent_notice\t{message}"),
         EventKind::AgentError { message } => format!("agent_error\t{message}"),
+        EventKind::HistoryMessage {
+            role,
+            text,
+            provenance,
+        } => format!("history\t{role}\t{provenance}\t{text}"),
         EventKind::TurnUncertain { turn_id, reason } => {
             format!("turn_uncertain\t{turn_id}\t{reason}")
         }

@@ -1329,6 +1329,7 @@ fn operation_kind_text(kind: fleet_domain::store::OperationKind) -> &'static str
     match kind {
         fleet_domain::store::OperationKind::SendPrompt => "send_prompt",
         fleet_domain::store::OperationKind::AnswerApproval => "answer_approval",
+        fleet_domain::store::OperationKind::ImportHistory => "import_history",
     }
 }
 
@@ -1351,6 +1352,7 @@ fn load_operation(
             |row| {
                 let kind = match row.get::<_, String>(2)?.as_str() {
                     "answer_approval" => fleet_domain::store::OperationKind::AnswerApproval,
+                    "import_history" => fleet_domain::store::OperationKind::ImportHistory,
                     _ => fleet_domain::store::OperationKind::SendPrompt,
                 };
                 Ok(OperationRecord {
@@ -1736,6 +1738,7 @@ mod tests {
                 message: "allow?".into(),
                 resources: vec!["echo hi".into()],
                 allowed_decisions: vec!["once".into()],
+                options: vec![],
             },
         };
         let projection = SessionRecord {

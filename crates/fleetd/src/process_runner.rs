@@ -139,10 +139,12 @@ impl RunnerHandle for ProcessHandle {
                 text,
                 turn_id,
                 operation_key,
+                controls,
             } => RunnerCommand::Prompt {
                 text,
                 turn_id,
                 operation_key,
+                controls,
             },
             CoreCommand::Answer {
                 native_request_id,

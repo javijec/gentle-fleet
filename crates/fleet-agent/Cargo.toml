@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 fleet-domain = { path = "../fleet-domain" }
+serde.workspace = true

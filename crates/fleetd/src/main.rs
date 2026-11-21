@@ -175,6 +175,7 @@ fn handle_client(
                         availability: format!("{:?}", descriptor.availability),
                         capabilities: descriptor.capabilities,
                         mode: format!("{:?}", descriptor.mode),
+                        controls: descriptor.controls,
                     })
                     .collect(),
             }),
@@ -225,6 +226,28 @@ fn handle_client(
                     session_id,
                     turn_id,
                 }),
+            Request::ListControls { session_id } => manager
+                .list_controls(&session_id)
+                .map(|controls| Response::Controls { controls }),
+            Request::SetControl {
+                session_id,
+                name,
+                value,
+                scope,
+            } => manager
+                .set_control(&session_id, &name, &value, &scope)
+                .map(|control| Response::ControlChanged { control }),
+            Request::ListNativeSessions { provider_id } => manager
+                .list_native_sessions(&provider_id)
+                .map(|sessions| Response::NativeSessions { sessions }),
+            Request::ImportNativeHistory {
+                session_id,
+                provider_id,
+                native_ref,
+                operation_key,
+            } => manager
+                .import_native_history(&session_id, &provider_id, &native_ref, &operation_key)
+                .map(|count| Response::HistoryImported { count }),
             Request::StopSession { session_id } => manager
                 .stop_session(&session_id)
                 .map(|_| Response::Stopped { session_id }),

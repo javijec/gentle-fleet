@@ -61,6 +61,8 @@ pub struct SessionRecord {
 pub enum OperationKind {
     SendPrompt,
     AnswerApproval,
+    /// P4.1-F: importación idempotente de historial nativo.
+    ImportHistory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

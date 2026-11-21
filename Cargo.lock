@@ -88,6 +88,7 @@ name = "fleet-agent"
 version = "0.1.0"
 dependencies = [
  "fleet-domain",
+ "serde",
 ]
 
 [[package]]
@@ -104,6 +105,15 @@ name = "fleet-domain"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "fleet-driver-codex"
+version = "0.1.0"
+dependencies = [
+ "fleet-agent",
+ "fleet-domain",
+ "serde_json",
 ]
 
 [[package]]
@@ -133,6 +143,7 @@ version = "0.1.0"
 dependencies = [
  "fleet-agent",
  "fleet-domain",
+ "fleet-driver-codex",
  "fleet-driver-opencode",
 ]
 

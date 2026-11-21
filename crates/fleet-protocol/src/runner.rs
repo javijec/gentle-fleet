@@ -36,6 +36,8 @@ pub enum RunnerCommand {
         text: String,
         turn_id: String,
         operation_key: String,
+        #[serde(default)]
+        controls: Vec<fleet_domain::RequestedControl>,
     },
     Answer {
         approval_id: String,

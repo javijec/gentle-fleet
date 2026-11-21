@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 pub mod fake;
 
 use fleet_domain::{
@@ -88,10 +90,14 @@ pub struct LaunchContext {
     pub mode: RunnerMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInput {
     pub text: String,
     pub turn_id: TurnId,
+    /// Controles deseados para ESTE turno. No se aplican silenciosamente a un
+    /// turno ya en curso (P4-F09).
+    #[serde(default)]
+    pub controls: Vec<fleet_domain::RequestedControl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +133,17 @@ pub trait AgentDriver: Send {
         Err(AgentError::unsupported("interactive approvals (P2)"))
     }
 
+    /// P4.1-D: entrega opciones tipadas. El default conserva el contrato P1–P3
+    /// de drivers que solo entienden una decisión como cadena.
+    fn answer_with_args(
+        &mut self,
+        request_id: String,
+        decision: String,
+        _args: Vec<fleet_domain::ApprovalArgument>,
+    ) -> Result<(), AgentError> {
+        self.answer(request_id, decision)
+    }
+
     fn interrupt(&mut self, _turn_id: TurnId) -> Result<(), AgentError> {
         Err(AgentError::unsupported("cancel_turn (P2/P4)"))
     }
@@ -134,7 +151,30 @@ pub trait AgentDriver: Send {
     fn session_state(&self) -> SessionState {
         SessionState::Running
     }
+
+    /// P4.1-E: controles nativos descubiertos. Los drivers que no los tienen
+    /// devuelven una lista vacía en lugar de fingir soporte.
+    fn list_controls(&self) -> Vec<fleet_domain::ControlState> {
+        Vec::new()
+    }
+
+    fn get_control(&self, _name: &str) -> Result<fleet_domain::ControlState, AgentError> {
+        Err(AgentError::unsupported("native controls"))
+    }
+
+    /// `scope` es `turn` o `session`. El estado devuelto indica si aplicó ya
+    /// o si quedó diferido al siguiente turno (`deferred`).
+    fn set_control(
+        &mut self,
+        _name: &str,
+        _value: &str,
+        _scope: &str,
+    ) -> Result<fleet_domain::ControlState, AgentError> {
+        Err(AgentError::unsupported("native controls"))
+    }
 }
+
+pub use fleet_domain::{NativeHistoryMessage, NativeSessionInfo};
 
 /// Fábrica registrada por proveedor. `compatibility` aplica el rango de
 /// versiones sin bloquear actualizaciones compatibles (P0-D5).
@@ -153,6 +193,20 @@ pub trait DriverFactory: Send + Sync {
 
     fn supports(&self, version: &ProviderVersion) -> bool {
         self.compatibility().compatible(version)
+    }
+
+    /// P4.1-F: descubrimiento global de solo lectura a nivel de proveedor.
+    /// No crea sesión Fleet ni runner; un proveedor sin este método declara
+    /// ausencia de capacidad devolviendo una lista vacía.
+    fn list_native_sessions(&self) -> Result<Vec<NativeSessionInfo>, AgentError> {
+        Ok(Vec::new())
+    }
+
+    fn import_native_history(
+        &self,
+        _native_ref: &str,
+    ) -> Result<Vec<NativeHistoryMessage>, AgentError> {
+        Err(AgentError::unsupported("native history import"))
     }
 }
 
@@ -195,6 +249,30 @@ impl ProviderRegistry {
     pub fn supports(&self, id: &str, version: &ProviderVersion) -> Result<bool, AgentError> {
         match self.factories.get(id) {
             Some(factory) => Ok(factory.supports(version)),
+            None => Err(AgentError {
+                code: "unknown_provider".into(),
+                message: format!("no driver registered for `{id}`"),
+            }),
+        }
+    }
+
+    pub fn list_native_sessions(&self, id: &str) -> Result<Vec<NativeSessionInfo>, AgentError> {
+        match self.factories.get(id) {
+            Some(factory) => factory.list_native_sessions(),
+            None => Err(AgentError {
+                code: "unknown_provider".into(),
+                message: format!("no driver registered for `{id}`"),
+            }),
+        }
+    }
+
+    pub fn import_native_history(
+        &self,
+        id: &str,
+        native_ref: &str,
+    ) -> Result<Vec<NativeHistoryMessage>, AgentError> {
+        match self.factories.get(id) {
+            Some(factory) => factory.import_native_history(native_ref),
             None => Err(AgentError {
                 code: "unknown_provider".into(),
                 message: format!("no driver registered for `{id}`"),

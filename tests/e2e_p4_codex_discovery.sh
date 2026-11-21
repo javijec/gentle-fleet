@@ -25,29 +25,22 @@ WATCH_PID=$!
 sleep 1
 "$BIN/fleetctl" prompt "$SES" 'Reply with exactly: HISTORY SEED.' >/dev/null
 wait "$WATCH_PID"
+grep -q $'turn_completed\tCompleted' "$RUNTIME/watch.out" || { echo "FAIL: seed turn incomplete"; exit 1; }
 echo '--- native sessions ---'
-"$BIN/fleetctl" native-sessions codex > "$RUNTIME/native.out" 2>"$RUNTIME/native.err" || true
+"$BIN/fleetctl" native-sessions codex > "$RUNTIME/native.out" 2>"$RUNTIME/native.err"
 head -5 "$RUNTIME/native.out"; tail -5 "$RUNTIME/native.err"
 REF="$(awk -F '\t' -v workspace="$WORKSPACE" '$2==workspace {print $1; exit}' "$RUNTIME/native.out")"
 echo "ref=$REF"
-[[ -n "$REF" ]] || { echo "FAIL: native session discovery did not find the test workspace"; exit 1; }
-echo '--- import history into second session ---'
+[[ -n "$REF" ]] || { echo "FAIL: test session absent from native discovery"; exit 1; }
 SES2="$("$BIN/fleetctl" session create --workspace "$WS" --provider codex | cut -f1)"
 "$BIN/fleetctl" import-history "$SES2" codex "$REF" fixed-op-key >"$RUNTIME/import.out"
-grep -Eq 
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
-^imported\\t[1-9][0-9]*
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
- "$RUNTIME/import.out" || { cat "$RUNTIME/import.out"; exit 1; }
-"$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-first.out"
-COUNT_FIRST="$(grep -c 
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
-history\\t' "$RUNTIME/timeline-first.out" || true)"
-[[ "$COUNT_FIRST" -gt 0 ]] || { echo "FAIL: no imported events"; exit 1; }
+grep -Eq $'^imported\t[1-9][0-9]*$' "$RUNTIME/import.out" || { cat "$RUNTIME/import.out"; exit 1; }
+"$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-before.out"
+BEFORE="$(grep -c $'history\t' "$RUNTIME/timeline-before.out" || true)"
+[[ "$BEFORE" -gt 0 ]] || { echo "FAIL: history events missing"; exit 1; }
 "$BIN/fleetctl" import-history "$SES2" codex "$REF" fixed-op-key >"$RUNTIME/reimport.out"
-cmp -s "$RUNTIME/import.out" "$RUNTIME/reimport.out" || { echo "FAIL: idempotent import count changed"; exit 1; }
-"$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-second.out"
-[[ "$(grep -c 
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
-history\\t' "$RUNTIME/timeline-second.out" || true)" == "$COUNT_FIRST" ]] || { echo "FAIL: duplicate history after replay"; exit 1; }
+cmp -s "$RUNTIME/import.out" "$RUNTIME/reimport.out" || { echo "FAIL: reimport result changed"; exit 1; }
+"$BIN/fleetctl" timeline "$SES2" --limit 200 >"$RUNTIME/timeline-after.out"
+[[ "$(grep -c $'history\t' "$RUNTIME/timeline-after.out" || true)" == "$BEFORE" ]] || { echo "FAIL: duplicate history"; exit 1; }
+echo "PASS: native history import idempotent ($BEFORE events)"
 echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"

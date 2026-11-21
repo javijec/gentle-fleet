@@ -13,6 +13,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - name: Validar sintaxis de scripts E2E
+        run: |
+          for script in tests/*.sh; do bash -n "$script"; done
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace

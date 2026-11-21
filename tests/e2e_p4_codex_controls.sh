@@ -27,38 +27,18 @@ echo '--- controls ---'
 "$BIN/fleetctl" controls "$SES" | head -5
 echo '--- set-control effort high ---'
 "$BIN/fleetctl" set-control "$SES" effort high turn >"$RUNTIME/set-control.out"
-grep -qF 
+grep -q $'^effort\thigh\tdeferred$' "$RUNTIME/set-control.out" || { cat "$RUNTIME/set-control.out"; exit 1; }
+"$BIN/fleetctl" controls "$SES" >"$RUNTIME/controls-after.out"
+grep -q $'^effort\thigh\t' "$RUNTIME/controls-after.out" || { echo "FAIL: desired effort missing"; exit 1; }
 echo '--- invalid value rejected ---'
 if "$BIN/fleetctl" set-control "$SES" effort nonsensical turn >"$RUNTIME/invalid.out" 2>&1; then
-  echo "FAIL: invalid effort was accepted"; exit 1
+  echo "FAIL: invalid effort accepted"; exit 1
 fi
 timeout 120 "$BIN/fleetctl" watch "$SES" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
 WATCH_PID=$!
 sleep 1
 "$BIN/fleetctl" prompt "$SES" 'Reply with exactly: CONTROL OK.' >/dev/null
 wait "$WATCH_PID"
-grep -qF 'turn_completed' "$RUNTIME/watch.out" || { echo "FAIL: no completed turn"; exit 1; }
-echo '--- watch stdout ---'; cat "$RUNTIME/watch.out"
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
-effort\\thigh\\tdeferred' "$RUNTIME/set-control.out" || { cat "$RUNTIME/set-control.out"; exit 1; }
-"$BIN/fleetctl" controls "$SES" >"$RUNTIME/controls-after.out"
-grep -qF 
-echo '--- invalid value rejected ---'
-"$BIN/fleetctl" set-control "$SES" effort nonsensical turn 2>&1 || echo REJECTED_OK
-timeout 120 "$BIN/fleetctl" watch "$SES" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
-WATCH_PID=$!
-sleep 1
-"$BIN/fleetctl" prompt "$SES" 'Reply with exactly: CONTROL OK.' >/dev/null || true
-wait "$WATCH_PID" || echo "watch exit=$?"
-echo '--- watch stdout ---'; cat "$RUNTIME/watch.out"
-echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"
-effort\\thigh\\t' "$RUNTIME/controls-after.out" || { echo "FAIL: selected control not visible"; exit 1; }
-echo '--- invalid value rejected ---'
-"$BIN/fleetctl" set-control "$SES" effort nonsensical turn 2>&1 || echo REJECTED_OK
-timeout 120 "$BIN/fleetctl" watch "$SES" --until-turn-end >"$RUNTIME/watch.out" 2>"$RUNTIME/watch.err" &
-WATCH_PID=$!
-sleep 1
-"$BIN/fleetctl" prompt "$SES" 'Reply with exactly: CONTROL OK.' >/dev/null || true
-wait "$WATCH_PID" || echo "watch exit=$?"
+grep -q $'turn_completed\tCompleted' "$RUNTIME/watch.out" || { echo "FAIL: incomplete turn"; exit 1; }
 echo '--- watch stdout ---'; cat "$RUNTIME/watch.out"
 echo '--- daemon err tail ---'; tail -10 "$RUNTIME/daemon.err"

@@ -180,6 +180,12 @@ fn native_ref(value: &str) -> String {
     format!("gs-{hash:016x}")
 }
 
+fn discovered_sessions() -> &'static std::sync::Mutex<Vec<NativeSessionInfo>> {
+    static DISCOVERED: std::sync::OnceLock<std::sync::Mutex<Vec<NativeSessionInfo>>> =
+        std::sync::OnceLock::new();
+    DISCOVERED.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
 fn session_refs() -> &'static std::sync::Mutex<HashMap<String, String>> {
     static REFS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
         std::sync::OnceLock::new();
@@ -410,6 +416,53 @@ impl AgentDriver for GentleShellDriver {
             .negotiate(self.rpc.as_mut().expect("rpc just set"))
             .map_err(AgentError::from)?;
         self.refresh_permissions();
+        let mut discovered: Vec<NativeSessionInfo> = Vec::new();
+        if self.desktop.capabilities.supports("list_sessions") {
+            if let Ok(data) = self.desktop.call(
+                self.rpc.as_mut().expect("rpc just set"),
+                "list_sessions",
+                &json!({}),
+                CALL_TIMEOUT,
+            ) {
+                for value in data
+                    .get("sessions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let Some(session_id) = text(value, "id").or_else(|| text(value, "sessionId"))
+                    else {
+                        continue;
+                    };
+                    let reference = native_ref(&session_id);
+                    session_refs()
+                        .lock()
+                        .expect("session refs poisoned")
+                        .insert(reference.clone(), session_id.clone());
+                    discovered.push(NativeSessionInfo {
+                        native_ref: reference,
+                        workspace_hint: text(value, "cwd"),
+                        state: text(value, "status").unwrap_or_else(|| "native".into()),
+                        activity: text(value, "updatedAt").unwrap_or_else(|| "unknown".into()),
+                        can_resume_history: true,
+                        model: None,
+                        effort: None,
+                        externally_active: false,
+                    });
+                }
+            }
+        }
+        if !discovered.is_empty() {
+            let mut list = discovered_sessions().lock().expect("discovery poisoned");
+            for item in discovered {
+                if !list
+                    .iter()
+                    .any(|existing| existing.native_ref == item.native_ref)
+                {
+                    list.push(item);
+                }
+            }
+        }
         let rpc = self.rpc.as_mut().expect("rpc just set");
         let models = rpc
             .call("get_available_models", json!({}), CALL_TIMEOUT)
@@ -682,9 +735,10 @@ impl DriverFactory for GentleShellFactory {
     }
 
     fn list_native_sessions(&self) -> Result<Vec<NativeSessionInfo>, AgentError> {
-        // Sin runner abierto no hay canal Desktop RPC. El descubrimiento se
-        // realiza desde una sesión Fleet explícita en `import_native_history`.
-        Ok(Vec::new())
+        Ok(discovered_sessions()
+            .lock()
+            .expect("discovery poisoned")
+            .clone())
     }
 
     fn import_native_history(

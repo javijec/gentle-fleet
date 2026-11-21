@@ -103,3 +103,6 @@ sin evidencia suficiente mantiene `NeedsReconciliation` y no reenvía prompts.
 
 
 **P4.2:** el proveedor `pi` usa las mismas operaciones (`CreateSession`, `SendPrompt`, `SubscribeTimeline`, `InterruptTurn`, `ListControls`, `SetControl`, `ListNativeSessions`, `ImportNativeHistory`). Los eventos `AssistantDelta`/`AssistantMessage` se deduplican y el fin de turno llega con `TurnCompleted` tras `agent_settled`. Las aprobaciones de Extension UI, cuando existen, usan el mismo contrato `ApprovalRequested` con `option_id` Fleet. Sin cambios de wire: Pi se registra en `fleet-providers` y `ListAgents` lo distingue por `id=pi`.
+
+
+**P4.3:** `gentle-shell` usa la misma Fleet API que los otros tres proveedores reales. `ListAgents` distingue `opencode`, `codex`, `pi` y `gentle-shell`; FakeDriver sigue siendo solo soporte de pruebas. Las solicitudes Extension UI se exponen como `ApprovalRequested` con `option_id` Fleet y argumentos tipados; ningún frame Desktop RPC se publica como mensaje de asistente.

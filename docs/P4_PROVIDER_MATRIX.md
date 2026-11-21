@@ -104,3 +104,8 @@ Revalidación final sobre `d1eab2a` con Codex `0.171.0`: 8 smokes reales PASS, i
 ## 8. Cierre P4.2
 
 Pi estándar 1.6.0 pasa a VERIFIED para chat/streaming, herramientas, controles modelados y aplicados, interrupción real, descubrimiento/historial con dedup, reattach y aislamiento multiproveedor (`docs/P4_2_RESULTS.md`). Aprobaciones de permisos: UNSUPPORTED en esta instalación (sin extensión que las emita). `steer`/`follow_up`: UNTESTED. Adopción con escritura y recuperación de turno en vuelo: UNSUPPORTED.
+
+
+## 9. Cierre P4.3
+
+Gentle Shell 4.8.0 (Pi embebido 1.5.2): VERIFIED para RPC base, Desktop RPC negociado, chat/streaming, herramientas, controles, interrupción, reattach y aislamiento. OBSERVED: eventos `session_snapshot` y modo `super-yolo`. UNSUPPORTED/UNTESTED: permisos interactivos reales, perfiles, historial de sesión enlazada. Subagentes solo inventariados. Ver `docs/P4_3_RESULTS.md`.

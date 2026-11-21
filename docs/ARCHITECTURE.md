@@ -127,6 +127,10 @@ Los eventos y aprobaciones ampliados (`options`, `arguments`, controles, histori
 
 `fleet-driver-pi` se inserta en el mismo punto de extensión que OpenCode y Codex: `ProviderRegistry` sigue siendo el único catálogo y la composición concreta vive en `fleet-providers`, fuera de `fleet-agent`. El runner posee el proceso Pi y su directorio de sesiones aislado; el transporte usa JSONL por LF con backpressure explícito y colas acotadas. No se introdujo una abstracción RPC compartida con Gentle Shell: solo se documenta su posible reutilización futura en P4.3. Ver [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
 
+## P4.3 — cuarto proveedor real
+
+`fleet-driver-gentle-shell` comparte únicamente el transporte JSONL neutral con Pi. La composición sigue en `fleet-providers`, fuera de `fleet-agent`; `SessionManager` no conoce nombres de proveedor. Desktop RPC se negocia por sesión, correlaciona por `requestId` y mantiene su propio control de secuencia con reconciliación por snapshot. No se implementó abstracción compartida de eventos ni de Desktop RPC para P4.3; ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md).
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

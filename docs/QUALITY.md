@@ -160,3 +160,16 @@ Windows y macOS continúan pendientes de validación funcional en P7. Detalle en
 | Aprobaciones de permisos nativas | UNSUPPORTED en la instalación; no se simuló |
 
 El chat real era UNTESTED hasta que el usuario configuró un modelo; se repitió la verificación antes de cerrar. Detalle en [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
+
+
+### P4.3 — Gentle Shell (22/11/2026)
+
+| Validación | Resultado |
+|---|---|
+| 108 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
+| 14 E2E deterministas P1–P3, 8 smokes Codex y 8 smokes Pi | PASS |
+| 6 scripts Gentle Shell (lifecycle, chat, tools, interrupt, recovery, concurrency) | PASS |
+| Negociación Desktop RPC real | 24 métodos y 9 eventos OBSERVED |
+| Permisos interactivos / perfiles | UNSUPPORTED / UNTESTED por el entorno; no simulados |
+
+Detalle en [`P4_3_RESULTS.md`](P4_3_RESULTS.md).

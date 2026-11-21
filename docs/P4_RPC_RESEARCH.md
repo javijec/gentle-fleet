@@ -224,3 +224,8 @@ El driver real confirma los hallazgos de esta investigación y añade tres preci
 ## 6. Nota de implementación P4.2
 
 El driver real confirma el inventario de P4.0 para Pi 1.6.0: activación `pi --mode rpc --session-dir`, respuestas `{"type":"response","command":...,"success":...}`, eventos `message_update` delta-only con `assistantMessageEvent`, `agent_settled` como terminal y archivos de sesión JSONL v3. Tras configurar un modelo, `get_available_models` devuelve 10 entradas con `id`/`provider` y `get_state.model.id=gpt-6.1-terra`. Las sondas versionadas son `tests/e2e_p4_pi_*.sh`. No se usó Desktop RPC ni GPUI.
+
+
+## 7. Verificación P4.3
+
+El ejecutable instalado negocia **24** métodos (incluye `get_update_status`, ausente en el inventario P4.0 de 23) y **9** eventos, con `session_snapshot` incluido. Se confirmó el envelope `gentle-shell.desktop-rpc/v1` y la correlación por `requestId` mediante `setWidget`. Las sondas versionadas son `tests/e2e_p4_gs_*.sh` y el test de integración ignorado `real_capabilities_roundtrip`.

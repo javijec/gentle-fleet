@@ -171,3 +171,8 @@ Los casos de P4.1 se reejecutaron sobre el commit final `d1eab2a`: 72 tests unit
 ## 7. Cierre P4.2
 
 Se ejecutaron 85 tests unitarios, 14 E2E deterministas P1–P3, 8 smokes Codex de regresión, 4 E2E deterministas Pi y 4 smokes reales Pi (chat, herramientas, controles, interrupción), todos PASS sobre el commit `dca9d90`. El chat real estaba inicialmente UNTESTED por falta de modelo; se repitió tras configurarlo. Evidencia en `docs/P4_2_RESULTS.md`. No se ejecutaron pruebas de Gentle Shell (P4.3).
+
+
+## 8. Cierre P4.3
+
+Ejecutados 108 tests unitarios, 14 E2E deterministas P1–P3, 8 smokes Codex, 8 smokes Pi y 6 scripts Gentle Shell (3 deterministas y 3 reales). Evidencia y clasificación en `docs/P4_3_RESULTS.md`. No se ejecutaron pruebas de P4.4.

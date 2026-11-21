@@ -81,3 +81,7 @@ Verificado con Codex `0.171.0`: chat/streaming, herramientas, aprobaciones param
 ## P4.2 — Pi estándar implementado (22/11/2026)
 
 `fleet-driver-pi` es un proveedor independiente con `provider_id=pi`. Usa `pi --mode rpc --session-dir <temporal>`, JSONL estricto por LF, colas acotadas y correlación por `id`. No depende de Gentle Shell ni de su Desktop RPC. `agent_end` no es terminal: solo `agent_settled` cierra el turno. Los controles se descubren en tiempo de ejecución y se aplican antes del prompt; `abort` conecta `InterruptTurn`. Las aprobaciones de Extension UI se traducen solo cuando una extensión real las emite (no ocurre en esta instalación). Detalle en [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
+
+## P4.3 — Gentle Shell implementado (22/11/2026)
+
+`fleet-driver-gentle-shell` es un proveedor independiente con `provider_id=gentle-shell`. Comparte solo el transporte JSONL neutral (`fleet-rpc-jsonl`) con Pi; la capa Desktop RPC (`gentle-shell.desktop-rpc/v1`), la negociación de capacidades y la correlación por `requestId` son específicas y no se filtran al chat. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md).

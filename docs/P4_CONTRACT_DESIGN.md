@@ -195,3 +195,8 @@ Se implementaron las propuestas A1 (controles por defecto con capacidades), B1 (
 ## 11. Ratificación en P4.2
 
 Se reutilizaron `AgentDriver`, `DriverFactory`, `ProviderRegistry`, la composición en `fleet-providers` y las operaciones `ListControls`/`SetControl`, `InterruptTurn`, `ListNativeSessions` e `ImportNativeHistory` sin cambios de wire. Las opciones de aprobación tipadas se implementaron para Extension UI genérico, pero no hay evidencia real en Pi estándar. No se creó la abstracción RPC compartida prevista para P4.3; `docs/P4_2_RESULTS.md` §7 documenta qué componente podría reutilizarse sin acoplar proveedores.
+
+
+## 12. Ratificación en P4.3
+
+El transporte JSONL se extrajo a `fleet-rpc-jsonl` (compartido por Pi y Gentle Shell sin acoplarlos). La negociación `capabilities` se ejecuta al abrir sesión y gobierna qué métodos se pueden invocar. No se creó abstracción de eventos ni de subagentes. Ver `docs/P4_3_RESULTS.md`.

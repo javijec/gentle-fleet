@@ -53,3 +53,6 @@ Nuevas capacidades como git/worktree, filesystem remoto, delegación multiagente
 ## Etapas de migración desde el desarrollo anterior
 
 No existe migración automática. No se hacen cherry-picks de M0–M4, no se arrastra su schema ni se repite su fichero `PLAN.md`. Si una pieza vieja demuestra ser útil, se reescribe con su contrato y nueva prueba, con revisión explícita. Mantener la historia anterior solo como referencia técnica accesible. No publicar Core v2 hasta que P1 tenga chat real.
+
+
+**Estado P4.3 (22/11/2026): CERRADA EN LINUX.** Cuarto proveedor real `gentle-shell` 4.8.0 con Pi embebido 1.5.2, Desktop RPC negociado (24 métodos y 9 eventos observados), chat/herramientas/interrupción reales, controles y recuperación P3. Permisos interactivos y perfiles quedan UNSUPPORTED/UNTESTED por limitaciones del entorno. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md). P4.4 pendiente.

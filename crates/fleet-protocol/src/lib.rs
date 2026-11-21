@@ -9,6 +9,7 @@ use fleet_domain::{Event, OperationId, ProviderId, SessionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 pub const WIRE: &str = "fleet-v1-p2";
+pub mod runner;
 pub mod transport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

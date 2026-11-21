@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Event, OperationId, ProviderId, SessionId, SessionState, TurnId, TurnState, WorkspaceId,
+    Event, OperationId, ProviderId, RunnerIdentity, RunnerStatus, SessionId, SessionState, TurnId,
+    TurnState, WorkspaceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,16 @@ impl StoreError {
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerRecord {
+    pub identity: RunnerIdentity,
+    pub status: RunnerStatus,
+    pub endpoint: String,
+    pub last_ack_seq: u64,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreHealth {
@@ -189,6 +200,9 @@ pub trait SessionStore: Send + Sync {
 
     fn save_turn(&self, turn: &TurnRecord) -> StoreResult<()>;
     fn get_turn(&self, turn_id: &str) -> StoreResult<Option<TurnRecord>>;
+    /// Turno no terminal más reciente de una sesión, para reattachment.
+    fn active_turn_for_session(&self, session_id: &str) -> StoreResult<Option<TurnRecord>>;
+    fn mark_session_approvals_uncertain(&self, session_id: &str) -> StoreResult<()>;
 
     fn save_approval(&self, approval: &ApprovalRequest) -> StoreResult<()>;
     fn claim_approval(
@@ -208,4 +222,26 @@ pub trait SessionStore: Send + Sync {
         status: ApprovalStatus,
     ) -> StoreResult<bool>;
     fn update_approval_status(&self, approval_id: &str, status: ApprovalStatus) -> StoreResult<()>;
+
+    // ---- P3: runner identity, ACK and durable spool evidence ----------------
+    fn save_runner(&self, runner: &RunnerRecord) -> StoreResult<()>;
+    fn get_runner(&self, session_id: &str) -> StoreResult<Option<RunnerRecord>>;
+    fn list_runners(&self) -> StoreResult<Vec<RunnerRecord>>;
+    fn update_runner_status(&self, runner_id: &str, status: RunnerStatus) -> StoreResult<()>;
+    fn update_runner_ack(&self, runner_id: &str, runner_seq: u64) -> StoreResult<()>;
+    /// `true` if this `(runner_id, runner_seq)` was already ingested.
+    fn runner_event_exists(&self, runner_id: &str, runner_seq: u64) -> StoreResult<bool>;
+    /// Records that a runner event was ingested. Returns `false` on duplicate.
+    fn record_runner_event(
+        &self,
+        runner_id: &str,
+        runner_seq: u64,
+        fleet_event_id: &str,
+    ) -> StoreResult<bool>;
+    fn pending_runner_events(
+        &self,
+        runner_id: &str,
+        since_seq: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<(u64, String)>>;
 }

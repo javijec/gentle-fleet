@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use fleet_domain::store::OperationStatus;
 use fleet_domain::store::*;
-use fleet_domain::{Event, SessionState, TurnState};
+use fleet_domain::{Event, RunnerIdentity, RunnerStatus, SessionState, TurnState};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 const MIGRATION_V1: &str = r#"
@@ -95,6 +95,32 @@ SELECT approval_id, session_id, turn_id, kind, message, resources,
 FROM approvals_v1;
 DROP TABLE approvals_v1;
 CREATE INDEX idx_approvals_session ON approvals(session_id, status);
+"#;
+
+const MIGRATION_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS runners (
+    runner_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE REFERENCES sessions(session_id),
+    provider_id TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    boot_id TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    protocol_version TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    last_ack_seq INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runners_status ON runners(status);
+CREATE TABLE IF NOT EXISTS runner_events (
+    runner_id TEXT NOT NULL REFERENCES runners(runner_id),
+    runner_seq INTEGER NOT NULL,
+    fleet_event_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (runner_id, runner_seq)
+);
 "#;
 
 pub struct SqliteStore {
@@ -195,6 +221,7 @@ fn state_text(state: SessionState) -> &'static str {
         SessionState::Stopped => "stopped",
         SessionState::Failed => "failed",
         SessionState::NeedsReconciliation => "needs_reconciliation",
+        SessionState::Recovering => "recovering",
     }
 }
 
@@ -338,7 +365,22 @@ impl SessionStore for SqliteStore {
                 .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
             version = 2;
         }
-        if version != 2 {
+        if version == 2 {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+            transaction
+                .execute_batch(MIGRATION_V3)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .pragma_update(None, "user_version", 3)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .commit()
+                .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+            version = 3;
+        }
+        if version != 3 {
             return Err(StoreError::new(
                 "unsupported_schema_version",
                 format!("unsupported SQLite schema version {version}; upgrade Fleet instead of guessing"),
@@ -360,12 +402,6 @@ impl SessionStore for SqliteStore {
                updated_at=?1
              WHERE status IN ('reserved','accepted')",
             params![now_ms() as i64],
-        )
-        .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
-        tx.execute(
-            "UPDATE approvals SET status='uncertain'
-             WHERE status IN ('pending','delivered','dispatching')",
-            [],
         )
         .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         tx.execute(
@@ -813,6 +849,41 @@ impl SessionStore for SqliteStore {
             .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
     }
 
+    fn mark_session_approvals_uncertain(&self, session_id: &str) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE approvals SET status='uncertain'
+             WHERE session_id=?1 AND status IN ('pending','delivered','dispatching')",
+                params![session_id],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        Ok(())
+    }
+
+    fn active_turn_for_session(&self, session_id: &str) -> StoreResult<Option<TurnRecord>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT turn_id, session_id, operation_id, state, created_at, updated_at
+             FROM turns WHERE session_id=?1 AND state IN ('running','awaiting_approval','uncertain')
+             ORDER BY created_at DESC LIMIT 1",
+                params![session_id],
+                |row| {
+                    Ok(TurnRecord {
+                        turn_id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        operation_id: row.get(2)?,
+                        state: parse_turn(&row.get::<_, String>(3)?),
+                        created_at_ms: row.get::<_, i64>(4)? as u64,
+                        updated_at_ms: row.get::<_, i64>(5)? as u64,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
+    }
+
     fn save_approval(&self, approval: &ApprovalRequest) -> StoreResult<()> {
         let connection = self.connection()?;
         connection
@@ -1015,6 +1086,166 @@ impl SessionStore for SqliteStore {
             .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
         Ok(())
     }
+
+    fn save_runner(&self, runner: &RunnerRecord) -> StoreResult<()> {
+        let connection = self.connection()?;
+        let identity = &runner.identity;
+        connection.execute(
+            "INSERT INTO runners(runner_id, session_id, provider_id, host_id, boot_id, pid,
+                protocol_version, generation, status, endpoint, last_ack_seq, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+             ON CONFLICT(runner_id) DO UPDATE SET status=excluded.status,
+                endpoint=excluded.endpoint, boot_id=excluded.boot_id,
+                generation=excluded.generation, updated_at=excluded.updated_at",
+            params![
+                identity.runner_id, identity.session_id, identity.provider_id, identity.host_id,
+                identity.boot_id, identity.pid as i64, identity.protocol_version,
+                identity.generation as i64, runner_status_text(runner.status), runner.endpoint,
+                runner.last_ack_seq as i64, runner.created_at_ms as i64, runner.updated_at_ms as i64
+            ],
+        ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        Ok(())
+    }
+
+    fn get_runner(&self, session_id: &str) -> StoreResult<Option<RunnerRecord>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT * FROM runners WHERE session_id=?1",
+                params![session_id],
+                row_to_runner,
+            )
+            .optional()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
+    }
+
+    fn list_runners(&self) -> StoreResult<Vec<RunnerRecord>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT * FROM runners ORDER BY created_at")
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        let rows = statement
+            .query_map([], row_to_runner)
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
+    }
+
+    fn update_runner_status(&self, runner_id: &str, status: RunnerStatus) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE runners SET status=?2, updated_at=?3 WHERE runner_id=?1",
+                params![runner_id, runner_status_text(status), now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        Ok(())
+    }
+
+    fn update_runner_ack(&self, runner_id: &str, runner_seq: u64) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE runners SET last_ack_seq=?2, updated_at=?3 WHERE runner_id=?1 AND last_ack_seq<?2",
+            params![runner_id, runner_seq as i64, now_ms() as i64],
+        ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        Ok(())
+    }
+
+    fn runner_event_exists(&self, runner_id: &str, runner_seq: u64) -> StoreResult<bool> {
+        let connection = self.connection()?;
+        let found: Option<String> = connection
+            .query_row(
+                "SELECT fleet_event_id FROM runner_events WHERE runner_id=?1 AND runner_seq=?2",
+                params![runner_id, runner_seq as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        Ok(found.is_some())
+    }
+
+    fn record_runner_event(
+        &self,
+        runner_id: &str,
+        runner_seq: u64,
+        fleet_event_id: &str,
+    ) -> StoreResult<bool> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "INSERT OR IGNORE INTO runner_events(runner_id, runner_seq, fleet_event_id, created_at)
+             VALUES(?1,?2,?3,?4)",
+            params![runner_id, runner_seq as i64, fleet_event_id, now_ms() as i64],
+        ).map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        if changed == 1 {
+            let _ = self.update_runner_ack(runner_id, runner_seq);
+        }
+        Ok(changed == 1)
+    }
+
+    fn pending_runner_events(
+        &self,
+        runner_id: &str,
+        since_seq: u64,
+        limit: usize,
+    ) -> StoreResult<Vec<(u64, String)>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT runner_seq, fleet_event_id FROM runner_events WHERE runner_id=?1 AND runner_seq>?2 ORDER BY runner_seq LIMIT ?3",
+        ).map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        let rows = statement
+            .query_map(params![runner_id, since_seq as i64, limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get(1)?))
+            })
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
+    }
+}
+
+fn runner_status_text(status: RunnerStatus) -> &'static str {
+    match status {
+        RunnerStatus::Starting => "starting",
+        RunnerStatus::Active => "active",
+        RunnerStatus::Disconnected => "disconnected",
+        RunnerStatus::Recovering => "recovering",
+        RunnerStatus::Stopping => "stopping",
+        RunnerStatus::Stopped => "stopped",
+        RunnerStatus::Lost => "lost",
+        RunnerStatus::Uncertain => "uncertain",
+    }
+}
+
+fn parse_runner_status(value: &str) -> RunnerStatus {
+    match value {
+        "starting" => RunnerStatus::Starting,
+        "active" => RunnerStatus::Active,
+        "disconnected" => RunnerStatus::Disconnected,
+        "recovering" => RunnerStatus::Recovering,
+        "stopping" => RunnerStatus::Stopping,
+        "stopped" => RunnerStatus::Stopped,
+        "lost" => RunnerStatus::Lost,
+        _ => RunnerStatus::Uncertain,
+    }
+}
+
+fn row_to_runner(row: &rusqlite::Row<'_>) -> Result<RunnerRecord, rusqlite::Error> {
+    Ok(RunnerRecord {
+        identity: RunnerIdentity {
+            runner_id: row.get(0)?,
+            session_id: row.get(1)?,
+            provider_id: row.get(2)?,
+            host_id: row.get(3)?,
+            boot_id: row.get(4)?,
+            pid: row.get::<_, i64>(5)? as u32,
+            protocol_version: row.get(6)?,
+            generation: row.get::<_, i64>(7)? as u64,
+        },
+        status: parse_runner_status(&row.get::<_, String>(8)?),
+        endpoint: row.get(9)?,
+        last_ack_seq: row.get::<_, i64>(10)? as u64,
+        created_at_ms: row.get::<_, i64>(11)? as u64,
+        updated_at_ms: row.get::<_, i64>(12)? as u64,
+    })
 }
 
 fn operation_kind_text(kind: fleet_domain::store::OperationKind) -> &'static str {
@@ -1184,12 +1415,12 @@ mod tests {
     fn migration_and_health_are_verified() {
         let (store, path) = temp_store();
         let health = store.health().unwrap();
-        assert_eq!(health.schema_version, 2);
+        assert_eq!(health.schema_version, 3);
         assert!(health.integrity_ok);
         // Reabrir no vuelve a ejecutar la migración.
         drop(store);
         let reopened = SqliteStore::open(path).unwrap();
-        assert_eq!(reopened.health().unwrap().schema_version, 2);
+        assert_eq!(reopened.health().unwrap().schema_version, 3);
     }
 
     #[test]
@@ -1474,6 +1705,58 @@ mod tests {
         assert_eq!(
             store.get_approval("appr_1").unwrap().unwrap().status,
             ApprovalStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn runner_identity_ack_and_event_dedup_are_durable() {
+        let (store, path) = temp_store();
+        seed_session(&store);
+        let identity = fleet_domain::RunnerIdentity {
+            runner_id: "runner-1".into(),
+            session_id: "ses_1".into(),
+            provider_id: "fake".into(),
+            host_id: "host-1".into(),
+            boot_id: "boot-1".into(),
+            pid: 42,
+            protocol_version: "fleet-runner-v1".into(),
+            generation: 1,
+        };
+        store
+            .save_runner(&RunnerRecord {
+                identity: identity.clone(),
+                status: RunnerStatus::Active,
+                endpoint: "/tmp/runner.sock".into(),
+                last_ack_seq: 0,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+            })
+            .unwrap();
+        store
+            .record_runner_event("runner-1", 1, "ses_1-e3")
+            .unwrap();
+        assert!(store.runner_event_exists("runner-1", 1).unwrap());
+        assert!(!store
+            .record_runner_event("runner-1", 1, "ses_1-e3")
+            .unwrap());
+        assert_eq!(store.get_runner("ses_1").unwrap().unwrap().last_ack_seq, 1);
+        drop(store);
+        let reopened = SqliteStore::open(path).unwrap();
+        assert_eq!(
+            reopened
+                .get_runner("ses_1")
+                .unwrap()
+                .unwrap()
+                .identity
+                .boot_id,
+            "boot-1"
+        );
+        assert_eq!(
+            reopened
+                .pending_runner_events("runner-1", 1, 10)
+                .unwrap()
+                .len(),
+            0
         );
     }
 }

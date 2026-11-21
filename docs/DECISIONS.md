@@ -35,6 +35,21 @@ con las condiciones siguientes:
 Estas decisiones concretan D01–D12 sin modificarlas. Cualquier reapertura
 requiere el caso de uso, reproducción y comparación de la regla existente.
 
+## Decisiones P3 — runner persistente (21/11/2026)
+
+| ID | Decisión | Motivo | Alternativa rechazada | Consecuencia |
+|---|---|---|---|---|
+| P3-D1 | `fleet-runner` es un **proceso Rust independiente**, una instancia por sesión, dueño del `AgentDriver` y del proceso/servicio nativo | El daemon puede morir sin matar al agente; `SessionManager` no debe poseer hilos de driver | Driver en el proceso `fleetd` (P1/P2): morir el daemon mata la sesión | `fleetd` deja de crear hilos de driver; pasa a hablar con runners por IPC autenticado |
+| P3-D2 | Identidad estable del runner: `runner_id` + `session_id` + `provider_id` + `host_id` + `boot_id` + `generation`; PID sólo informativo | Un PID reutilizado no prueba propiedad; el reattachment debe validar identidad de arranque | Confiar en PID o en la existencia de un socket | La DB guarda identidad y endpoint; el handshake la verifica antes de recuperar |
+| P3-D3 | Protocolo daemon↔runner tipado y versionado, separado del wire cliente y del protocolo nativo del proveedor | Evita filtrar JSON/SSE de OpenCode al cliente y permite rechazar versiones incompatibles | Reutilizar envelopes de `fleetctl` o HTTP/SSE de OpenCode | Nuevo módulo `fleet_protocol::runner` con `HELLO`, `STATUS`, `OPERATION`, `EVENT`, `ACK`, `SHUTDOWN` |
+| P3-D4 | Spool **durable y acotado por runner**, propiedad del runner, con `(runner_id, runner_seq)` y ACK del daemon | El daemon puede estar caído mientras se generan eventos; no se puede perder un permiso o una respuesta | Spool en RAM o en `fleet.sqlite` (segunda autoridad) | SQLite propio del runner con límite de eventos/bytes; política `SpoolFull`: suspender operaciones y avisar, nunca descartar |
+| P3-D5 | `seq` público de Fleet sigue siendo asignado por `SessionManager`/SQLite; el runner sólo emite `runner_seq` | Conserva P0-D6 y evita duplicados lógicos en replay | Usar `runner_seq` como `seq` de cliente | Ingesta deduplicada por `(runner_id, runner_seq)` antes de publicar |
+| P3-D6 | Reattachment **sólo con evidencia**: handshake autenticado + estado real del runner/proveedor; si falla, `Uncertain`/`Lost` | No declarar `Running` por un PID persistido | Marcar `Running` al arrancar el daemon | Un daemon reiniciado no crea runners sustitutos ni reenvía prompts |
+| P3-D7 | Aprobaciones: registro lógico sigue en `SessionManager`; el runner mantiene estado operativo y evidencia nativa mientras el daemon está ausente | Una decisión no puede resolverse dos veces ni aprobarse automáticamente | Resolver aprobaciones en el runner | Reenvío de decisiones inciertas requiere reconciliación; se conserva `Dispatching`/`Uncertain` |
+| P3-D8 | Transporte daemon↔runner: Unix socket 0600 en directorio 0700 en Linux; Windows queda **no validado** | Mismo modelo de confianza local que P1.1 | TCP loopback sin autenticación | No se declara paridad Windows sin prueba real |
+
+Estas decisiones extienden D02/D03/D05/D09 sin cambiar `AgentDriver` ni el wire público más que en lo imprescindible.
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

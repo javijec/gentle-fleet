@@ -15,8 +15,12 @@ pub fn runtime_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("gentle-fleet"))
 }
 
-fn address_file() -> PathBuf {
-    runtime_dir().join("fleetd.addr")
+pub fn address_file_named(name: &str) -> PathBuf {
+    runtime_dir().join(format!("{name}.addr"))
+}
+
+pub fn socket_path_named(name: &str) -> PathBuf {
+    runtime_dir().join(format!("{name}.sock"))
 }
 
 #[cfg(unix)]
@@ -84,18 +88,25 @@ impl Write for LocalStream {
 #[cfg(unix)]
 impl LocalListener {
     pub fn bind() -> io::Result<Self> {
+        Self::bind_named("fleetd")
+    }
+
+    pub fn bind_named(name: &str) -> io::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = runtime_dir();
         std::fs::create_dir_all(&directory)?;
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
-        let socket = directory.join("fleetd.sock");
+        let socket = socket_path_named(name);
         if socket.exists() {
             std::fs::remove_file(&socket)?;
         }
         let listener = std::os::unix::net::UnixListener::bind(&socket)?;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-        std::fs::write(address_file(), socket.to_string_lossy().as_bytes())?;
+        std::fs::write(
+            address_file_named(name),
+            socket.to_string_lossy().as_bytes(),
+        )?;
         Ok(Self::Unix(listener))
     }
 
@@ -108,20 +119,24 @@ impl LocalListener {
     }
 
     pub fn description(&self) -> String {
-        format!("unix:{:?}", address_file())
+        format!("unix:{:?}", socket_path_named("fleetd"))
     }
 }
 
 #[cfg(windows)]
 impl LocalListener {
     pub fn bind() -> io::Result<Self> {
+        Self::bind_named("fleetd")
+    }
+
+    pub fn bind_named(name: &str) -> io::Result<Self> {
         std::fs::create_dir_all(runtime_dir())?;
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         let address = listener.local_addr()?;
         // UUID v4 utiliza aleatoriedad del sistema; PID/tiempo eran predecibles.
         let token = uuid::Uuid::new_v4().to_string();
         std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
-        std::fs::write(address_file(), address.to_string())?;
+        std::fs::write(address_file_named(name), address.to_string())?;
         Ok(Self::Tcp(listener))
     }
 
@@ -134,12 +149,16 @@ impl LocalListener {
     }
 
     pub fn description(&self) -> String {
-        format!("tcp-loopback:{:?}", address_file())
+        format!("tcp-loopback:{:?}", address_file_named("fleetd"))
     }
 }
 
 pub fn connect() -> io::Result<LocalStream> {
-    let address = std::fs::read_to_string(address_file())
+    connect_named("fleetd")
+}
+
+pub fn connect_named(name: &str) -> io::Result<LocalStream> {
+    let address = std::fs::read_to_string(address_file_named(name))
         .map_err(|e| io::Error::new(e.kind(), format!("fleetd is not running: {e}")))?;
     let address = address.trim();
     #[cfg(unix)]

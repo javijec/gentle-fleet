@@ -9,6 +9,8 @@ pub type WorkspaceId = String;
 pub type SessionId = String;
 pub type TurnId = String;
 pub type OperationId = String;
+pub type RunnerId = String;
+pub type HostId = String;
 
 /// Versión nativa de un proveedor, conservada como texto y como números.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +99,8 @@ pub enum SessionState {
     Failed,
     /// Recuperada de SQLite sin runner verificado tras reinicio (P2).
     NeedsReconciliation,
+    /// Runner verificado y proveedor activo tras reattachment (P3).
+    Recovering,
 }
 
 /// Estado del turno, propiedad del SessionManager.
@@ -133,11 +137,112 @@ pub enum ProviderAvailability {
     Unknown,
 }
 
+/// Estado operativo del runner, distinto del estado lógico de la sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunnerStatus {
+    Starting,
+    Active,
+    Disconnected,
+    Recovering,
+    Stopping,
+    Stopped,
+    Lost,
+    Uncertain,
+}
+
+/// Identidad estable de arranque. El PID es informativo y nunca suficiente.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunnerIdentity {
+    pub runner_id: RunnerId,
+    pub session_id: SessionId,
+    pub provider_id: ProviderId,
+    pub host_id: HostId,
+    pub boot_id: String,
+    pub pid: u32,
+    pub protocol_version: String,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TurnStatus {
     Completed,
     Failed,
     Interrupted,
+}
+
+// Eventos nativos traducidos por los drivers. Son datos puros: el protocolo
+// daemon-runner los serializa sin depender de `fleet-agent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEvent {
+    pub kind: DomainEvent,
+}
+
+/// Evento numerado por el runner. `runner_seq` NO es el `seq` público Fleet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunnerEvent {
+    pub runner_id: RunnerId,
+    pub runner_seq: u64,
+    pub event: AgentEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DomainEvent {
+    TurnStarted {
+        turn_id: TurnId,
+    },
+    AssistantDelta {
+        turn_id: TurnId,
+        text: String,
+    },
+    AssistantMessage {
+        turn_id: TurnId,
+        text: String,
+    },
+    ToolStarted {
+        turn_id: TurnId,
+        name: String,
+        input: String,
+    },
+    ToolOutput {
+        turn_id: TurnId,
+        name: String,
+        output: String,
+    },
+    ToolCompleted {
+        turn_id: TurnId,
+        name: String,
+        success: bool,
+    },
+    TurnCompleted {
+        turn_id: TurnId,
+        status: TurnStatus,
+    },
+    /// Error terminal del turno; el único `AgentError` que cierra un turno.
+    TurnFailed {
+        turn_id: TurnId,
+        message: String,
+    },
+    /// Información del proveedor que debe mostrarse sin cerrar el turno.
+    AgentNotice {
+        message: String,
+    },
+    /// Error informativo que NO cierra el turno.
+    AgentError {
+        message: String,
+    },
+    /// Solicitud interactiva nativa traducida a dominio por el driver.
+    ApprovalRequested {
+        native_request_id: String,
+        kind: String,
+        message: String,
+        resources: Vec<String>,
+        allowed_decisions: Vec<String>,
+    },
+    /// Confirmación nativa de que la decisión fue entregada.
+    ApprovalResolved {
+        native_request_id: String,
+        decision: String,
+    },
 }
 
 /// Evento público y tipado. `seq` lo asigna Fleet, nunca el proveedor (P0-D6).

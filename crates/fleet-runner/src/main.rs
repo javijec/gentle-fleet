@@ -117,22 +117,17 @@ fn main() -> io::Result<()> {
         protocol_version: RUNNER_WIRE.into(),
         generation: 1,
     };
-    println!(
-        "{}",
-        serde_json::to_string(&identity).map_err(io::Error::other)?
-    );
-
     let (commands, command_rx) = mpsc::channel();
     let (closed_tx, closed_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::channel();
     let provider_alive = Arc::new(AtomicBool::new(false));
+    let pending_approvals: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let shared = Arc::new(RunnerShared {
         spool: Arc::clone(&spool),
         pending_approvals: Arc::clone(&pending_approvals),
         provider_alive: Arc::clone(&provider_alive),
     });
     let closed_rx = Arc::new(Mutex::new(closed_rx));
-    let pending_approvals: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     spawn_driver_loop(
         args,
         build_registry(),
@@ -145,6 +140,12 @@ fn main() -> io::Result<()> {
         .recv_timeout(Duration::from_secs(60))
         .map_err(|error| io::Error::other(format!("driver startup unconfirmed: {error}")))?
         .map_err(io::Error::other)?;
+
+    // A launch receipt must never be visible before the provider opened.
+    println!(
+        "{}",
+        serde_json::to_string(&identity).map_err(io::Error::other)?
+    );
 
     loop {
         match listener.accept() {

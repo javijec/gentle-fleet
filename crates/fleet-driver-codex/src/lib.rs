@@ -1012,6 +1012,33 @@ mod tests {
     }
 
     #[test]
+    fn native_rpc_approval_is_forwarded_to_fleet_without_autoapproval() {
+        let mut driver = CodexDriver::new();
+        driver.handle_server_request(rpc::ServerRequest {
+            id: json!(42),
+            method: "item/commandExecution/requestApproval".into(),
+            params: json!({
+                "command": "printf FLEET_APPROVAL_PROBE",
+                "availableDecisions": ["accept", "decline"],
+            }),
+        });
+        assert!(driver.pending.contains_key("42"));
+        assert!(driver.answered.is_empty());
+        let event = driver.local_events.pop_front().expect("approval event expected");
+        match event.kind {
+            DomainEvent::ApprovalRequested {
+                native_request_id,
+                allowed_decisions,
+                ..
+            } => {
+                assert_eq!(native_request_id, "42");
+                assert_eq!(allowed_decisions, vec!["accept", "decline"]);
+            }
+            _ => panic!("native request was not forwarded as an approval"),
+        }
+    }
+
+    #[test]
     fn driver_without_open_has_no_native_ids() {
         let driver = CodexDriver::new();
         let evidence = driver.inspect_recovery();

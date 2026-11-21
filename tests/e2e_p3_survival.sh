@@ -72,7 +72,8 @@ done
 USER_MSGS="$(grep -c 'user.survive daemon death' "$RUNTIME/timeline" || true)"
 [[ "$USER_MSGS" == "1" ]] || { echo "FAIL: prompt was duplicated ($USER_MSGS)"; exit 1; }
 "$BIN/fleetctl" operation p3-survival-key | grep -qi completed
-echo "PASS: daemon reattached, replayed spool without duplicate prompt"
+"$BIN/fleetctl" session list | awk -F '\t' -v id="$SID" '$1==id && $4=="Running" && $5=="Completed" {found=1} END{exit !found}'
+echo "PASS: daemon reattached, replayed spool, and returned to Running"
 
 timeout 30 "$BIN/fleetctl" watch "$SID" --since 0 --until-turn-end >"$RUNTIME/replay.out" 2>"$RUNTIME/replay.err"
 diff -u <(cut -f1 "$RUNTIME/timeline") <(cut -f1 "$RUNTIME/replay.out")

@@ -1,7 +1,24 @@
 # P3 — runner persistente y recuperación de sesiones
 
 Rama: `feature/p3-persistent-runner`. Base: `fe33197` (P2.2 integrado en `main`).
-Plataforma validada: **Linux x86_64**. Windows sigue sin validar.
+**Estado: CERRADA EN LINUX** (plataforma de referencia hasta P6).
+Windows y macOS: validación funcional pendiente en P7; **no se declara compatibilidad**.
+
+## Criterios de cierre P3 (plataforma de referencia Linux x86_64)
+
+| Criterio | Resultado verificado | Evidencia |
+|---|---|---|
+| Supervivencia del runner ante caída de `fleetd` | PASS — runner vivo tras SIGKILL, turno continuado | `tests/e2e_p3_survival.sh`, `tests/e2e_opencode_survival.sh` (real) |
+| Recuperación autenticada | PASS — reattach con identidad válida; token/boot_id y versión inválidos rechazados | `tests/e2e_p3_survival.sh`, `tests/e2e_p3_identity.sh` |
+| Replay durable sin duplicados | PASS — ACK tras commit, dedup por `(runner_id, runner_seq)`, failover sin prompts duplicados | `tests/e2e_persistence.sh`, `tests/e2e_long_replay.sh`, `tests/e2e_p3_multi_session.sh` |
+| Aprobaciones consistentes | PASS — una sola decisión, aprobación pendiente sobrevive a desconexión | `tests/e2e_approvals.sh`, `tests/e2e_p3_approval_disconnect.sh`, `tests/e2e_opencode_approval.sh` (real) |
+| Spool acotado y backpressure | PASS — límites de eventos/bytes, aviso duradero y eventos sin ACK conservados | tests unitarios del spool + `tests/e2e_backpressure.sh` |
+| CI y pruebas reales de OpenCode | PASS — CI success en el commit final; smokes reales ejecutados localmente | GitHub Actions `cargo`; `e2e_opencode*.sh` con `GF_E2E_REAL=1` |
+
+Estos criterios se dan por cumplidos **únicamente en Linux x86_64**. La arquitectura
+sigue siendo portable y se conservan las verificaciones de compilación cruzada
+disponibles; no se realizan pruebas funcionales de otros sistemas operativos
+en esta etapa.
 
 ## 1. Arquitectura final
 
@@ -245,14 +262,16 @@ cerrado en este entorno.
 
 ### Pendientes añadidos por la auditoría
 
-- **P2 — Windows bloquea el cierre estricto del plan.** Se instaló el target
-  `x86_64-pc-windows-gnu` y se verificaron `fleet-domain`, `fleet-protocol`,
-  `fleet-agent`, `fleet-core --lib` y `fleetctl --bins`. El check completo del
-  workspace falla en `libsqlite3-sys` porque no hay compilador MinGW
-  (`x86_64-w64-mingw32-gcc`) ni permisos para instalarlo. Además, el transporte
-  Windows usa TCP loopback + token en fichero sin DACL: **el aislamiento entre
-  usuarios locales no está implementado ni probado**. No se declara soporte
-  Windows.
+- **P7 — Windows y macOS: validación funcional pendiente.** Según la estrategia
+  actual, Linux x86_64 es la plataforma de referencia hasta completar P6 y la
+  validación funcional de otros sistemas operativos se realiza en P7. Se
+  conservan las comprobaciones de compilación cruzada disponibles: con el target
+  `x86_64-pc-windows-gnu` pasan `fleet-domain`, `fleet-protocol`, `fleet-agent`,
+  `fleet-core --lib`, `fleet-driver-opencode` y `fleetctl --bins`. El check
+  completo del workspace queda bloqueado por la ausencia de compilador MinGW
+  para `libsqlite3-sys`. El transporte Windows usa TCP loopback + token en
+  fichero sin DACL: el aislamiento entre usuarios locales no está implementado
+  ni probado. **No se declara compatibilidad con Windows ni con macOS.**
 - **P2 — `provider_alive` puede quedar desactualizado** mientras un `send`
   bloquea hasta 30 s (o durante saturación), porque el worker no puede sondear.
   Existe el marker determinista para fallo inmediato cuando se detecta
@@ -284,7 +303,9 @@ cerrado en este entorno.
 - `cargo build --workspace --locked`: PASS
 - 14 E2E deterministas + 2 smokes reales de OpenCode: PASS
 - Cross-compilación Windows parcial (sin SQLite): PASS para dominio, protocolo,
-  agente, core y CLI; workspace completo bloqueado por herramienta ausente.
+  agente, core, driver OpenCode y CLI; workspace completo bloqueado por
+  herramienta ausente. No es una validación funcional y no cambia el estado
+  Windows/macOS (pendiente para P7).
 - `git diff --check`: PASS
 
 ### CI sobre el commit final de la auditoría

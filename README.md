@@ -1,6 +1,6 @@
 # Gentle Fleet 2.0 — proyecto reiniciado desde cero
 
-**Estado: P0, P1, P1.1, P2 y P3 cerrados; runner independiente y recuperación real ante caída del daemon.** Fecha: 21 de noviembre de 2026.
+**Estado: P0, P1, P1.1, P2 y P3 CERRADOS EN LINUX; runner independiente y recuperación real ante caída del daemon.** Fecha: 22 de noviembre de 2026. Linux x86_64 es la plataforma de referencia hasta P6; Windows y macOS se validan funcionalmente en P7, sin declarar compatibilidad antes.
 
 Este es un **inicio limpio**: no se portan ni heredan los módulos de los repositorios anteriores. El historial de GitHub antiguo puede quedar archivado, pero sus decisiones y su código no son la base de esta versión. No se promete compatibilidad de bases SQLite ni del wire anterior; la compatibilidad comienza en el primer contrato publicado de v2.
 

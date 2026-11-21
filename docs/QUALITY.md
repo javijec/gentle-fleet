@@ -7,7 +7,7 @@
 3. **Process tests**: arrancar fleetd, runner y un fake agent como procesos separados; matar clientes, daemon, runner y agente en puntos sincronizados.
 4. **Provider fixtures**: mensajes reales anonimizados de Pi, Codex, OpenCode con versión del binario; contratos por capacidades.
 5. **Smoke real**: opt-in para los tres agentes, bajo HOME o perfil aislado cuando posible. No guardar credenciales; documentar si se probó en modo autenticado.
-6. **Platform matrix**: Linux y Windows para flujo local; remoto SSH en etapa P5.
+6. **Platform matrix**: Linux x86_64 es la plataforma de referencia hasta P6. Windows y macOS se validan funcionalmente en P7; hasta entonces no se declara compatibilidad. Se conservan las comprobaciones de compilación cruzada disponibles.
 
 ## CI desde el primer commit de implementación
 
@@ -16,7 +16,7 @@
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`.
 - `cargo test --workspace --locked` y test serial de procesos cuando afecte carreras.
 - `git diff --check`; cargo deny/audit como puerta de release, no como excusa para refactorizaciones masivas.
-- Matriz Linux + Windows en cambios de proceso/transporte. Un runner con una sola plataforma no constituye aceptación cross-platform.
+- CI en Linux x86_64 (plataforma de referencia). Las comprobaciones de compilación cruzada disponibles se conservan como señal de portabilidad, pero una sola plataforma no constituye aceptación cross-platform. La validación funcional en Windows/macOS se programa en P7.
 - Sin dependencia Git a repositorios privados de Core/Protocol anteriores. En un monorepo hay un solo Cargo.lock que permite construir CI desde checkout.
 
 ## Pruebas negras mínimas, sin proveedor de pago
@@ -43,7 +43,7 @@ T12 CLI remoto sobre SSH (P5) produce los mismos eventos/errores que local.
 - `tests/e2e_opencode.sh`: smoke real opt-in con dos clientes.
 - 15 tests unitarios (`cargo test --workspace`), `cargo fmt --check` y `cargo clippy -D warnings`.
 
-Detalle en [`P1_1_RESULTS.md`](P1_1_RESULTS.md). Windows sigue sin validar.
+Detalle en [`P1_1_RESULTS.md`](P1_1_RESULTS.md). Windows/macOS pendientes de validación en P7.
 
 ### P2 — ejecutadas y en verde
 
@@ -117,3 +117,17 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 - Nuevos E2E: `e2e_p3_runner_kill.sh`, `e2e_p3_multi_session.sh`, `e2e_p3_provider_health.sh`. Todos en verde y añadidos a CI.
 - Correcciones: firma Windows de `expected_token`, fail-closed en ACK, predicado de salud unificado, colas acotadas, stop sin runner, `AgentNotice` de saturación, limpieza de runners huérfanos y resistencia temporal de `e2e_backpressure.sh`.
 - Windows: cross-check parcial PASS (dominio/protocolo/agente/core/CLI); workspace completo NO verificado por falta de compilador MinGW. Aislamiento entre usuarios en Windows NO implementado.
+
+
+### P3 — criterios de cierre en Linux (estrategia de plataforma de referencia)
+
+| Criterio P3 | Evidencia ejecutada sobre el HEAD de la rama |
+|---|---|
+| Supervivencia del runner ante caída de `fleetd` | `tests/e2e_p3_survival.sh`: SIGKILL de `fleetd`, runner vivo, turno continuado |
+| Recuperación autenticada | `tests/e2e_p3_identity.sh`: token manipulado y versión de protocolo incompatible rechazados; `tests/e2e_p3_survival.sh`: reattach tras reinicio |
+| Replay durable sin duplicados | `tests/e2e_persistence.sh`, `tests/e2e_long_replay.sh`, `tests/e2e_p3_multi_session.sh`, `tests/e2e_p3_survival.sh` |
+| Aprobaciones consistentes | `tests/e2e_approvals.sh`, `tests/e2e_p3_approval_disconnect.sh`, `tests/e2e_opencode_approval.sh` (real, `once`/`reject`) |
+| Spool acotado y backpressure | tests unitarios del spool (1024 eventos, límite de bytes, avisos duraderos) y `tests/e2e_backpressure.sh` |
+| CI y pruebas reales de OpenCode | GitHub Actions `cargo` success en el commit final; `e2e_opencode.sh`, `e2e_opencode_approval.sh`, `e2e_opencode_survival.sh` ejecutados localmente con `GF_E2E_REAL=1` |
+
+Plataformas pendientes de validación funcional: **Windows y macOS (P7)**. No se afirma que funcionen. Se mantienen las comprobaciones de compilación cruzada disponibles (parciales, sin SQLite embebido en Windows).

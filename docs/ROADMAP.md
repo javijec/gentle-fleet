@@ -16,13 +16,13 @@
 
 **Salida**: SQLite única con sesiones, turnos, operaciones, eventos y aprobaciones; idempotencia antes de efecto y timeline reconstruible por cursor; aprobaciones de OpenCode con una sola decisión ganadora. El cliente puede cerrarse, reiniciarse y leer eventos con cursor. No prometer supervivencia al daemon crash todavía.
 
-**Estado (20/11/2026): CERRADO.** Ver [`P2_RESULTS.md`](P2_RESULTS.md): WAL y migraciones, `ReadTimeline`, `GetOperation`, aprobaciones (`once`/`reject`) y e2e de persistencia, reinicio, carreras y backpressure en verde. Windows sigue sin validar; P3 incorporará el runner independiente.
+**Estado (20/11/2026): CERRADO EN LINUX.** Ver [`P2_RESULTS.md`](P2_RESULTS.md): WAL y migraciones, `ReadTimeline`, `GetOperation`, aprobaciones (`once`/`reject`) y e2e de persistencia, reinicio, carreras y backpressure en verde. Windows/macOS quedan para validación en P7.
 
 ## P3: runner persistente y reconexión de daemon
 
-**Salida**: proceso fleet-runner independiente de fleetd, identidad autenticada, spool acotado de eventos no ACK, retransmisión deduplicada y reattachment. Probar muerte del daemon con runner vivo en Linux y Windows. Solo entonces anunciar que las sesiones sobreviven al reinicio del daemon.
+**Salida**: proceso fleet-runner independiente de fleetd, identidad autenticada, spool acotado de eventos no ACK, retransmisión deduplicada y reattachment. Plataforma de referencia: Linux x86_64. Windows y macOS quedan para validación funcional en P7; no se declara compatibilidad con esas plataformas en P3.
 
-**Estado (22/11/2026): VALIDACIÓN PARCIAL.** Linux VERIFIED con SIGKILL real de `fleetd` y de runner, reattach, replay sin duplicados, aprobaciones tras desconexión y múltiples sesiones. Windows NO validado (cross-check parcial sin SQLite; falta MinGW y DACL de token), por lo que el criterio de cierre del plan no se cumple totalmente. Ver [`P3_RESULTS.md`](P3_RESULTS.md).
+**Estado (22/11/2026): CERRADA EN LINUX.** Ver [`P3_RESULTS.md`](P3_RESULTS.md): supervivencia ante SIGKILL real de `fleetd` y de runner, reattach autenticado, replay durable sin duplicados, aprobaciones consistentes, spool acotado con backpressure, CI verde y smokes reales de OpenCode. Se conservan las comprobaciones de compilación cruzada disponibles. Windows/macOS: pendientes de validación en P7.
 
 ## P4: tres motores y capacidad de proveedor
 
@@ -38,7 +38,7 @@
 
 ## P7: robustez operacional y release
 
-**Salida**: límites configurables y métricas de runners/conexiones/eventos/spool; backups y migraciones; pruebas de consumo bajo carga; installers/upgrades para Linux y Windows; logs seguros; documentación de recuperación y compatibilidad; versión de wire publicada. No convertir P7 en una auditoría infinita: definir presupuesto de riesgos y criterios de release medibles.
+**Salida**: límites configurables y métricas de runners/conexiones/eventos/spool; backups y migraciones; pruebas de consumo bajo carga; **validación funcional de Windows y macOS** (incluyendo ALC/permisos de transporte y toolchain completo); installers/upgrades; logs seguros; documentación de recuperación y compatibilidad; versión de wire publicada. No convertir P7 en una auditoría infinita: definir presupuesto de riesgos y criterios de release medibles.
 
 ## Regla para ampliar el alcance
 

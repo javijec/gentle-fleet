@@ -20,7 +20,7 @@ use fleet_agent::{
     NativeHistoryMessage, NativeSessionInfo, ProviderRegistry, RecoveryEvidence, SendReceipt,
 };
 use fleet_domain::{
-    ApprovalArgument, ControlState, DomainEvent, NativeHistoryTool, ProviderAvailability,
+    ApprovalArgument, ControlState, DomainEvent, ProviderAvailability,
     ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode, SessionState,
     TurnStatus, VersionRange,
 };
@@ -38,6 +38,7 @@ const COMPATIBILITY: VersionRange = VersionRange {
 };
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const EMBEDDED_PI_VERSION: &str = "1.5.2";
+const HISTORY_UNSUPPORTED: &str = "Gentle Shell native history requires verified session-bound read-only RPC; an ephemeral --no-session process cannot prove the selected session identity";
 
 fn map_rpc(error: fleet_rpc_jsonl::RpcError) -> AgentError {
     AgentError {
@@ -82,7 +83,7 @@ fn metadata(version: ProviderVersion, availability: ProviderAvailability) -> Pro
         capabilities: ProviderCapabilities {
             streaming_text: true,
             tool_events: true,
-            session_history: true,
+            session_history: false,
             native_turn_ids: false,
             cancel_turn: true,
             approvals: true,
@@ -107,6 +108,24 @@ fn parse_controls(
 ) -> Vec<ControlState> {
     let mut available = Vec::new();
     let mut current = None;
+    let state_id = state
+        .get("model")
+        .and_then(|model| model.get("id"))
+        .and_then(Value::as_str);
+    let state_provider = state
+        .get("model")
+        .and_then(|model| model.get("provider"))
+        .and_then(Value::as_str);
+    let candidates = models
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("id").and_then(Value::as_str) == state_id)
+                .count()
+        })
+        .unwrap_or_default();
     for model in models
         .get("models")
         .and_then(Value::as_array)
@@ -117,11 +136,9 @@ fn parse_controls(
             continue;
         };
         let value = format!("{provider}:{id}");
-        if state
-            .get("model")
-            .and_then(|m| m.get("id"))
-            .and_then(Value::as_str)
-            == Some(id.as_str())
+        if state_id == Some(id.as_str())
+            && (state_provider == Some(provider.as_str())
+                || (state_provider.is_none() && candidates == 1))
         {
             current = Some(value.clone());
         }
@@ -164,7 +181,9 @@ fn parse_controls(
                 "yolo".into(),
                 "super-yolo".into(),
             ],
-            mutable: std::env::var("FLEET_GS_ALLOW_MODE_WRITE").is_ok(),
+            // Un flag no garantiza que el home de Gentle Shell esté
+            // aislado: P4.3 mantiene permisos de solo lectura.
+            mutable: false,
             status: "applied".into(),
         });
     }
@@ -178,18 +197,6 @@ fn native_ref(value: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("gs-{hash:016x}")
-}
-
-fn discovered_sessions() -> &'static std::sync::Mutex<Vec<NativeSessionInfo>> {
-    static DISCOVERED: std::sync::OnceLock<std::sync::Mutex<Vec<NativeSessionInfo>>> =
-        std::sync::OnceLock::new();
-    DISCOVERED.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-fn session_refs() -> &'static std::sync::Mutex<HashMap<String, String>> {
-    static REFS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
-        std::sync::OnceLock::new();
-    REFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
 /// Sondeo aislado de capacidades: abre un proceso Gentle Shell efímero,
@@ -416,53 +423,6 @@ impl AgentDriver for GentleShellDriver {
             .negotiate(self.rpc.as_mut().expect("rpc just set"))
             .map_err(AgentError::from)?;
         self.refresh_permissions();
-        let mut discovered: Vec<NativeSessionInfo> = Vec::new();
-        if self.desktop.capabilities.supports("list_sessions") {
-            if let Ok(data) = self.desktop.call(
-                self.rpc.as_mut().expect("rpc just set"),
-                "list_sessions",
-                &json!({}),
-                CALL_TIMEOUT,
-            ) {
-                for value in data
-                    .get("sessions")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    let Some(session_id) = text(value, "id").or_else(|| text(value, "sessionId"))
-                    else {
-                        continue;
-                    };
-                    let reference = native_ref(&session_id);
-                    session_refs()
-                        .lock()
-                        .expect("session refs poisoned")
-                        .insert(reference.clone(), session_id.clone());
-                    discovered.push(NativeSessionInfo {
-                        native_ref: reference,
-                        workspace_hint: text(value, "cwd"),
-                        state: text(value, "status").unwrap_or_else(|| "native".into()),
-                        activity: text(value, "updatedAt").unwrap_or_else(|| "unknown".into()),
-                        can_resume_history: true,
-                        model: None,
-                        effort: None,
-                        externally_active: false,
-                    });
-                }
-            }
-        }
-        if !discovered.is_empty() {
-            let mut list = discovered_sessions().lock().expect("discovery poisoned");
-            for item in discovered {
-                if !list
-                    .iter()
-                    .any(|existing| existing.native_ref == item.native_ref)
-                {
-                    list.push(item);
-                }
-            }
-        }
         let rpc = self.rpc.as_mut().expect("rpc just set");
         let models = rpc
             .call("get_available_models", json!({}), CALL_TIMEOUT)
@@ -489,12 +449,52 @@ impl AgentDriver for GentleShellDriver {
     }
 
     fn send(&mut self, input: AgentInput) -> Result<SendReceipt, AgentError> {
+        // Fleet persiste controles diferidos; deben aplicarse al proceso
+        // nativo antes de iniciar el turno, nunca ignorarse en silencio.
+        for control in &input.controls {
+            if let Err(error) = self.set_control(&control.name, &control.value, "turn") {
+                let uncertain = matches!(
+                    error.code.as_str(),
+                    "rpc_timeout" | "rpc_backpressure" | "rpc_protocol" | "provider_gone"
+                );
+                if uncertain {
+                    self.emit(DomainEvent::TurnUncertain {
+                        turn_id: input.turn_id.clone(),
+                        reason: format!("Gentle Shell native control outcome uncertain: {}", error.code),
+                    });
+                } else {
+                    self.emit(DomainEvent::TurnFailed {
+                        turn_id: input.turn_id.clone(),
+                        message: redact_provider_error(&error.message),
+                    });
+                }
+                return Ok(SendReceipt { accepted: false });
+            }
+            if self.get_control(&control.name)?.current.as_deref()
+                != Some(control.value.as_str())
+            {
+                self.emit(DomainEvent::TurnFailed {
+                    turn_id: input.turn_id.clone(),
+                    message: "Gentle Shell did not confirm the requested native control".into(),
+                });
+                return Ok(SendReceipt { accepted: false });
+            }
+        }
         self.mapper.begin_turn(input.turn_id.clone());
         let params = json!({"message": input.text});
-        let response = self
-            .rpc_mut()?
-            .call("prompt", params, CALL_TIMEOUT)
-            .map_err(map_rpc)?;
+        let response = match self.rpc_mut()?.call("prompt", params, CALL_TIMEOUT) {
+            Ok(response) => response,
+            Err(error) => {
+                // El prompt pudo haberse ejecutado aunque el ACK se perdiera.
+                // No puede reintentarse automáticamente.
+                self.emit(DomainEvent::TurnUncertain {
+                    turn_id: input.turn_id,
+                    reason: format!("Gentle Shell prompt outcome uncertain: {}", error.code),
+                });
+                self.mapper.end_turn();
+                return Ok(SendReceipt { accepted: false });
+            }
+        };
         let disposition = text(&response, "disposition").unwrap_or_default();
         if disposition == "handled" {
             let turn = self.mapper.fleet_turn.take().unwrap_or(input.turn_id);
@@ -504,11 +504,12 @@ impl AgentDriver for GentleShellDriver {
             });
             self.mapper.end_turn();
         } else if disposition.is_empty() {
-            self.mapper.end_turn();
-            return Err(AgentError {
-                code: "provider_protocol".into(),
-                message: "prompt response did not report a disposition".into(),
+            self.emit(DomainEvent::TurnUncertain {
+                turn_id: input.turn_id,
+                reason: "Gentle Shell prompt response omitted disposition".into(),
             });
+            self.mapper.end_turn();
+            return Ok(SendReceipt { accepted: false });
         }
         Ok(SendReceipt { accepted: true })
     }
@@ -549,6 +550,21 @@ impl AgentDriver for GentleShellDriver {
                 return Ok(self.pending_events.pop_front());
             }
             if let Some(frame) = frame {
+                if frame.get("type").and_then(Value::as_str) == Some("rpc_fatal_error") {
+                    let reason = text(&frame, "message").unwrap_or_else(|| "RPC framing failed".into());
+                    if let Some(turn_id) = self.mapper.fleet_turn.take() {
+                        self.emit(DomainEvent::TurnUncertain {
+                            turn_id,
+                            reason: redact_provider_error(&reason),
+                        });
+                        self.mapper.end_turn();
+                    } else {
+                        self.emit(DomainEvent::AgentError {
+                            message: redact_provider_error(&reason),
+                        });
+                    }
+                    return Ok(self.pending_events.pop_front());
+                }
                 let events = self.mapper.map(&frame);
                 for event in events {
                     self.pending_events.push_back(event);
@@ -557,9 +573,9 @@ impl AgentDriver for GentleShellDriver {
             }
             if !alive && self.mapper.fleet_turn.is_some() {
                 let turn = self.mapper.fleet_turn.take().unwrap_or_default();
-                self.emit(DomainEvent::TurnFailed {
+                self.emit(DomainEvent::TurnUncertain {
                     turn_id: turn,
-                    message: "Gentle Shell process closed before agent_settled".into(),
+                    reason: "Gentle Shell transport closed before agent_settled".into(),
                 });
                 self.mapper.end_turn();
                 return Ok(self.pending_events.pop_front());
@@ -632,7 +648,7 @@ impl AgentDriver for GentleShellDriver {
     fn session_state(&self) -> SessionState {
         if self.closed {
             SessionState::Stopped
-        } else if self.rpc.is_some() {
+        } else if self.rpc.as_ref().is_some_and(|rpc| rpc.alive()) {
             SessionState::Running
         } else {
             SessionState::NeedsReconciliation
@@ -656,40 +672,83 @@ impl AgentDriver for GentleShellDriver {
         value: &str,
         scope: &str,
     ) -> Result<ControlState, AgentError> {
-        if name != "permission_mode" {
-            return Err(AgentError::unsupported(name));
-        }
-        if std::env::var("FLEET_GS_ALLOW_MODE_WRITE").is_err() {
-            return Err(AgentError::unsupported(
-                "changing the native permission mode",
-            ));
-        }
         if !matches!(scope, "turn" | "session") {
             return Err(AgentError {
                 code: "InvalidArgument".into(),
-                message: "scope must be `turn` or `session`".into(),
+                message: "scope must be turn or session".into(),
             });
         }
-        if !self.desktop.capabilities.supports("set_permission_mode") {
-            return Err(AgentError::unsupported("set_permission_mode"));
+        if self.mapper.fleet_turn.is_some() {
+            return Err(AgentError {
+                code: "ControlDuringTurn".into(),
+                message: "native controls cannot be changed during an active turn".into(),
+            });
         }
-        self.desktop
-            .call(
-                self.rpc.as_mut().expect("runner owns rpc"),
-                "set_permission_mode",
-                &json!({"mode": value, "persist": false}),
-                CALL_TIMEOUT,
-            )
-            .map_err(AgentError::from)?;
-        self.refresh_permissions();
-        let mut control = self.get_control(name)?;
-        control.status = if self.permission_mode.as_deref() == Some(value) {
+        if name == "permission_mode" {
+            // No existe evidencia de que un flag por sí solo aísle el
+            // directorio global y el perfil activo del usuario.
+            return Err(AgentError::unsupported(
+                "permission_mode write requires verified isolated Gentle Shell home",
+            ));
+        }
+        let control = self.get_control(name)?;
+        if !control.available.iter().any(|option| option == value) {
+            return Err(AgentError {
+                code: "InvalidArgument".into(),
+                message: "requested value is not an available native control".into(),
+            });
+        }
+        let (command, params) = match name {
+            "model" => {
+                let (provider, model_id) = value.split_once(':').ok_or_else(|| AgentError {
+                    code: "InvalidArgument".into(),
+                    message: "model must be provider:modelId".into(),
+                })?;
+                ("set_model", json!({"provider":provider,"modelId":model_id}))
+            }
+            "effort" => ("set_thinking_level", json!({"level":value})),
+            _ => return Err(AgentError::unsupported(name)),
+        };
+        self.rpc_mut()?
+            .call(command, params, CALL_TIMEOUT)
+            .map_err(map_rpc)?;
+        let models = self.rpc_mut()?
+            .call("get_available_models", json!({}), CALL_TIMEOUT)
+            .map_err(map_rpc)?;
+        let levels = self.rpc_mut()?
+            .call("get_available_thinking_levels", json!({}), CALL_TIMEOUT)
+            .map_err(map_rpc)?;
+        let state = self.rpc_mut()?
+            .call("get_state", json!({}), CALL_TIMEOUT)
+            .map_err(map_rpc)?;
+        let embedded = self
+            .descriptor.controls
+            .iter()
+            .find(|item| item.name == "embedded_pi")
+            .cloned();
+        self.descriptor.controls =
+            parse_controls(&models, &levels, &state, self.permission_mode.as_deref());
+        if let Some(embedded) = embedded {
+            self.descriptor.controls.push(embedded);
+        }
+        let mut effective = self.get_control(name)?;
+        effective.status = if effective.current.as_deref() == Some(value) {
             "applied".into()
         } else {
             "rejected".into()
         };
-        Ok(control)
+        self.emit(DomainEvent::AgentNotice {
+            message: format!("control {} {}: {}", name, effective.status, value),
+        });
+        if effective.status != "applied" {
+            return Err(AgentError {
+                code: "ControlNotApplied".into(),
+                message: "Gentle Shell did not confirm the requested native control".into(),
+            });
+        }
+        Ok(effective)
     }
+
 }
 
 pub struct GentleShellFactory;
@@ -735,92 +794,67 @@ impl DriverFactory for GentleShellFactory {
     }
 
     fn list_native_sessions(&self) -> Result<Vec<NativeSessionInfo>, AgentError> {
-        Ok(discovered_sessions()
-            .lock()
-            .expect("discovery poisoned")
-            .clone())
+        // Las factorías viven en fleetd, distinto del runner. Nunca depender
+        // del cache estático de una sesión abierta en otro proceso.
+        let args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
+        let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
+        let mut rpc = JsonlRpc::spawn_with_widgets(
+            &std::env::temp_dir(),
+            PROGRAM,
+            &args,
+            &environment,
+            true,
+        )
+        .map_err(map_rpc)?;
+        let mut desktop = DesktopClient::new();
+        let result = (|| -> Result<Vec<NativeSessionInfo>, AgentError> {
+            desktop.negotiate(&mut rpc).map_err(AgentError::from)?;
+            if !desktop.capabilities.supports("list_sessions") {
+                return Err(AgentError::unsupported("Gentle Shell native session listing"));
+            }
+            let data = desktop
+                .call(&mut rpc, "list_sessions", &json!({}), CALL_TIMEOUT)
+                .map_err(AgentError::from)?;
+            let sessions = data
+                .get("sessions")
+                .and_then(Value::as_array)
+                .ok_or_else(|| AgentError {
+                    code: "NativeDiscoveryUnavailable".into(),
+                    message: "Gentle Shell did not return a sessions array".into(),
+                })?;
+            let mut result = Vec::new();
+            for item in sessions {
+                let Some(id) = text(item, "id").or_else(|| text(item, "sessionId"))
+                else {
+                    continue;
+                };
+                result.push(NativeSessionInfo {
+                    native_ref: native_ref(&id),
+                    workspace_hint: text(item, "cwd"),
+                    state: text(item, "status").unwrap_or_else(|| "unknown".into()),
+                    activity: text(item, "updatedAt").unwrap_or_else(|| "unknown".into()),
+                    can_resume_history: false,
+                    model: None,
+                    effort: None,
+                    externally_active: false,
+                });
+            }
+            Ok(result)
+        })();
+        let _ = rpc.close();
+        result
     }
 
     fn import_native_history(
         &self,
-        reference: &str,
+        _reference: &str,
     ) -> Result<Vec<NativeHistoryMessage>, AgentError> {
-        let session_id = session_refs()
-            .lock()
-            .expect("session refs poisoned")
-            .get(reference)
-            .cloned()
-            .ok_or_else(|| AgentError {
-                code: "not_found".into(),
-                message: "native session reference is no longer available; rediscover it".into(),
-            })?;
-        let mut driver = GentleShellDriver::new();
-        let ctx = LaunchContext {
-            workspace: std::env::temp_dir(),
-            mode: RunnerMode::Owned,
-        };
-        driver.open(ctx)?;
-        let mut messages = Vec::new();
-        let response = driver
-            .rpc
-            .as_mut()
-            .expect("opened")
-            .call(
-                "get_messages",
-                json!({"sessionId": session_id}),
-                CALL_TIMEOUT,
-            )
-            .map_err(map_rpc)?;
-        for (index, value) in response
-            .get("messages")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            let role = text(value, "role").unwrap_or_else(|| "unknown".into());
-            if role == "system" {
-                continue;
-            }
-            let body = value
-                .get("content")
-                .map(|content| match content {
-                    Value::String(text) => text.clone(),
-                    Value::Array(parts) => parts
-                        .iter()
-                        .filter_map(|part| text(part, "text"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    _ => String::new(),
-                })
-                .unwrap_or_default();
-            if body.is_empty() {
-                continue;
-            }
-            let tool = if role == "toolResult" {
-                Some(NativeHistoryTool {
-                    name: text(value, "toolName").unwrap_or_else(|| "tool".into()),
-                    input: None,
-                    output: Some(body.clone()),
-                    status: None,
-                })
-            } else {
-                None
-            };
-            messages.push(NativeHistoryMessage {
-                role: if role == "toolResult" {
-                    "tool".into()
-                } else {
-                    role
-                },
-                text: redact_provider_error(&body),
-                source_ref: Some(native_ref(&format!("{}:{}", session_id, index))),
-                tool,
-            });
-        }
-        let _ = driver.close();
-        Ok(messages)
+        // get_messages sin switch_session verifica la sesión del proceso
+        // efímero y NO demuestra que un sessionId arbitrario fue leído.
+        // Fallar cerrado antes que importar datos de otra sesión.
+        Err(AgentError::unsupported(HISTORY_UNSUPPORTED))
     }
+
 }
 
 pub fn register_gentle_shell(registry: &mut ProviderRegistry) {

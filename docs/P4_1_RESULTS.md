@@ -2,7 +2,7 @@
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
 **Versión validada:** `codex-cli 0.171.0` (`codex --version`), App Server `[experimental]` con `capabilities.experimentalApi:false`.
-**Estado:** **CERRADA** en Linux para el alcance implementado; la adopción con escritura queda explícitamente bloqueada por falta de garantía de exclusividad.
+**Estado:** **P4.1-H EN REVALIDACIÓN** después de auditoría correctiva. No se ratifica el cierre final hasta repetir los smokes reales de Codex 0.171.0 contra el nuevo HEAD y obtener CI verde. La adopción con escritura continúa bloqueada por falta de garantía de exclusividad.
 
 ## 1. Commits
 
@@ -74,6 +74,21 @@
 | Controles deseados en memoria del daemon | Media | No sobreviven a un reinicio de `fleetd`; se documentan como preferencia de turno, no autoridad durable |
 | Puerto de transporte/IDs nativos en errores de stop | Media | Corregido en P4.1-A con redacción y test de regresión |
 
-## 7. Veredicto
+## 7. Auditoría correctiva P4.1-H (posterior al informe original)
 
-**P4.1 se considera CERRADA en Linux** para el alcance implementado y verificado: Codex opera como proveedor de Gentle Fleet con la misma API, SessionManager, runner persistente, aprobaciones, persistencia y timeline que OpenCode, sin regresiones P1–P3 y con capacidades declaradas honestamente. Quedan fuera, con evidencia y sin simulación, la adopción con escritura, la recuperación de turno en vuelo y los cambios de configuración dentro de un turno activo. Windows/macOS permanecen pendientes de P7.
+Se revisó el driver y se corrigieron comportamientos no cubiertos por el informe inicial:
+
+- El lector JSON-RPC aplica backpressure en lugar de descartar notificaciones; la cola se drena mientras se esperan respuestas propias. Frames sobredimensionados o inválidos ahora fallan de manera explícita, y el código incluye tests de saturación y tamaño.
+- Se respeta la configuración nativa de sandbox y aprobación. Las variables `FLEET_CODEX_*` solo anulan valores cuando están declaradas explícitamente.
+- La huella de respuesta de aprobación incluye argumentos tipados y evita reutilizar la misma clave con otros parámetros. Antes de reclamar una aprobación se comprueban opciones y campos anunciados en su evento persistido; el driver valida además preguntas y permisos nativos.
+- El historial se pagina con detección de ciclo, conserva contenido original, agrega campos tipados opcionales para herramientas e identificadores de origen estables, y deduplica elementos incluso entre claves de operación distintas. La adopción con escritura permanece prohibida.
+- Los errores de importación dejan el efecto como incierto en vez de informar completado; el destino debe ser de igual proveedor y no estar en turno activo. **Una importación interrumpida puede contener un prefijo durable**: no se prometen transacciones de lote hasta demostrar atomicidad.
+- Las preferencias de controles se muestran como `deferred` y se guardan por sesión en SQLite V4 para persistir tras reinicio de `fleetd`. Esto **no** prueba que el proveedor ya haya aplicado el valor durante el turno; esa confirmación requiere smoke específico.
+- Se mejoró la asociación de deltas con mensajes individuales; errores ambiguos al iniciar un turno dejan la operación `Uncertain`, sin reenvío automático.
+- Los tests reales de chat, controles, aprobaciones y descubrimiento ya no admiten varios fallos silenciosos; CI valida además sintaxis de scripts Bash. El CI no ejecuta llamadas pagas al modelo.
+
+**Validación pendiente:** confirmar CI verde del HEAD correctivo y volver a ejecutar los siete smokes reales opt-in con credenciales nativas existentes. Revisar especialmente importación de herramientas y paginación, aprobación con múltiples preguntas, permisos parametrizados y persistencia de controles en el entorno real. Hasta entonces la clasificación es **código corregido / integración real todavía no revalidada**.
+
+## 8. Veredicto revisado
+
+**P4.1 no se considera nuevamente CERRADA hasta completar la revalidación P4.1-H**. El informe de implementación original verificó en Linux: Codex opera como proveedor de Gentle Fleet con la misma API, SessionManager, runner persistente, aprobaciones, persistencia y timeline que OpenCode, sin regresiones P1–P3 y con capacidades declaradas honestamente. Quedan fuera, con evidencia y sin simulación, la adopción con escritura, la recuperación de turno en vuelo y los cambios de configuración dentro de un turno activo. Windows/macOS permanecen pendientes de P7.

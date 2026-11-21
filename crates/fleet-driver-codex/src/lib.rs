@@ -453,7 +453,13 @@ impl AgentDriver for CodexDriver {
                         return Ok(SendReceipt { accepted: false });
                     }
                 }
-                other => return Err(AgentError::unsupported(other)),
+                other => {
+                    self.emit(DomainEvent::TurnFailed {
+                        turn_id: input.turn_id.clone(),
+                        message: format!("unsupported turn control: {other}"),
+                    });
+                    return Ok(SendReceipt { accepted: false });
+                },
             }
         }
         let mut params = json!({

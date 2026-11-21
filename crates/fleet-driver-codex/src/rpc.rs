@@ -460,3 +460,52 @@ impl WaitTimeout for Child {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_rpc_frame_is_rejected_not_truncated() {
+        let mut payload = vec![b'x'; MAX_LINE_BYTES + 1];
+        payload.push(b'\n');
+        let mut reader = io::BufReader::new(io::Cursor::new(payload));
+        assert_eq!(
+            read_line_bounded(&mut reader).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn full_notification_queue_applies_backpressure_without_loss() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (notifications_tx, notifications) = mpsc::sync_channel(1);
+        let (requests_tx, _requests) = mpsc::sync_channel(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        classify(
+            json!({"method":"item/agentMessage/delta","params":{"delta":"one"}}),
+            &pending,
+            &notifications_tx,
+            &requests_tx,
+            &dropped,
+        );
+        let thread_dropped = dropped.clone();
+        let reader = std::thread::spawn(move || {
+            classify(
+                json!({"method":"turn/completed","params":{"turn":{"status":"completed"}}}),
+                &pending,
+                &notifications_tx,
+                &requests_tx,
+                &thread_dropped,
+            );
+        });
+        assert_eq!(
+            notifications.recv().unwrap()["method"],
+            "item/agentMessage/delta"
+        );
+        reader.join().unwrap();
+        assert_eq!(notifications.recv().unwrap()["method"], "turn/completed");
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+    }
+}

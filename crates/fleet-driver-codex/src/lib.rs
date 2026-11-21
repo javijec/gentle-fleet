@@ -393,22 +393,7 @@ impl AgentDriver for CodexDriver {
             self.effort = std::env::var("FLEET_CODEX_EFFORT")
                 .ok()
                 .filter(|v| efforts.contains(v));
-            if self.model.is_none() {
-                self.model = self
-                    .descriptor
-                    .controls
-                    .iter()
-                    .find(|control| control.name == "model")
-                    .and_then(|control| control.current.clone());
-            }
-            if self.effort.is_none() {
-                self.effort = self
-                    .descriptor
-                    .controls
-                    .iter()
-                    .find(|control| control.name == "effort")
-                    .and_then(|control| control.current.clone());
-            }
+
         }
         // Por defecto Codex debe usar sus políticas nativas. Fleet solo
         // anula sandbox/aprobación ante un override explícito del usuario.
@@ -875,7 +860,7 @@ impl DriverFactory for CodexFactory {
                 if let Some(body) = body {
                     messages.push(NativeHistoryMessage {
                         role: role.into(),
-                        text: redact_provider_error(&body),
+                        text: body,
                     });
                 }
             }

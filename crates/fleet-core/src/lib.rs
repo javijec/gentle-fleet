@@ -1168,7 +1168,7 @@ impl SessionManager {
                     {
                         return Ok(None);
                     }
-                    let status = if decision == "reject" {
+                    let status = if matches!(decision.as_str(), "reject" | "decline" | "cancel" | "abort") {
                         ApprovalStatus::Rejected
                     } else {
                         ApprovalStatus::Accepted
@@ -1755,7 +1755,10 @@ impl SessionManager {
                 code: "not_found".into(),
                 message: format!("unknown session `{session_id}`"),
             })?;
-            (record.summary.provider_id.clone(), record.desired_controls.clone())
+            (
+                record.summary.provider_id.clone(),
+                record.desired_controls.clone(),
+            )
         };
         let descriptor = self
             .registry
@@ -3404,4 +3407,35 @@ mod tests {
             }
         )));
     }
+    #[test]
+    fn typed_approval_fingerprint_is_sensitive_to_arguments() {
+        let args = vec![
+            fleet_domain::ApprovalArgument {
+                name: "permissions".into(),
+                values: vec!["read".into()],
+            },
+            fleet_domain::ApprovalArgument {
+                name: "scope".into(),
+                values: vec!["turn".into()],
+            },
+        ];
+        let mut reordered = args.clone();
+        reordered.reverse();
+        let original = approval_answer_fingerprint("s", "a", "grant", &args);
+        assert_eq!(
+            original,
+            approval_answer_fingerprint("s", "a", "grant", &reordered)
+        );
+        let mut different = args.clone();
+        different[0].values = vec!["write".into()];
+        assert_ne!(
+            original,
+            approval_answer_fingerprint("s", "a", "grant", &different)
+        );
+        assert_eq!(
+            approval_answer_fingerprint("s", "a", "once", &[]),
+            "s\0a\0once"
+        );
+    }
+
 }

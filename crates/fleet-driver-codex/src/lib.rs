@@ -16,8 +16,9 @@ use fleet_agent::{
     NativeHistoryMessage, NativeSessionInfo, ProviderRegistry, RecoveryEvidence, SendReceipt,
 };
 use fleet_domain::{
-    AgentEvent, ControlState, DomainEvent, NativeHistoryTool, ProviderAvailability, ProviderCapabilities,
-    ProviderDescriptor, ProviderVersion, RunnerMode, SessionState, VersionRange,
+    AgentEvent, ControlState, DomainEvent, NativeHistoryTool, ProviderAvailability,
+    ProviderCapabilities, ProviderDescriptor, ProviderVersion, RunnerMode, SessionState,
+    VersionRange,
 };
 use serde_json::{json, Value};
 
@@ -908,12 +909,12 @@ impl DriverFactory for CodexFactory {
                     if body.is_empty() {
                         return Err(AgentError {
                             code: "HistoryMissingContent".into(),
-                            message: "Codex history contains an item without recoverable content".into(),
+                            message: "Codex history contains an item without recoverable content"
+                                .into(),
                         });
                     }
-                    let source_ref = native_ref(&format!(
-                        "{}\\0{}\\0{}", thread_id, turn_id, item_index
-                    ));
+                    let source_ref =
+                        native_ref(&format!("{}\0{}\0{}", thread_id, turn_id, item_index));
                     let tool = if role == "tool" {
                         Some(NativeHistoryTool {
                             name: kind.to_string(),

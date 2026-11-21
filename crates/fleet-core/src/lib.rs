@@ -644,12 +644,12 @@ impl SessionManager {
                 .store
                 .active_turn_for_session(&session_id)
                 .map_err(to_agent_error)?;
-            let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&shared));
+            // Publish the recovered turn ownership BEFORE starting ingress:
+            // replayed terminal events must see the correct active_turn.
             {
                 let mut state = self.state.lock().expect("manager poisoned");
                 if let Some(session) = state.sessions.get_mut(&session_id) {
-                    session.runner = Some(shared);
-                    session.ingress = Some(ingress);
+                    session.runner = Some(Arc::clone(&shared));
                     if let Some(turn) = &active {
                         session.summary.state = SessionState::Recovering;
                         session.active_turn = Some(turn.turn_id.clone());
@@ -669,6 +669,13 @@ impl SessionManager {
                             state: SessionState::Running,
                         },
                     )?;
+                }
+            }
+            let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&shared));
+            {
+                let mut state = self.state.lock().expect("manager poisoned");
+                if let Some(session) = state.sessions.get_mut(&session_id) {
+                    session.ingress = Some(ingress);
                 }
             }
             self.store

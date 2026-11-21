@@ -5,12 +5,12 @@
 //! JSON-RPC 2.0, separa eventos de respuestas por `type:"response"` y dispone
 //! de un subprotocolo `extension_ui_request` iniciado por el proceso.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,6 +19,10 @@ use serde_json::{json, Value};
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 const EVENT_QUEUE: usize = 256;
 const UI_QUEUE: usize = 64;
+// Los mensajes recibidos mientras se espera un ACK no se descartan: se
+// retienen en una cola ordenada para entregarlos al runner después de call().
+const MAX_DEFERRED_EVENTS: usize = 512;
+const MAX_DEFERRED_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcError {
@@ -138,6 +142,9 @@ pub struct PiRpc {
     alive: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     stderr_tail: Arc<Mutex<Vec<String>>>,
+    deferred_events: VecDeque<Value>,
+    deferred_ui: VecDeque<UiRequest>,
+    deferred_bytes: usize,
 }
 
 impl PiRpc {
@@ -188,23 +195,23 @@ impl PiRpc {
                     Ok((Some(bytes), oversized)) => {
                         if oversized {
                             reader_dropped.fetch_add(1, Ordering::Relaxed);
-                        }
-                        if oversized {
-                            let error = json!({
-                                "type":"agent_error",
+                            let _ = event_tx.send(json!({
+                                "type":"rpc_fatal_error",
                                 "message":"Pi frame exceeded the configured limit"
-                            });
-                            let _ = event_tx.send(error);
-                            continue;
+                            }));
+                            // Un frame perdido podría ser agent_settled o una
+                            // respuesta. El resultado es incierto: fail closed.
+                            break;
                         }
-                        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-                            classify(value, &reader_pending, &event_tx, &ui_tx);
-                        } else {
-                            let error = json!({
-                                "type":"agent_error",
-                                "message":"malformed Pi RPC frame"
-                            });
-                            let _ = event_tx.send(error);
+                        match serde_json::from_slice::<Value>(&bytes) {
+                            Ok(value) => classify(value, &reader_pending, &event_tx, &ui_tx),
+                            Err(_) => {
+                                let _ = event_tx.send(json!({
+                                    "type":"rpc_fatal_error",
+                                    "message":"malformed Pi RPC frame"
+                                }));
+                                break;
+                            }
                         }
                     }
                     Ok((None, _)) | Err(_) => break,
@@ -242,6 +249,9 @@ impl PiRpc {
             alive,
             dropped,
             stderr_tail,
+            deferred_events: VecDeque::new(),
+            deferred_ui: VecDeque::new(),
+            deferred_bytes: 0,
         })
     }
 
@@ -259,8 +269,39 @@ impl PiRpc {
             .map_err(|error| RpcError::new("rpc_transport", error.to_string()))
     }
 
-    /// Envía un comando y espera su respuesta con plazo acotado. Los eventos
-    /// del proceso siguen siendo entregados por el hilo lector mientras tanto.
+    fn retain_event(&mut self, event: Value) -> Result<(), RpcError> {
+        let bytes = serde_json::to_vec(&event)
+            .map_err(|error| RpcError::new("serialization_failed", error.to_string()))?
+            .len();
+        self.deferred_bytes = self.deferred_bytes.saturating_add(bytes);
+        self.deferred_events.push_back(event);
+        if self.deferred_events.len() > MAX_DEFERRED_EVENTS
+            || self.deferred_bytes > MAX_DEFERRED_BYTES
+        {
+            // Conservar también el evento que alcanzó el límite. El caller
+            // recibe error explícito y nunca un falso ACK de Pi.
+            return Err(RpcError::new(
+                "rpc_backpressure",
+                "Pi emitted more events than the bounded synchronous-call buffer; outcome uncertain",
+            ));
+        }
+        Ok(())
+    }
+
+    fn retain_ui(&mut self, request: UiRequest) -> Result<(), RpcError> {
+        self.deferred_ui.push_back(request);
+        if self.deferred_ui.len() > UI_QUEUE {
+            return Err(RpcError::new(
+                "rpc_backpressure",
+                "Pi emitted too many interactive requests during a synchronous call; outcome uncertain",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Mientras espera un ACK, drena las colas del lector RPC y retiene los
+    /// eventos para next_event(). Evita un interbloqueo entre backpressure y
+    /// una respuesta cuyo frame aún no pudo leer el mismo hilo.
     pub fn call(
         &mut self,
         command: &str,
@@ -286,22 +327,67 @@ impl PiRpc {
                 .remove(&id);
             return Err(error);
         }
-        match rx.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(_) => {
-                self.pending
-                    .lock()
-                    .expect("rpc pending poisoned")
-                    .remove(&id);
-                Err(RpcError::new(
+
+        let deadline = std::time::Instant::now() + timeout;
+        let outcome = loop {
+            // Un fallo de protocolo invalida la correlación incluso si Pi
+            // alcanzó a entregar una respuesta previa a la corrupción.
+            let mut fatal = None;
+            while let Ok(event) = self.events.try_recv() {
+                if event.get("type").and_then(Value::as_str) == Some("rpc_fatal_error") {
+                    fatal = Some(RpcError::new(
+                        "rpc_protocol",
+                        "Pi RPC reader encountered a malformed or oversized frame",
+                    ));
+                }
+                if let Err(error) = self.retain_event(event) {
+                    fatal = Some(error);
+                    break;
+                }
+            }
+            if fatal.is_none() {
+                while let Ok(request) = self.ui.try_recv() {
+                    if let Err(error) = self.retain_ui(request) {
+                        fatal = Some(error);
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = fatal {
+                break Err(error);
+            }
+            match rx.try_recv() {
+                Ok(reply) => break reply,
+                Err(TryRecvError::Disconnected) => {
+                    break Err(RpcError::new(
+                        "provider_gone",
+                        "Pi RPC response channel disconnected",
+                    ));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            if !self.alive.load(Ordering::Acquire) {
+                break Err(RpcError::new(
+                    "provider_gone",
+                    "Pi reader closed before the command response",
+                ));
+            }
+            if std::time::Instant::now() >= deadline {
+                break Err(RpcError::new(
                     "rpc_timeout",
                     format!(
                         "no response for {command} within {} ms",
                         timeout.as_millis()
                     ),
-                ))
+                ));
             }
-        }
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        self.pending
+            .lock()
+            .expect("rpc pending poisoned")
+            .remove(&id);
+        outcome
     }
 
     pub fn respond_ui(&mut self, id: &str, answer: Value) -> Result<(), RpcError> {
@@ -311,12 +397,22 @@ impl PiRpc {
         self.write_record(&record)
     }
 
-    pub fn try_event(&self) -> Option<Value> {
+    pub fn try_event(&mut self) -> Option<Value> {
+        if let Some(event) = self.deferred_events.pop_front() {
+            self.deferred_bytes = self.deferred_bytes.saturating_sub(
+                serde_json::to_vec(&event)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or_default(),
+            );
+            return Some(event);
+        }
         self.events.try_recv().ok()
     }
 
-    pub fn try_ui_request(&self) -> Option<UiRequest> {
-        self.ui.try_recv().ok()
+    pub fn try_ui_request(&mut self) -> Option<UiRequest> {
+        self.deferred_ui
+            .pop_front()
+            .or_else(|| self.ui.try_recv().ok())
     }
 
     pub fn dropped_frames(&self) -> u64 {
@@ -384,6 +480,36 @@ mod tests {
         let (line, oversized) = read_lf_line(&mut input).unwrap();
         assert!(oversized);
         assert_eq!(line.unwrap().len(), MAX_LINE_BYTES);
+    }
+
+    #[test]
+    fn synchronous_wait_can_drain_full_event_queue_without_discarding_terminal() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (ui_tx, _ui_rx) = mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            for index in 0..4 {
+                classify(
+                    json!({"type":"message_update","index":index}),
+                    &pending,
+                    &tx,
+                    &ui_tx,
+                );
+            }
+            classify(
+                json!({"type":"agent_settled","aborted":false}),
+                &pending,
+                &tx,
+                &ui_tx,
+            );
+        });
+        let mut received = Vec::new();
+        for _ in 0..5 {
+            received.push(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        }
+        writer.join().unwrap();
+        assert_eq!(received[4]["type"], "agent_settled");
+        assert_eq!(received.len(), 5);
     }
 
     #[test]

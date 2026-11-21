@@ -717,18 +717,23 @@ impl DriverFactory for PiFactory {
             });
         }
         parse_native_history(&contents, reference)
-
     }
 }
 
 /// Convierte una captura JSONL de Pi sin perder ni modificar el contenido
 /// original. Los bloques no textuales se conservan como JSON estructurado.
-fn parse_native_history(contents: &str, reference: &str) -> Result<Vec<NativeHistoryMessage>, AgentError> {
+fn parse_native_history(
+    contents: &str,
+    reference: &str,
+) -> Result<Vec<NativeHistoryMessage>, AgentError> {
     let mut messages = Vec::new();
     for (index, line) in contents.lines().enumerate() {
         let entry: Value = serde_json::from_str(line).map_err(|_| AgentError {
             code: "HistoryMalformed".into(),
-            message: format!("Pi session JSONL contains malformed record at line {}", index + 1),
+            message: format!(
+                "Pi session JSONL contains malformed record at line {}",
+                index + 1
+            ),
         })?;
         if entry.get("type").and_then(Value::as_str) != Some("message") {
             continue;
@@ -755,19 +760,26 @@ fn parse_native_history(contents: &str, reference: &str) -> Result<Vec<NativeHis
         })?;
         let body = match content {
             Value::String(value) => value.clone(),
-            Value::Array(parts) if parts.iter().all(|part| {
-                part.get("type").and_then(Value::as_str) == Some("text")
-                    && part.get("text").and_then(Value::as_str).is_some()
-            }) => parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join(""),
+            Value::Array(parts)
+                if parts.iter().all(|part| {
+                    part.get("type").and_then(Value::as_str) == Some("text")
+                        && part.get("text").and_then(Value::as_str).is_some()
+                }) =>
+            {
+                parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
             Value::Array(_) | Value::Object(_) => content.to_string(),
             _ => {
                 return Err(AgentError {
                     code: "HistoryMissingContent".into(),
-                    message: format!("Pi session content at line {} cannot be represented", index + 1),
+                    message: format!(
+                        "Pi session content at line {} cannot be represented",
+                        index + 1
+                    ),
                 });
             }
         };
@@ -902,7 +914,9 @@ mod tests {
         let controls = parse_model_controls(&models, &levels, &state);
         assert_eq!(controls[0].current.as_deref(), Some("beta:shared"));
         let unknown = json!({"model":{"id":"shared"}});
-        assert!(parse_model_controls(&models, &levels, &unknown)[0].current.is_none());
+        assert!(parse_model_controls(&models, &levels, &unknown)[0]
+            .current
+            .is_none());
     }
 
     #[test]
@@ -921,10 +935,7 @@ mod tests {
 
     #[test]
     fn native_history_rejects_malformed_and_truncated_imports() {
-        let malformed = concat!(
-            "{\"type\":\"session\",\"id\":\"s\"}\n",
-            "{invalid json}\n"
-        );
+        let malformed = concat!("{\"type\":\"session\",\"id\":\"s\"}\n", "{invalid json}\n");
         let error = parse_native_history(malformed, "pi-session-1").unwrap_err();
         assert_eq!(error.code, "HistoryMalformed");
         let mut many = String::new();

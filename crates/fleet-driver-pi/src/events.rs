@@ -448,10 +448,12 @@ mod tests {
             "type":"message_update",
             "assistantMessageEvent":{"type":"text_delta","delta":"first"}
         }));
-        assert!(mapper.map(&json!({
-            "type":"message_end",
-            "message":{"role":"assistant","content":[{"type":"text","text":"first"}]}
-        })).is_empty());
+        assert!(mapper
+            .map(&json!({
+                "type":"message_end",
+                "message":{"role":"assistant","content":[{"type":"text","text":"first"}]}
+            }))
+            .is_empty());
         let second = mapper.map(&json!({
             "type":"message_end",
             "message":{"role":"assistant","content":[{"type":"text","text":"second"}]}

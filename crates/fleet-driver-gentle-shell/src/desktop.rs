@@ -427,6 +427,54 @@ mod tests {
         assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Duplicate);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn desktop_wait_drains_full_event_queue_without_losing_events() {
+        // El proceso simula un ACK Pi, 300 eventos de chat y una respuesta
+        // Desktop RPC por Extension UI. No necesita modelo ni binario Gentle.
+        let widget = json!({
+            "type":"extension_ui_request",
+            "id":"ui-widget",
+            "method":"setWidget",
+            "widgetKey":"gentle-desktop-rpc",
+            "widgetLines":[serde_json::to_string(&json!({
+                "schema":SCHEMA,"kind":"response","requestId":"fleet-desktop-1",
+                "ok":true,"data":{"methods":["capabilities"],"events":[]}
+            })).unwrap()]
+        });
+        let widget_line = serde_json::to_string(&widget).unwrap();
+        let script = format!(
+            "IFS= read -r line\n\
+             printf '%s\\n' '{{\"type\":\"response\",\"id\":\"fleet-1\",\"success\":true,\"data\":{{\"disposition\":\"handled\"}}}}'\n\
+             i=0\n\
+             while [ \"$i\" -lt 300 ]; do\n\
+               printf '{{\"type\":\"message_update\",\"index\":%s}}\\n' \"$i\"\n\
+               i=$((i+1))\n\
+             done\n\
+             printf '%s\\n' '{widget_line}'\n\
+             IFS= read -r line\n"
+        );
+        let args = vec!["-c".to_string(), script];
+        let mut rpc = JsonlRpc::spawn_with_widgets(
+            std::path::Path::new("/tmp"),
+            "sh",
+            &args,
+            &[],
+            true,
+        )
+        .unwrap();
+        let mut client = DesktopClient::new();
+        let result = client
+            .call(&mut rpc, "capabilities", &json!({}), Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result["methods"][0], "capabilities");
+        for index in 0..300 {
+            assert_eq!(rpc.try_event().unwrap()["index"], index);
+        }
+        assert!(rpc.try_event().is_none());
+        let _ = rpc.close();
+    }
+
     #[test]
     fn desktop_response_correlates_by_request_id_not_prompt_id() {
         let mut client = DesktopClient::new();

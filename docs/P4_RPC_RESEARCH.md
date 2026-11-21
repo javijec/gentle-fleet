@@ -167,7 +167,7 @@ Sondeo con `--no-session`, cwd temporal, 5 prompts, todos `handled`. Sin secreto
 
 **23 métodos anunciados:** `capabilities`, `get_snapshot`, `get_config`, `set_config`, `get_permission_mode`, `set_permission_mode`, `get_subscription_usage`, `refresh_subscription_usage`, `get_design_canvas`, `list_jobs`, `cancel_job`, `get_job_output`, `apply_profile`, `list_subagents`, `cancel_subagent`, `get_subagent_thread`, `list_sessions`, `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`, `set_review_mode`, `get_usage_stats`.
 
-**9 eventos anunciados:** `config_changed`, `permission_mode_changed`, `rate_limit`, `design_canvas`, `jobs_update`, `profile_applied`, `agents_update`, `review_mode_changed`. **`session_snapshot` NO se anunció** en la sesión efímera: la documentación indica que aparece solo cuando el seam del feed está conectado para esa sesión. Fleet debe negociar por sesión; no hardcodear el evento.
+**8 eventos anunciados en la sesión efímera:** `config_changed`, `permission_mode_changed`, `rate_limit`, `design_canvas`, `jobs_update`, `profile_applied`, `agents_update`, `review_mode_changed`. **Noveno evento condicional: `session_snapshot`**, documentado por el productor pero **no anunciado** en esta sesión efímera; se habilita al conectar el feed de sesión. Fleet debe negociar métodos/eventos por sesión, no asumir nueve siempre. La documentación upstream puede evolucionar independientemente del binario instalado; el recuento de 23 métodos se refiere solo a la versión local probada.
 
 Llamadas de solo lectura ejecutadas:
 - `get_permission_mode` → `{mode:"super-yolo", default_mode:"super-yolo"}`.
@@ -196,7 +196,7 @@ Fleet P4 debe dejar puntos de extensión tipados si hace falta, pero no exponer 
 
 ### 3.7 Clasificación Gentle Shell
 
-- **VERIFIED:** versión, transporte Desktop RPC, 23 métodos y 9 eventos negociados, cuatro llamadas de solo lectura, límites y códigos de error del productor.
+- **VERIFIED:** versión, transporte Desktop RPC, 23 métodos y **8 eventos efectivamente negociados** en sesión efímera; `session_snapshot` documentado como noveno condicional y no anunciado en la sonda. Cuatro llamadas de solo lectura, límites y códigos de error del productor.
 - **OBSERVED (P0):** evento `session_snapshot`, diálogo `select` de permiso, `tool_execution_*`, cierre y resume con `switch_session` en sesión real.
 - **UNTESTED:** `set_config`, `set_permission_mode`, `apply_profile`, `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`/`set_review_mode`, cancelaciones, reconexión con `seq` perdido, recuperación tras SIGKILL.
 - **UNSUPPORTED en la sesión efímera probada:** `list_sessions` (`sessions_unavailable`) y `session_snapshot` no negociado.
@@ -213,4 +213,4 @@ Fleet P4 debe dejar puntos de extensión tipados si hace falta, pero no exponer 
 | Sondeo capacidades Gentle Shell | `/tmp/gs_cap_probe.py` (solo lectura) |
 | P0 real | `docs/research/{CODEX,PI,OPENCODE,PROVIDER_COMPARISON,KNOWN_LIMITATIONS}.md`, `spikes/p0/fixtures/*.jsonl` |
 
-Los ficheros `/tmp/*` son evidencia de sesión, no fixtures versionados. Antes de P4.1 se decidirá qué subconjunto se convierte en fixture determinista versionado (§7 del plan de pruebas).
+Los ficheros `/tmp/*` son **sondeos transitorios no reproducibles desde otro checkout**: no son fixtures versionados y pueden desaparecer. En P4.1–P4.3 deben reconstruirse como sondas ejecutables y fixtures mínimos, anonimizados y versionados, antes de fundamentar criterios de cierre en esos resultados (§7 del plan de pruebas).

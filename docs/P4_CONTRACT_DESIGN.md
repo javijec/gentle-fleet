@@ -61,7 +61,7 @@ Esquema SQLite actual: **versión 3** (`fleet-store-sqlite/src/lib.rs:310-390`);
 | A2: trait separado `DriverControls` con downcasting desde `AgentDriver` | `SessionManager` pregunta si el driver implementa el trait extendido. | No ensucia `AgentDriver` con métodos que muchos drivers no usarán. | Downcasting y `Any` rompen el estilo estático del código; dos identificationes de capacidad (bool + trait) que pueden divergir; más difícil de propagar por runner. | Similar en wire, peor mantenimiento. |
 | A3: comandos genéricos opacos `SetNativeSetting{key,json}` | Un solo comando con JSON. | Mínimo código inicial. | Viola P4-SPEC §4 (sin JSON privado), pierde validación y versionado, filtra configuración nativa. | **Rechazada.** |
 
-**Recomendación:** A1. Las cadenas de control son un enum/identificador tipado con valor tipado; el namespace describe la capacidad (`model`, `effort`, `permission_mode`, `profile`), no el proveedor. Confirmación de estado efectivo obligatoria: `set_control` devuelve el valor observado tras la operación o un estado `Deferred`/`Rejected` cuando el proveedor no permite aplicarlo en un turno activo (P4_SPEC §4.1.3). No se modifica ningún fichero de configuración del usuario directamente.
+**Recomendación:** A1. Las cadenas de control son un enum/identificador tipado con valor tipado; el namespace describe la capacidad (`model`, `effort`, `permission_mode`, `profile`), no el proveedor. Confirmación de estado efectivo obligatoria: `set_control` devuelve el valor observado tras la operación o un estado `Deferred`/`Rejected` cuando el proveedor no permite aplicarlo en un turno activo (P4_SPEC §4.1.3). No se modifica ningún fichero de configuración del usuario directamente. Un control de escritura solo será VERIFIED si se ejecuta sobre una configuración/perfil aislado y se confirma el estado posterior sin alterar el perfil personal; si no hay aislamiento fiable, marcar UNTESTED.
 
 ### 4.B — Aprobaciones nativas tipadas · B4 · F07/F08
 
@@ -69,11 +69,11 @@ Esquema SQLite actual: **versión 3** (`fleet-store-sqlite/src/lib.rs:310-390`);
 
 | Alternativa | Descripción | Ventajas | Desventajas | Impacto |
 |---|---|---|---|---|
-| **B1 (recomendada): opciones y respuesta tipadas opacas en el evento Fleet** | `ApprovalRequested` incorpora un vector de `ApprovalOption` (identificador opaco + etiqueta + parámetros tipados opcionales) y `ApprovalAnswer` lleva `approval_id` Fleet + opción elegida + argumentos opcionales. El driver traduce al payload nativo. | Respeta F08; conserva `approval_id` como clave Fleet; idempotencia y durabilidad siguen en `SessionManager`; sin JSON privado en el wire cliente. | Amplía `DomainEvent`, `AnswerApproval`, `RunnerCommand::Answer`, `Approval` store y `AgentDriver::answer`. Requiere migrar el payload JSON de aprobaciones o añadir columna con caso de uso probado. | Dominio, protocolo, core, runner, store, CLI. Sin ramas por proveedor. |
+| **B1 (recomendada): opciones tipadas con ID público Fleet y referencia nativa privada** | `ApprovalRequested` incluye opciones con `option_id` **público de Fleet, estable y acotado a una aprobación**, etiqueta y esquema tipado de argumentos; `ApprovalAnswer` envía `approval_id`, `option_id` y argumentos validados. El driver traduce al payload nativo. | Respeta F08; conserva `approval_id` como clave Fleet; idempotencia y durabilidad siguen en `SessionManager`; sin JSON privado en el wire cliente. | Amplía `DomainEvent`, `AnswerApproval`, `RunnerCommand::Answer`, `Approval` store y `AgentDriver::answer`. Requiere migrar el payload JSON de aprobaciones o añadir columna con caso de uso probado. | Dominio, protocolo, core, runner, store, CLI. Sin ramas por proveedor. |
 | B2: mapa `decision: String` + `arguments: Vec<String>` | Mantener un string con dictamen genérico y argumentos posicionales. | Cambio pequeño; reutiliza `allowed_decisions` actual. | Pierde semántica de decisiones parametrizadas, facilita autoaprobación accidental y no distingue `decline` de `cancel`. | Menor, pero incompleto para Codex. |
 | B3: reenviar `availableDecisions` tal cual desde el proveedor | Copiar el array nativo al cliente. | Cero traducción. | **Rechazada:** filtra RPC privado y acopla el wire a versiones del proveedor (P4-SPEC §3). |
 
-**Recomendación:** B1. `approval_id` sigue siendo la única clave pública; los IDs nativos (`requestId`, `threadId`) permanecen `#[serde(skip)]` y dentro del runner. El bucle de runner debe atender requests iniciados por el servidor mientras espera respuestas (§1.2 de `P4_RPC_RESEARCH.md`). Entrega incierta → `Uncertain` y reconciliación; **nunca hay reenvío automático** (D09, P0-D4).
+**Recomendación:** B1. `approval_id` identifica públicamente la solicitud y `option_id` identifica públicamente una opción **dentro de ella**. Los IDs/payloads nativos (`requestId`, `threadId`, decisión original) permanecen privados al driver/runner. El mapa `option_id`→acción nativa debe permanecer estable ante replay, ser validado contra la solicitud y reconstruible cuando se prometa responder tras reconexión; sin evidencia, `NeedsReconciliation` y nunca reenvío automático. Los argumentos deben coincidir con el esquema tipado de la opción anunciada; `operation_key` conserva idempotencia. El bucle de runner debe atender requests iniciados por el servidor mientras espera respuestas (§1.2 de `P4_RPC_RESEARCH.md`). Entrega incierta → `Uncertain` y reconciliación; **nunca hay reenvío automático** (D09, P0-D4).
 
 ### 4.C — Descubrimiento, adopción e importación de sesiones · B3 · F10–F13
 
@@ -81,11 +81,11 @@ Esquema SQLite actual: **versión 3** (`fleet-store-sqlite/src/lib.rs:310-390`);
 
 | Alternativa | Descripción | Ventajas | Desventajas | Impacto |
 |---|---|---|---|---|
-| **C1 (recomendada): capacidades de enumeración en el driver + operación de adopción con vínculo durable** | `AgentDriver` gana `list_native_sessions()` (solo lectura) y `inspect_native_session(id)` con evidencia de actividad. `SessionManager` ofrece una operación `AdoptNativeSession` que crea sesión Fleet + runner propio y registra vínculo `(provider_id, native_id)` con procedencia. La importación de historial es una operación separada e idempotente. | Cumple "descubrimiento amplio, adopción conservadora" (F10/F11); mantiene la autoridad en Fleet; el proveedor sigue siendo opaco; separa historial de turno vivo. | Requiere un vínculo persistente: **proponer** tabla V4 con `UNIQUE(provider_id, native_session_id)`, `fleet_session_id`, `adopted_at`, `evidence`, `provenance`, y un `OperationKind::AdoptSession`/`ImportHistory` para idempotencia. Migración solo cuando P4.1/P4.2/P4.3 ejecuten el caso real. | Dominio (store trait), store-sqlite (V4), core, wire, runner, CLI. `SessionManager` gana una operación genérica, **no una rama por proveedor**. |
+| **C1 (recomendada): descubrimiento a nivel de proveedor/factory + adopción durable por core** | Una capacidad del catálogo/factory del proveedor, **no del `AgentDriver` de una sesión abierta**, ofrece `list_native_sessions()` e `inspect_native_session(id)` de solo lectura. `SessionManager` ofrece una operación `AdoptNativeSession` que crea sesión Fleet + runner propio y registra vínculo `(provider_id, native_id)` con procedencia. La importación de historial es una operación separada e idempotente. | Cumple "descubrimiento amplio, adopción conservadora" (F10/F11); mantiene la autoridad en Fleet; el proveedor sigue siendo opaco; separa historial de turno vivo. | Requiere un vínculo persistente: **proponer** tabla V4 con `UNIQUE(provider_id, native_session_id)`, `fleet_session_id`, `adopted_at`, `evidence`, `provenance`, y un `OperationKind::AdoptSession`/`ImportHistory` para idempotencia. Migración solo cuando P4.1/P4.2/P4.3 ejecuten el caso real. | Dominio (store trait), store-sqlite (V4), core, wire, runner, CLI. `SessionManager` gana una operación genérica, **no una rama por proveedor**. |
 | C2: el driver importa directamente a la base Fleet | El driver escribe sesiones/historial. | Menos capas. | **Rechazada:** rompe "un driver no escribe bases Fleet" (D03, reglas AGENTS) y la autoridad de `SessionManager`. | — |
 | C3: solo importar historial, sin adopción ni vínculo | Leer eventos y crear sesión nueva. | Muy simple. | Incumple F11/F12 (exclusividad y adopción explícita) y permitiría dos administradores Fleet sobre la misma sesión externa. | Insuficiente. |
 
-**Evidencia de exclusividad (F12):** la ausencia de PID o de `loaded` no acredita inactividad. La propuesta exige combinar señales del proveedor (`activeFlags`, `thread/loaded/list`, `session_snapshot`/feed, `sessions_unavailable`) y, si no se puede determinar con seguridad, **bloquear** la adopción. No se tomará posesión de procesos ajenos activos. pytest de adopción debe fallar cerrado cuando la evidencia sea ambigua.
+**Evidencia de exclusividad (F12):** la ausencia de PID o de `loaded` no acredita inactividad. Esas señales del proveedor (`activeFlags`, `thread/loaded/list`, `session_snapshot`/feed, `sessions_unavailable`) son indicios, **no prueba suficiente de exclusividad**. La ausencia de PID o `loaded` tampoco lo es. Exigir exclusividad demostrable (lease/bloqueo del proveedor o garantía contractual equivalente) y defensa frente a carreras entre inspección y adopción; si no existe, bloquear adopción con escritura y conservar descubrimiento/lectura. No se tomará posesión de procesos ajenos activos. pytest de adopción debe fallar cerrado cuando la evidencia sea ambigua.
 
 **Procedencia (F13):** cada evento importado llevará una marca `observed_live | imported_from_provider | reconstructed_partial`. No se inventan deltas ni detalles ausentes. Historial recuperable **no** implica turno en vuelo reanudable.
 
@@ -101,9 +101,9 @@ Proponer sustituir el string libre por un `RecoveryEvidence` con `kind: enum { R
 
 | Alternativa | Descripción | Ventajas | Desventajas |
 |---|---|---|---|
-| **E1 (recomendada): función compartida `register_builtin_providers(&mut ProviderRegistry)` en `fleet-agent` (o crate de arranque común)** | Ambos binarios llaman la misma función; cada driver se registra una sola vez. | Elimina la divergencia; `SessionManager` sigue sin conocer proveedores; añadir un driver es un cambio local. | Pequeña dependencia de los binarios hacia el módulo de registro; requiere que cada `DriverFactory` sea `Send + Sync` (ya lo es en la práctica). |
+| **E1 (recomendada): composición compartida fuera de `fleet-agent`** | Un módulo de composición de los ejecutables, o una pequeña crate superior justificada por la reutilización, depende de `fleet-agent` **y** de los drivers concretos; `fleetd` y `fleet-runner` comparten ese catálogo. | Elimina la divergencia sin dependencia circular; `fleet-agent` mantiene únicamente los contratos y `SessionManager` no conoce proveedores. | Puede exigir un módulo de arranque adicional; justificarlo con prueba de paridad y evitar una crate prematura sin uso real. |
 | E2: descubrimiento por inventario/directorio en tiempo de ejecución | Plugins. | Extensibilidad dinámica. | **Rechazada:** fuera de alcance (P4_SPEC §3 prohíbe plugins en P4), más superficie de seguridad. |
-| E3: dejar los dos registros y añadir un test de paridad | Test que compara IDs en ambos binarios. | Cero refactor. | Detecta la divergencia tarde y no evita el error; se acepta solo como red de seguridad temporal junto con E1. |
+| E3: registro duplicado temporal con prueba de paridad | Comparar IDs, versiones, capacidades y modos de ambos binarios. | Sin crate adicional y sin ciclos. | Duplicación temporal; eliminarla si los nuevos drivers justifican una capa de composición. |
 
 ### 4.F — Corrección de fuga de IDs nativos · B7
 
@@ -112,6 +112,12 @@ Aplicar `redact_provider_error()` a los dos mensajes publicados sin redactar en 
 ### 4.G — `interrupt` de extremo a extremo · B6
 
 El `RunnerCommand::Interrupt` ya existe en core y wire, pero es no-op en el bucle de core (`core/runner.rs:235`) y en el runner (`runner/main.rs:270`). Proponer conectarlo a `AgentDriver::interrupt` en ambos bucles, con traducción por driver: Codex `turn/interrupt`, Pi/Gentle `abort`. Es un cambio pequeño, habilita `cancel_turn` de forma real y evita declarar una capacidad inutilizable. Alternativa rechazada: quitar `cancel_turn` de las capacidades (perdería una función que los proveedores sí ofrecen).
+
+## 4.H — Compatibilidad de wire y evidencia reproducible
+
+Antes de ampliar las capacidades, aprobaciones, peticiones o comandos Fleet/runner, especificar compatibilidad de lectura con mensajes y SQLite existentes, clientes antiguos, valores por defecto y serialización/versionado. Un `serde(default)` aislado no demuestra compatibilidad. El `option_id` Fleet debe conservar identidad al persistir/reconectar/reproducir; añadir tests negativos para opciones inexistentes y argumentos inválidos.
+
+Los scripts exploratorios P4.0 residen en `/tmp` y no constituyen evidencia versionada: en P4.1–P4.3 incorporar **sondas mínimas y fixtures sanitizados reproducibles** al repositorio antes de declarar cerrada una capacidad. No versionar credenciales, rutas o historiales personales.
 
 ## 5. Forma propuesta de contratos (orientativa, no ratificada)
 
@@ -128,7 +134,8 @@ trait DriverControls {  // o métodos por defecto en AgentDriver (alternativa A1
                    scope: ControlScope) -> Result<ControlValue, AgentError>; // devuelve estado efectivo
 }
 
-struct ApprovalOption { key: OpaqueKey, label: String, params: Option<TypedParams> }
+struct ApprovalOption { option_id: FleetOptionId, label: String, args_schema: Option<TypedParamsSchema> }
+// La referencia nativa y su correlación NO se serializan al cliente.
 struct NativeSession { native_id: OpaqueKey, workspace_hint: Option<PathBuf>,
                        state_hint: ActivityHint, evidence: Vec<ActivityEvidence> }
 
@@ -136,7 +143,7 @@ enum RecoveryKind { RunnerAliveAttached, NativeHistoryResumable,
                     NativeProcessRecovered, LiveTurnRecoverable, Uncertain, Lost }
 ~~~
 
-Reglas de oro: `OpaqueKey` nunca se serializa al cliente; `TypedParams` es un enum cerrado por versión de contrato; los nombres de control no llevan prefijo de proveedor; todo cambio devuelve estado efectivo o `Deferred`/`Rejected` observable.
+Reglas de oro: identificadores **nativos** opacos no se serializan; `FleetOptionId` sí es público y debe validarse contra la aprobación; los argumentos son tipos Fleet versionados, no RPC nativo arbitrario; los nombres de control no llevan prefijo de proveedor; todo cambio devuelve estado efectivo o `Deferred`/`Rejected` observable.
 
 ## 6. Compatibilidad y extensiones futuras
 

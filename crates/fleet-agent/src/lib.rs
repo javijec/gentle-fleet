@@ -11,8 +11,7 @@ use std::time::Duration;
 pub mod fake;
 
 use fleet_domain::{
-    ProviderDescriptor, ProviderId, ProviderVersion, RunnerMode, SessionState, TurnId, TurnStatus,
-    VersionRange,
+    ProviderDescriptor, ProviderId, ProviderVersion, RunnerMode, SessionState, TurnId, VersionRange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,71 +105,7 @@ pub struct RecoveryEvidence {
     pub detail: String,
 }
 
-/// Evento de dominio emitido por un driver, sin `seq` ni IDs Fleet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentEvent {
-    pub kind: DomainEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DomainEvent {
-    TurnStarted {
-        turn_id: TurnId,
-    },
-    AssistantDelta {
-        turn_id: TurnId,
-        text: String,
-    },
-    AssistantMessage {
-        turn_id: TurnId,
-        text: String,
-    },
-    ToolStarted {
-        turn_id: TurnId,
-        name: String,
-        input: String,
-    },
-    ToolOutput {
-        turn_id: TurnId,
-        name: String,
-        output: String,
-    },
-    ToolCompleted {
-        turn_id: TurnId,
-        name: String,
-        success: bool,
-    },
-    TurnCompleted {
-        turn_id: TurnId,
-        status: TurnStatus,
-    },
-    /// Error terminal del turno; el único `AgentError` que cierra un turno.
-    TurnFailed {
-        turn_id: TurnId,
-        message: String,
-    },
-    /// Información del proveedor que debe mostrarse sin cerrar el turno.
-    AgentNotice {
-        message: String,
-    },
-    /// Error informativo que NO cierra el turno.
-    AgentError {
-        message: String,
-    },
-    /// Solicitud interactiva nativa traducida a dominio por el driver.
-    ApprovalRequested {
-        native_request_id: String,
-        kind: String,
-        message: String,
-        resources: Vec<String>,
-        allowed_decisions: Vec<String>,
-    },
-    /// Confirmación nativa de que la decisión fue entregada.
-    ApprovalResolved {
-        native_request_id: String,
-        decision: String,
-    },
-}
+pub use fleet_domain::{AgentEvent, DomainEvent, RunnerEvent};
 
 /// Contrato mínimo de P1. Las operaciones no soportadas devuelven
 /// `AgentError::unsupported`, nunca un fallo silencioso.

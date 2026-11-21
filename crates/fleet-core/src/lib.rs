@@ -10,20 +10,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+
+pub mod runner;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fleet_agent::{
-    redact_provider_error, AgentDriver, AgentError, AgentEvent, AgentInput, DomainEvent,
-    LaunchContext, ProviderRegistry,
-};
+use fleet_agent::{redact_provider_error, AgentError, ProviderRegistry};
 use fleet_domain::store::{
     ApprovalClaim, ApprovalRequest, ApprovalStatus, OperationKind, OperationRecord,
-    OperationReservation, OperationStatus, SessionStore, StoreError, TurnRecord,
+    OperationReservation, OperationStatus, RunnerRecord, SessionStore, StoreError, TurnRecord,
 };
 use fleet_domain::{
-    Event, EventKind, ProviderDescriptor, ProviderId, RunnerMode, SessionId, SessionState,
-    TurnState, TurnStatus, WorkspaceId,
+    AgentEvent, DomainEvent, Event, EventKind, HostId, ProviderDescriptor, ProviderId, RunnerEvent,
+    RunnerMode, RunnerStatus, SessionId, SessionState, TurnState, TurnStatus, WorkspaceId,
 };
+use runner::{RunnerCommand, RunnerHandle, RunnerLaunchContext, RunnerLauncher};
 
 /// Capacidad por defecto de la cola de cada suscriptor.
 pub const SUBSCRIBER_LIMIT: usize = 256;
@@ -52,30 +52,11 @@ pub struct PromptReceipt {
     pub turn_id: String,
 }
 
-enum DriverCommand {
-    Prompt {
-        text: String,
-        turn_id: String,
-    },
-    Answer {
-        approval_id: String,
-        native_request_id: String,
-        decision: String,
-    },
-    Close {
-        done: Sender<Result<(), AgentError>>,
-    },
-}
-
-struct DriverHandle {
-    commands: Sender<DriverCommand>,
-    join: Option<JoinHandle<()>>,
-}
-
 struct SessionRecord {
     summary: SessionSummary,
     next_seq: u64,
-    driver: Option<DriverHandle>,
+    runner: Option<Arc<dyn RunnerHandle>>,
+    ingress: Option<JoinHandle<()>>,
     active_turn: Option<String>,
     current_operation: Option<String>,
 }
@@ -242,6 +223,8 @@ struct ManagerState {
 pub struct SessionManager {
     registry: ProviderRegistry,
     store: Arc<dyn SessionStore>,
+    launcher: Arc<dyn RunnerLauncher>,
+    host_id: HostId,
     bus: EventBus,
     state: Mutex<ManagerState>,
 }
@@ -262,10 +245,14 @@ impl SessionManager {
     pub fn new(
         registry: ProviderRegistry,
         store: Arc<dyn SessionStore>,
+        launcher: Arc<dyn RunnerLauncher>,
+        host_id: HostId,
     ) -> Result<Self, AgentError> {
         let manager = Self {
             registry,
             store,
+            launcher,
+            host_id,
             bus: EventBus::default(),
             state: Mutex::new(ManagerState {
                 workspaces: Vec::new(),
@@ -322,7 +309,8 @@ impl SessionManager {
                         turn_state,
                     },
                     next_seq,
-                    driver: None,
+                    runner: None,
+                    ingress: None,
                     active_turn: None,
                     current_operation: None,
                 },
@@ -433,15 +421,21 @@ impl SessionManager {
                 message: format!("no driver registered for `{provider_id}`"),
             });
         }
-        let mut driver = self.registry.create(provider_id)?;
-        driver.open(LaunchContext {
+        let session_id = self.next_id("ses");
+        let handle = self.launcher.launch(RunnerLaunchContext {
+            session_id: session_id.clone(),
+            provider_id: provider_id.to_string(),
             workspace: workspace.path.clone(),
             mode: RunnerMode::Auto,
+            existing: None,
+            ask_shell: false,
+            fail_answer: false,
         })?;
+        let identity = handle.identity().clone();
+        let runner_handle: Arc<dyn RunnerHandle> = Arc::from(handle);
 
         let summary = {
             let mut state = self.state.lock().expect("manager poisoned");
-            let session_id = Self::next_id_locked(&mut state, "ses");
             let summary = SessionSummary {
                 id: session_id.clone(),
                 workspace_id: workspace.id.clone(),
@@ -461,17 +455,24 @@ impl SessionManager {
                     updated_at_ms: now_ms(),
                 })
                 .map_err(to_agent_error)?;
-            let (commands, rx) = mpsc::channel();
-            let join = self.spawn_driver(session_id.clone(), driver, rx);
+            self.store
+                .save_runner(&RunnerRecord {
+                    identity: identity.clone(),
+                    status: RunnerStatus::Active,
+                    endpoint: format!("runner:{}", identity.runner_id),
+                    last_ack_seq: 0,
+                    created_at_ms: now_ms(),
+                    updated_at_ms: now_ms(),
+                })
+                .map_err(to_agent_error)?;
+            let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&runner_handle));
             state.sessions.insert(
                 session_id.clone(),
                 SessionRecord {
                     summary: summary.clone(),
                     next_seq,
-                    driver: Some(DriverHandle {
-                        commands,
-                        join: Some(join),
-                    }),
+                    runner: Some(runner_handle),
+                    ingress: Some(ingress),
                     active_turn: None,
                     current_operation: None,
                 },
@@ -496,58 +497,160 @@ impl SessionManager {
         Ok(summary)
     }
 
-    fn spawn_driver(
+    fn spawn_ingress(
         self: &Arc<Self>,
         session_id: SessionId,
-        mut driver: Box<dyn AgentDriver>,
-        commands: Receiver<DriverCommand>,
+        handle: Arc<dyn RunnerHandle>,
     ) -> JoinHandle<()> {
         let manager = Arc::clone(self);
+        let runner_id = handle.identity().runner_id.clone();
         thread::spawn(move || loop {
-            match commands.recv_timeout(Duration::from_millis(20)) {
-                Ok(DriverCommand::Prompt { text, turn_id }) => {
-                    if let Err(error) = driver.send(AgentInput {
-                        text,
-                        turn_id: turn_id.clone(),
-                    }) {
-                        manager.fail_turn(&session_id, &turn_id, &error);
+            match handle.recv(Duration::from_millis(50)) {
+                Ok(Some(RunnerEvent {
+                    runner_id: event_runner_id,
+                    runner_seq,
+                    event,
+                })) => {
+                    if event_runner_id != runner_id {
+                        continue;
                     }
-                }
-                Ok(DriverCommand::Answer {
-                    approval_id,
-                    native_request_id,
-                    decision,
-                }) => {
-                    if let Err(error) = driver.answer(native_request_id, decision) {
-                        manager.mark_approval_uncertain(&session_id, &approval_id, &error);
-                    }
-                }
-                Ok(DriverCommand::Close { done }) => {
-                    let outcome = driver.close();
-                    manager.finish_stop(&session_id, &outcome);
-                    let _ = done.send(outcome);
-                    break;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
-            match driver.next_event(Duration::from_millis(50)) {
-                Ok(Some(event)) => {
-                    if let Err(error) = manager.publish_agent(&session_id, event) {
-                        eprintln!("agent event could not be persisted: {error}");
+                    if let Err(error) =
+                        manager.ingest_runner_event(&session_id, &runner_id, runner_seq, event)
+                    {
+                        eprintln!("runner event could not be ingested: {error}");
                     }
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    let _ = manager.publish_local(
-                        &session_id,
-                        EventKind::AgentError {
-                            message: redact_provider_error(&error.to_string()),
-                        },
-                    );
+                    eprintln!("runner ingress stopped for {session_id}: {error}");
+                    break;
                 }
             }
         })
+    }
+
+    /// Ingesta deduplicada por `(runner_id, runner_seq)`: el evento se publica
+    /// una sola vez y el ACK se envía sólo después de persistirlo.
+    fn ingest_runner_event(
+        &self,
+        session_id: &str,
+        runner_id: &str,
+        runner_seq: u64,
+        event: AgentEvent,
+    ) -> Result<(), AgentError> {
+        let handle = {
+            let state = self.state.lock().expect("manager poisoned");
+            state
+                .sessions
+                .get(session_id)
+                .and_then(|record| record.runner.clone())
+        };
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+        if self
+            .store
+            .runner_event_exists(runner_id, runner_seq)
+            .map_err(to_agent_error)?
+        {
+            let _ = handle.ack(runner_seq);
+            return Ok(());
+        }
+        let event_id = self.publish_agent(session_id, event)?;
+        if let Some(event_id) = event_id {
+            self.store
+                .record_runner_event(runner_id, runner_seq, &event_id)
+                .map_err(to_agent_error)?;
+        }
+        let _ = handle.ack(runner_seq);
+        Ok(())
+    }
+
+    /// Reintenta adjuntar runners persistentes tras reiniciar el daemon.
+    /// Sin evidencia de identidad no se crea ningún runner sustituto.
+    pub fn recover_runners(self: &Arc<Self>) -> Result<Vec<String>, AgentError> {
+        let mut recovered = Vec::new();
+        let records = self.store.list_runners().map_err(to_agent_error)?;
+        for record in records {
+            if matches!(
+                record.status,
+                RunnerStatus::Stopped | RunnerStatus::Lost | RunnerStatus::Stopping
+            ) {
+                continue;
+            }
+            let context = RunnerLaunchContext {
+                session_id: record.identity.session_id.clone(),
+                provider_id: record.identity.provider_id.clone(),
+                workspace: self
+                    .store
+                    .get_session(&record.identity.session_id)
+                    .map_err(to_agent_error)?
+                    .and_then(|session| {
+                        self.state
+                            .lock()
+                            .expect("manager poisoned")
+                            .workspaces
+                            .iter()
+                            .find(|workspace| workspace.id == session.workspace_id)
+                            .map(|workspace| workspace.path.clone())
+                    })
+                    .unwrap_or_default(),
+                mode: RunnerMode::Attached,
+                existing: Some(record.clone()),
+                ask_shell: false,
+                fail_answer: false,
+            };
+            let handle = match self.launcher.launch(context) {
+                Ok(handle) => handle,
+                Err(_) => {
+                    let _ = self
+                        .store
+                        .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain);
+                    let _ = self
+                        .store
+                        .mark_session_approvals_uncertain(&record.identity.session_id);
+                    continue;
+                }
+            };
+            let attached = handle.identity();
+            if attached.runner_id != record.identity.runner_id
+                || attached.boot_id != record.identity.boot_id
+                || attached.generation != record.identity.generation
+                || !attached.host_id.eq(&self.host_id)
+            {
+                let _ = self
+                    .store
+                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain);
+                continue;
+            }
+            let runner_id = record.identity.runner_id.clone();
+            let session_id = record.identity.session_id.clone();
+            let shared: Arc<dyn RunnerHandle> = Arc::from(handle);
+            let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&shared));
+            {
+                let mut state = self.state.lock().expect("manager poisoned");
+                if let Some(session) = state.sessions.get_mut(&session_id) {
+                    session.runner = Some(shared);
+                    session.ingress = Some(ingress);
+                    session.summary.state = SessionState::Recovering;
+                    let active = self
+                        .store
+                        .active_turn_for_session(&session_id)
+                        .ok()
+                        .flatten();
+                    if let Some(turn) = active {
+                        session.active_turn = Some(turn.turn_id);
+                        session.current_operation = Some(turn.operation_id);
+                        session.summary.turn_state = TurnState::Uncertain;
+                    }
+                }
+            }
+            self.store
+                .update_runner_status(&runner_id, RunnerStatus::Recovering)
+                .map_err(to_agent_error)?;
+            recovered.push(session_id);
+        }
+        Ok(recovered)
     }
 
     /// The event, session projection and any turn/approval/operation transition
@@ -649,12 +752,16 @@ impl SessionManager {
         }
     }
 
-    fn publish_agent(&self, session_id: &str, event: AgentEvent) -> Result<(), AgentError> {
+    fn publish_agent(
+        &self,
+        session_id: &str,
+        event: AgentEvent,
+    ) -> Result<Option<String>, AgentError> {
         let next_approval_id = self.next_id("appr");
         let mut state = self.state.lock().expect("manager poisoned");
         let (kind, _operation_update, new_approval, approval_update) = {
             let Some(record) = state.sessions.get_mut(session_id) else {
-                return Ok(());
+                return Ok(None);
             };
             let active = record.active_turn.clone();
             let mut operation_update = None;
@@ -662,16 +769,16 @@ impl SessionManager {
             let mut approval_update = None;
             let scoped_turn = |turn_id: &str| -> bool { active.as_deref() == Some(turn_id) };
             let kind = match event.kind {
-                DomainEvent::TurnStarted { .. } => return Ok(()),
+                DomainEvent::TurnStarted { .. } => return Ok(None),
                 DomainEvent::AssistantDelta { turn_id, text } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     EventKind::AssistantDelta { turn_id, text }
                 }
                 DomainEvent::AssistantMessage { turn_id, text } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     EventKind::AssistantMessage { turn_id, text }
                 }
@@ -681,7 +788,7 @@ impl SessionManager {
                     input,
                 } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     EventKind::ToolStarted {
                         turn_id,
@@ -695,7 +802,7 @@ impl SessionManager {
                     output,
                 } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     EventKind::ToolOutput {
                         turn_id,
@@ -709,7 +816,7 @@ impl SessionManager {
                     success,
                 } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     EventKind::ToolCompleted {
                         turn_id,
@@ -719,7 +826,7 @@ impl SessionManager {
                 }
                 DomainEvent::TurnCompleted { turn_id, status } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     let terminal = match status {
                         TurnStatus::Completed => TurnState::Completed,
@@ -743,7 +850,7 @@ impl SessionManager {
                 }
                 DomainEvent::TurnFailed { turn_id, message } => {
                     if !scoped_turn(&turn_id) {
-                        return Ok(());
+                        return Ok(None);
                     }
                     operation_update = record
                         .current_operation
@@ -764,7 +871,7 @@ impl SessionManager {
                     allowed_decisions,
                 } => {
                     let Some(turn_id) = active.clone() else {
-                        return Ok(());
+                        return Ok(None);
                     };
                     let approval_id = next_approval_id;
                     new_approval = Some(ApprovalRequest {
@@ -803,13 +910,13 @@ impl SessionManager {
                         })
                         .cloned()
                     else {
-                        return Ok(());
+                        return Ok(None);
                     };
                     if approval.status != ApprovalStatus::Dispatching
                         || approval.decision.as_deref() != Some(decision.as_str())
                         || approval.session_id != session_id
                     {
-                        return Ok(());
+                        return Ok(None);
                     }
                     let status = if decision == "reject" {
                         ApprovalStatus::Rejected
@@ -849,7 +956,11 @@ impl SessionManager {
                 .approvals
                 .insert(resolved.approval_id.clone(), resolved);
         }
-        Ok(())
+        let event_id = state
+            .sessions
+            .get(session_id)
+            .map(|record| format!("{}-e{}", session_id, record.next_seq.saturating_sub(1)));
+        Ok(event_id)
     }
 
     pub fn list_approvals(&self, session_id: Option<&str>) -> Vec<ApprovalRequest> {
@@ -985,27 +1096,28 @@ impl SessionManager {
         state
             .approvals
             .insert(approval_id.to_string(), updated.clone());
-        let command_tx = state
+        let runner = state
             .sessions
             .get(&approval.session_id)
-            .and_then(|record| record.driver.as_ref().map(|d| d.commands.clone()));
+            .and_then(|record| record.runner.clone());
         drop(state);
 
-        let result = command_tx
+        let result = runner
             .ok_or_else(|| AgentError {
-                code: "driver_unavailable".into(),
-                message: "no live driver to deliver approval".into(),
+                code: "runner_unavailable".into(),
+                message: "no live runner to deliver approval".into(),
             })
-            .and_then(|tx| {
-                tx.send(DriverCommand::Answer {
-                    approval_id: approval_id.to_string(),
-                    native_request_id: approval.native_request_id.clone(),
-                    decision: decision.clone(),
-                })
-                .map_err(|error| AgentError {
-                    code: "approval_delivery_failed".into(),
-                    message: error.to_string(),
-                })
+            .and_then(|handle| {
+                handle
+                    .submit(RunnerCommand::Answer {
+                        approval_id: approval_id.to_string(),
+                        native_request_id: approval.native_request_id.clone(),
+                        decision: decision.clone(),
+                    })
+                    .map_err(|error| AgentError {
+                        code: "approval_delivery_failed".into(),
+                        message: error.to_string(),
+                    })
             });
         if let Err(error) = result {
             self.mark_approval_uncertain(&approval.session_id, approval_id, &error);
@@ -1115,10 +1227,10 @@ impl SessionManager {
                 code: "not_found".into(),
                 message: format!("unknown session `{session_id}`"),
             })?;
-            if record.driver.is_none() || record.summary.state != SessionState::Running {
+            if record.runner.is_none() || record.summary.state != SessionState::Running {
                 return Err(AgentError {
                     code: "session_stopped".into(),
-                    message: format!("session `{session_id}` does not have a running driver"),
+                    message: format!("session `{session_id}` does not have a live runner"),
                 });
             }
             if !record.summary.turn_state.accepts_prompt() {
@@ -1207,17 +1319,12 @@ impl SessionManager {
                 .map_err(to_agent_error)?;
             return Err(to_agent_error(error));
         }
-        let command_tx = {
+        let runner = {
             let record = state.sessions.get_mut(session_id).expect("session checked");
             record.active_turn = Some(turn_id.clone());
             record.current_operation = Some(operation_id.clone());
             record.summary.turn_state = TurnState::Running;
-            record
-                .driver
-                .as_ref()
-                .expect("driver checked")
-                .commands
-                .clone()
+            record.runner.clone().expect("runner checked")
         };
         // The prompt cannot reach the provider before both startup events are
         // committed. A failure makes the operation uncertain, never replayable.
@@ -1250,7 +1357,7 @@ impl SessionManager {
             .update_operation(&operation_id, OperationStatus::Accepted, None)
             .map_err(to_agent_error)?;
         drop(state);
-        if let Err(error) = command_tx.send(DriverCommand::Prompt {
+        if let Err(error) = runner.submit(RunnerCommand::Prompt {
             text,
             turn_id: turn_id.clone(),
         }) {
@@ -1411,7 +1518,7 @@ impl SessionManager {
                     code: "not_found".into(),
                     message: format!("unknown session `{session_id}`"),
                 })?;
-            let handle = record.driver.take().ok_or_else(|| AgentError {
+            let handle = record.runner.clone().ok_or_else(|| AgentError {
                 code: "session_stopped".into(),
                 message: format!("session `{session_id}` already stopped"),
             })?;
@@ -1447,26 +1554,14 @@ impl SessionManager {
         };
         self.persist_session_state(session_id);
         let _ = (active_turn, operation_id);
-        let (done_tx, done_rx) = mpsc::channel();
-        let outcome = match handle.commands.send(DriverCommand::Close { done: done_tx }) {
-            Ok(()) => match done_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(result) => result,
-                Err(_) => Err(AgentError {
-                    code: "StopUnconfirmed".into(),
-                    message: "driver has not confirmed close within 500ms; execution may continue"
-                        .into(),
-                }),
-            },
-            Err(_) => Err(AgentError {
-                code: "StopUnconfirmed".into(),
-                message: "driver command channel closed; cannot confirm termination".into(),
-            }),
-        };
-        if let Err(error) = &outcome {
+        let outcome = handle.close();
+        if outcome.is_ok() {
+            self.finish_stop(session_id, &outcome);
+        } else if let Err(error) = &outcome {
             self.mark_stop_unconfirmed(session_id, &error.message);
         }
-        // El worker puede confirmar Stopped más tarde; no hacemos join bloqueante.
-        drop(handle.join);
+        // El hilo de ingress termina cuando el runner cierra; no join bloqueante.
+        drop(handle);
         outcome
     }
 }
@@ -1488,8 +1583,9 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::InProcessRunnerLauncher;
     use fleet_agent::fake::{FakeConfig, FakeDriver, FakeFactory};
-    use fleet_agent::DriverFactory;
+    use fleet_agent::{AgentDriver, DriverFactory};
     use fleet_domain::{ProviderCapabilities, ProviderVersion, VersionRange};
 
     struct ConfiguredFactory(FakeConfig);
@@ -1528,9 +1624,15 @@ mod tests {
 
     fn manager_at(config: FakeConfig, path: std::path::PathBuf) -> Arc<SessionManager> {
         let mut registry = ProviderRegistry::new();
-        registry.register(Box::new(ConfiguredFactory(config)));
+        registry.register(Box::new(ConfiguredFactory(config.clone())));
+        let mut launcher_registry = ProviderRegistry::new();
+        launcher_registry.register(Box::new(ConfiguredFactory(config)));
+        let launcher = Arc::new(InProcessRunnerLauncher::new(
+            launcher_registry,
+            "host-test".into(),
+        ));
         let store = Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
-        Arc::new(SessionManager::new(registry, store).unwrap())
+        Arc::new(SessionManager::new(registry, store, launcher, "host-test".into()).unwrap())
     }
 
     fn manager(config: FakeConfig) -> Arc<SessionManager> {
@@ -2078,6 +2180,69 @@ mod tests {
                 "injected uncertainty write failure",
             ))
         }
+        fn active_turn_for_session(
+            &self,
+            session_id: &str,
+        ) -> fleet_domain::store::StoreResult<Option<TurnRecord>> {
+            self.inner.active_turn_for_session(session_id)
+        }
+        fn mark_session_approvals_uncertain(
+            &self,
+            session_id: &str,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.mark_session_approvals_uncertain(session_id)
+        }
+        fn save_runner(&self, runner: &RunnerRecord) -> fleet_domain::store::StoreResult<()> {
+            self.inner.save_runner(runner)
+        }
+        fn get_runner(
+            &self,
+            session_id: &str,
+        ) -> fleet_domain::store::StoreResult<Option<RunnerRecord>> {
+            self.inner.get_runner(session_id)
+        }
+        fn list_runners(&self) -> fleet_domain::store::StoreResult<Vec<RunnerRecord>> {
+            self.inner.list_runners()
+        }
+        fn update_runner_status(
+            &self,
+            runner_id: &str,
+            status: RunnerStatus,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.update_runner_status(runner_id, status)
+        }
+        fn update_runner_ack(
+            &self,
+            runner_id: &str,
+            runner_seq: u64,
+        ) -> fleet_domain::store::StoreResult<()> {
+            self.inner.update_runner_ack(runner_id, runner_seq)
+        }
+        fn runner_event_exists(
+            &self,
+            runner_id: &str,
+            runner_seq: u64,
+        ) -> fleet_domain::store::StoreResult<bool> {
+            self.inner.runner_event_exists(runner_id, runner_seq)
+        }
+        fn record_runner_event(
+            &self,
+            runner_id: &str,
+            runner_seq: u64,
+            fleet_event_id: &str,
+        ) -> fleet_domain::store::StoreResult<bool> {
+            self.inner
+                .record_runner_event(runner_id, runner_seq, fleet_event_id)
+        }
+        fn pending_runner_events(
+            &self,
+            runner_id: &str,
+            since_seq: u64,
+            limit: usize,
+        ) -> fleet_domain::store::StoreResult<Vec<(u64, String)>> {
+            self.inner
+                .pending_runner_events(runner_id, since_seq, limit)
+        }
         fn get_approval(
             &self,
             approval_id: &str,
@@ -2182,7 +2347,14 @@ mod tests {
         let failing = Arc::new(FailingUncertaintyStore { inner });
         let mut registry = ProviderRegistry::new();
         registry.register(Box::new(ConfiguredFactory(FakeConfig::default())));
-        let manager = Arc::new(SessionManager::new(registry, failing).unwrap());
+        let mut launcher_registry = ProviderRegistry::new();
+        launcher_registry.register(Box::new(ConfiguredFactory(FakeConfig::default())));
+        let launcher = Arc::new(InProcessRunnerLauncher::new(
+            launcher_registry,
+            "host-test".into(),
+        ));
+        let manager =
+            Arc::new(SessionManager::new(registry, failing, launcher, "host-test".into()).unwrap());
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
         manager.mark_approval_uncertain(
@@ -2204,12 +2376,20 @@ mod tests {
         let path = unique_db_path();
         let store: Arc<dyn SessionStore> =
             Arc::new(fleet_store_sqlite::SqliteStore::open(path).unwrap());
-        let mut registry = ProviderRegistry::new();
-        registry.register(Box::new(ConfiguredFactory(FakeConfig {
+        let config = FakeConfig {
             emit_approval: true,
             ..FakeConfig::default()
-        })));
-        let manager = Arc::new(SessionManager::new(registry, store).unwrap());
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(Box::new(ConfiguredFactory(config.clone())));
+        let mut launcher_registry = ProviderRegistry::new();
+        launcher_registry.register(Box::new(ConfiguredFactory(config)));
+        let launcher = Arc::new(InProcessRunnerLauncher::new(
+            launcher_registry,
+            "host-test".into(),
+        ));
+        let manager =
+            Arc::new(SessionManager::new(registry, store, launcher, "host-test".into()).unwrap());
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
         let (subscription, _, _) = manager.subscribe(&ses.id, 0, SUBSCRIBER_LIMIT).unwrap();

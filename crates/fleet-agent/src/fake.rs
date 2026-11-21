@@ -23,6 +23,9 @@ pub struct FakeConfig {
     pub emit_terminal_failure: bool,
     pub emit_approval: bool,
     pub fail_answer: bool,
+    /// Pausa entre el primer delta y el resto: permite matar fleetd con un
+    /// turno activo y comprobar que el runner sigue produciendo eventos.
+    pub slow_turn_ms: u64,
 }
 
 pub struct FakeDriver {
@@ -134,6 +137,9 @@ impl AgentDriver for FakeDriver {
                 turn_id: turn.clone(),
                 text: "Hello ".into(),
             }));
+        if self.config.slow_turn_ms > 0 {
+            std::thread::sleep(Duration::from_millis(self.config.slow_turn_ms));
+        }
         self.pending
             .push_back(Self::event(DomainEvent::AssistantDelta {
                 turn_id: turn.clone(),

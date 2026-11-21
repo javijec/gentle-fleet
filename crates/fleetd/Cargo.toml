@@ -16,3 +16,4 @@ fleet-core = { path = "../fleet-core" }
 fleet-driver-opencode = { path = "../fleet-driver-opencode" }
 fleet-store-sqlite = { path = "../fleet-store-sqlite" }
 serde_json.workspace = true
+uuid.workspace = true

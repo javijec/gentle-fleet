@@ -7,11 +7,15 @@ use std::time::Duration;
 
 use fleet_agent::fake::{FakeConfig, FakeFactory};
 use fleet_agent::ProviderRegistry;
+use fleet_core::runner::{InProcessRunnerLauncher, RunnerLauncher};
 use fleet_core::{SessionManager, Subscription, SubscriptionHandle, SUBSCRIBER_LIMIT};
 use fleet_driver_opencode::OpenCodeFactory;
 use fleet_protocol::transport::{expected_token, LocalListener, LocalStream};
 use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response, WIRE};
 use fleet_store_sqlite::SqliteStore;
+
+mod process_runner;
+use process_runner::ProcessRunnerLauncher;
 
 fn to_api_error(error: fleet_agent::AgentError) -> fleet_protocol::ApiError {
     fleet_protocol::ApiError {
@@ -43,6 +47,10 @@ fn main() -> std::io::Result<()> {
         emit_terminal_failure: std::env::var("FLEET_FAKE_TERMINAL_FAILURE").is_ok(),
         emit_approval: std::env::var("FLEET_FAKE_APPROVAL").is_ok(),
         fail_answer: std::env::var("FLEET_FAKE_FAIL_ANSWER").is_ok(),
+        slow_turn_ms: std::env::var("FLEET_FAKE_SLOW_TURN_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
     };
     registry.register(Box::new(FakeFactory::with_config(fake_config)));
     registry.register(Box::new(OpenCodeFactory::with_ask_shell(
@@ -52,10 +60,28 @@ fn main() -> std::io::Result<()> {
         SqliteStore::open(database_path())
             .map_err(|e| std::io::Error::other(format!("{}: {}", e.code, e.message)))?,
     );
-    let manager =
-        Arc::new(SessionManager::new(registry, store).map_err(|error| {
-            std::io::Error::other(format!("{}: {}", error.code, error.message))
-        })?);
+    let host_id = std::env::var("FLEET_HOST_ID").unwrap_or_else(|_| "local-host".into());
+    let launcher_registry = ProviderRegistry::new();
+    let launcher: Arc<dyn RunnerLauncher> = if std::env::var("FLEET_INPROCESS_RUNNER").is_ok() {
+        Arc::new(InProcessRunnerLauncher::new(
+            launcher_registry,
+            host_id.clone(),
+        ))
+    } else {
+        Arc::new(ProcessRunnerLauncher)
+    };
+    let manager = Arc::new(
+        SessionManager::new(registry, store, launcher, host_id)
+            .map_err(|error| std::io::Error::other(format!("{}: {}", error.code, error.message)))?,
+    );
+    match manager.recover_runners() {
+        Ok(recovered) => {
+            if !recovered.is_empty() {
+                eprintln!("recovered {} runner(s)", recovered.len());
+            }
+        }
+        Err(error) => eprintln!("runner recovery incomplete: {error}"),
+    }
     // bind() crea el token de Windows: no leerlo antes.
     let listener = LocalListener::bind()?;
     let expected = expected_token()?;

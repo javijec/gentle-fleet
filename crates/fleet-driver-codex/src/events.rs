@@ -153,8 +153,7 @@ impl EventMapper {
                 if item_type == "agentMessage" {
                     // No duplicar texto: si ya hubo deltas, el mensaje final
                     // no se vuelve a publicar como AssistantMessage.
-                    let streamed = text(&item, "id")
-                        .is_some_and(|id| self.delta_items.remove(&id));
+                    let streamed = text(&item, "id").is_some_and(|id| self.delta_items.remove(&id));
                     if streamed || self.unscoped_delta {
                         self.unscoped_delta = false;
                         return Vec::new();
@@ -622,15 +621,20 @@ mod tests {
             "method": "item/agentMessage/delta",
             "params": {"itemId": "m1", "delta": "first"}
         }));
-        assert!(mapper.map(&json!({
-            "method": "item/completed",
-            "params": {"item": {"id": "m1", "type": "agentMessage", "text": "first"}}
-        })).is_empty());
+        assert!(mapper
+            .map(&json!({
+                "method": "item/completed",
+                "params": {"item": {"id": "m1", "type": "agentMessage", "text": "first"}}
+            }))
+            .is_empty());
         let second = mapper.map(&json!({
             "method": "item/completed",
             "params": {"item": {"id": "m2", "type": "agentMessage", "text": "second"}}
         }));
-        assert!(matches!(second[0].kind, DomainEvent::AssistantMessage { .. }));
+        assert!(matches!(
+            second[0].kind,
+            DomainEvent::AssistantMessage { .. }
+        ));
     }
 
     #[test]

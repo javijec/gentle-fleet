@@ -301,14 +301,23 @@ impl RpcClient {
         timeout: Duration,
     ) -> Result<Value, RpcError> {
         if !self.reader_alive.load(Ordering::Acquire) {
-            return Err(RpcError::new("provider_gone", "App Server closed its stdout"));
+            return Err(RpcError::new(
+                "provider_gone",
+                "App Server closed its stdout",
+            ));
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::sync_channel(1);
-        self.pending.lock().expect("rpc pending poisoned").insert(id, tx);
+        self.pending
+            .lock()
+            .expect("rpc pending poisoned")
+            .insert(id, tx);
         let frame = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
         if let Err(error) = self.write_frame(&frame) {
-            self.pending.lock().expect("rpc pending poisoned").remove(&id);
+            self.pending
+                .lock()
+                .expect("rpc pending poisoned")
+                .remove(&id);
             return Err(error);
         }
         let deadline = std::time::Instant::now() + timeout;
@@ -316,7 +325,10 @@ impl RpcClient {
             match rx.try_recv() {
                 Ok(response) => break response,
                 Err(TryRecvError::Disconnected) => {
-                    break Err(RpcError::new("provider_gone", "RPC reply channel disconnected"));
+                    break Err(RpcError::new(
+                        "provider_gone",
+                        "RPC reply channel disconnected",
+                    ));
                 }
                 Err(TryRecvError::Empty) => {}
             }
@@ -351,7 +363,10 @@ impl RpcClient {
             }
             std::thread::sleep(Duration::from_millis(2));
         };
-        self.pending.lock().expect("rpc pending poisoned").remove(&id);
+        self.pending
+            .lock()
+            .expect("rpc pending poisoned")
+            .remove(&id);
         outcome
     }
 
@@ -376,7 +391,9 @@ impl RpcClient {
     pub fn try_notification(&mut self) -> Option<Value> {
         if let Some(frame) = self.deferred_notifications.pop_front() {
             self.deferred_bytes = self.deferred_bytes.saturating_sub(
-                serde_json::to_vec(&frame).map(|bytes| bytes.len()).unwrap_or(0),
+                serde_json::to_vec(&frame)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(0),
             );
             return Some(frame);
         }

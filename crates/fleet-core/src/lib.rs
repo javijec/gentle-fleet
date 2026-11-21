@@ -31,6 +31,32 @@ pub const SUBSCRIBER_LIMIT: usize = 256;
 /// Página máxima devuelta por una lectura de timeline.
 pub const TIMELINE_PAGE: usize = 256;
 
+/// Huella de aprobación: conserva el formato histórico si no hay argumentos.
+/// Con argumentos, serializa nombres y valores con longitudes para impedir
+/// colisiones por separadores; el orden de argumentos no cambia la identidad.
+fn approval_answer_fingerprint(
+    session_id: &str,
+    approval_id: &str,
+    decision: &str,
+    args: &[fleet_domain::ApprovalArgument],
+) -> String {
+    let mut fingerprint = format!("{session_id}\0{approval_id}\0{decision}");
+    if args.is_empty() {
+        return fingerprint;
+    }
+    fingerprint.push_str("\0typed-v1");
+    let mut ordered = args.to_vec();
+    ordered.sort_by(|a, b| a.name.cmp(&b.name));
+    for arg in &ordered {
+        fingerprint.push_str(&format!("\0{}:{}", arg.name.len(), arg.name));
+        fingerprint.push_str(&format!("\0{}", arg.values.len()));
+        for value in &arg.values {
+            fingerprint.push_str(&format!("\0{}:{}", value.len(), value));
+        }
+    }
+    fingerprint
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSummary {
     pub id: WorkspaceId,
@@ -1296,7 +1322,12 @@ impl SessionManager {
                 message: format!("`{decision}` is not allowed for `{approval_id}`"),
             });
         }
-        let fingerprint = format!("{}\0{}\0{}", approval.session_id, approval_id, decision);
+        let fingerprint = approval_answer_fingerprint(
+            &approval.session_id,
+            approval_id,
+            &decision,
+            &arguments,
+        );
         // Idempotent replay must work even after a storage fault: it does not
         // dispatch again, so it is not a new provider effect.
         if let Some(existing) = self
@@ -1820,7 +1851,26 @@ impl SessionManager {
         native_ref: &str,
         operation_key: &str,
     ) -> Result<usize, AgentError> {
-        Self::ensure_writable(&self.state.lock().expect("manager poisoned"))?;
+        {
+            let state = self.state.lock().expect("manager poisoned");
+            Self::ensure_writable(&state)?;
+            let record = state.sessions.get(session_id).ok_or_else(|| AgentError {
+                code: "not_found".into(),
+                message: "target Fleet session does not exist".into(),
+            })?;
+            if record.summary.provider_id != provider_id {
+                return Err(AgentError {
+                    code: "ProviderMismatch".into(),
+                    message: "history provider and target session provider differ".into(),
+                });
+            }
+            if !record.summary.turn_state.accepts_prompt() {
+                return Err(AgentError {
+                    code: "SessionBusy".into(),
+                    message: "cannot import history during an active or uncertain turn".into(),
+                });
+            }
+        }
         let fingerprint = format!("{session_id}\0{provider_id}\0{native_ref}");
         if let Some(existing) = self
             .store
@@ -1891,7 +1941,7 @@ impl SessionManager {
         {
             let mut state = self.state.lock().expect("manager poisoned");
             for message in messages {
-                let _ = self.publish_locked(
+                if let Err(error) = self.publish_locked(
                     &mut state,
                     session_id,
                     EventKind::HistoryMessage {
@@ -1899,7 +1949,15 @@ impl SessionManager {
                         text: message.text,
                         provenance: "imported_from_provider".into(),
                     },
-                );
+                ) {
+                    drop(state);
+                    let _ = self.store.update_operation(
+                        &operation.operation_id,
+                        OperationStatus::Uncertain,
+                        Some("partial history import requires reconciliation".into()),
+                    );
+                    return Err(error);
+                }
             }
         }
         self.store

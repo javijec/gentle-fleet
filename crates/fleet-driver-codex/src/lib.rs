@@ -420,11 +420,7 @@ impl AgentDriver for CodexDriver {
             thread_params["sandbox"] = json!(value);
         }
         let started = rpc
-            .call(
-                "thread/start",
-                thread_params,
-                CALL_TIMEOUT,
-            )
+            .call("thread/start", thread_params, CALL_TIMEOUT)
             .map_err(to_agent_error)?;
         let thread = started.get("thread").cloned().unwrap_or(started);
         let native_thread = text(&thread, "id").ok_or_else(|| AgentError {
@@ -499,7 +495,10 @@ impl AgentDriver for CodexDriver {
         }
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if let Some(request) = self.rpc_mut()?.recv_server_request(Duration::from_millis(0)) {
+            if let Some(request) = self
+                .rpc_mut()?
+                .recv_server_request(Duration::from_millis(0))
+            {
                 self.handle_server_request(request);
                 return Ok(self.local_events.pop_front());
             }
@@ -745,7 +744,8 @@ impl DriverFactory for CodexFactory {
             .collect();
         let mut result = Vec::new();
         let mut cursor: Option<String> = None;
-        for _ in 0..5 {
+        let mut seen_cursors = std::collections::HashSet::new();
+        loop {
             let mut params = json!({"limit": 100});
             if let Some(value) = &cursor {
                 params["cursor"] = json!(value);
@@ -797,6 +797,18 @@ impl DriverFactory for CodexFactory {
             cursor = text(&response, "nextCursor");
             if cursor.is_none() || empty_page {
                 break;
+            }
+            if !seen_cursors.insert(cursor.clone().unwrap_or_default()) {
+                return Err(AgentError {
+                    code: "PaginationCycle".into(),
+                    message: "Codex returned a repeated session cursor".into(),
+                });
+            }
+            if result.len() > 100_000 {
+                return Err(AgentError {
+                    code: "ResultLimit".into(),
+                    message: "Codex session listing exceeds the safe Fleet response limit".into(),
+                });
             }
         }
         let _ = rpc.close();

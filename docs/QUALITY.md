@@ -131,3 +131,17 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 | CI y pruebas reales de OpenCode | GitHub Actions `cargo` success en el commit final; `e2e_opencode.sh`, `e2e_opencode_approval.sh`, `e2e_opencode_survival.sh` ejecutados localmente con `GF_E2E_REAL=1` |
 
 Plataformas pendientes de validación funcional: **Windows y macOS (P7)**. No se afirma que funcionen. Se mantienen las comprobaciones de compilación cruzada disponibles (parciales, sin SQLite embebido en Windows).
+
+
+### P4.1 — Codex (22/11/2026)
+
+| Validación | Resultado |
+|---|---|
+| `cargo fmt/check/clippy -D warnings/test/build`, `git diff --check` | PASS |
+| 14 E2E deterministas P1–P3, incluidas OpenCode y P3 survival | PASS |
+| 7 smokes reales `GF_E2E_REAL=1` (chat, aprobación, argumentos tipados, interrupción, controles, descubrimiento/historial, supervivencia, concurrencia) | PASS |
+| Cross-compilación Windows de crates portables (dominio, protocolo, agente, core, driver Codex, composición) | PASS como señal de portabilidad |
+| Adopción de sesiones externas con escritura | UNSUPPORTED deliberado: sin garantía de exclusividad; no se simuló |
+| Cambios de modelo/esfuerzo durante un turno activo | No habilitados: requieren `experimentalApi`; se ofrecen solo por turno |
+
+Windows y macOS continúan pendientes de validación funcional en P7. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).

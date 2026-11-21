@@ -144,3 +144,10 @@ P4.0 no añade ni modifica código de producción: el diff debe contener solo do
 - Codex 0.171.0 expone `availableDecisions` fuera del esquema; los contract tests no deben rechazarlo por estrictez de schema.
 - Gentle Shell `session_snapshot` depende de sesión enlazada: P4.3 debe probar con sesión real, no solo `--no-session`.
 - Los hallazgos de B7 (fuga de IDs en stop) y B5 (registro duplicado) se recomiendan **antes** de P4.1 para no propagarlos a tres drivers nuevos.
+
+
+## 5. Ejecución real en P4.1
+
+Todos los casos aplicables a Codex se ejecutaron con `GF_E2E_REAL=1` sobre Codex `0.171.0`: `tests/e2e_p4_codex_{chat,approval,interrupt,controls,discovery,concurrency,survival}.sh` → **PASS**. Las 14 E2E deterministas P1–P3, incluidas OpenCode y las de supervivencia P3, permanecen en verde. Las verificaciones Rust y `git diff --check` pasan. Los comandos y su evidencia están en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
+No se ejecutaron pruebas reales de Pi ni Gentle Shell en este corte (P4.2/P4.3). Windows/macOS siguen pendientes de P7.

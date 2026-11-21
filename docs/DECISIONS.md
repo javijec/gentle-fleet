@@ -65,6 +65,18 @@ P4.0 no modifica D01–D12, P0-D1…D6 ni P3-D1…D8, y **no ratifica** las prop
 
 Las contradicciones con documentación P0 (deriva de versión de Pi y resolución de inventario Gentle) se registran con propuesta de nota en [`P4_PROVIDER_MATRIX.md`](P4_PROVIDER_MATRIX.md) §5; no se han borrado las evidencias P0.
 
+## Implementación P4.1 (22/11/2026) — sin decisiones funcionales nuevas
+
+| Hallazgo resuelto | Consecuencia |
+|---|---|
+| Interrupt era no-op en ambos bucles | Se conectó a `AgentDriver::interrupt` y a la API; `cancel_turn` es verificable |
+| Los errores de stop publicaban texto nativo | Se redactan con `redact_provider_error` y hay test de regresión |
+| Dos registros de proveedores podían divergir | Catálogo compartido en `fleet-providers`, fuera de `fleet-agent`; test de paridad |
+| Codex no ofrece exclusividad de sesiones externas | Descubrimiento e importación de historial sí; adopción con escritura **UNSUPPORTED**, no simulada |
+| Configuración en caliente requiere `experimentalApi` | No se habilita; modelo/esfuerzo se aplican por turno con estado `deferred` observable |
+
+Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

@@ -87,3 +87,10 @@ Leyenda: ✅ VERIFIED · ◐ OBSERVED · ○ UNTESTED · ✗ UNSUPPORTED · — 
 4. **Extension UI:** `PI.md:80-84` la describe como no nativa de Pi. Correcto para el diálogo *Gentle*, incorrecto si se lee como ausencia de Extension UI: Pi 1.6.0 documenta `rpc-extension-ui.md` con `select/confirm/input/editor`.
 5. **Comandos nuevos en 1.6.0:** `get_entries`, `get_tree`, `get_last_assistant_text`, `bash`, `export_html`, `set_*_mode`, compact/retry. La investigación debe citarse por versión, no globalmente.
 6. **Sin cambio en P4_SPEC:** ninguna de estas contradicciones toca las 18 decisiones funcionales. No se modifica `docs/P4_SPEC.md`.
+
+
+## 6. Actualización P4.1 — celdas verificadas con driver real
+
+Tras la implementación (`docs/P4_1_RESULTS.md`) las celdas de Codex 0.171.0 pasan a **VERIFIED** con evidencia reproducible: streaming y mensajes finales (`e2e_p4_codex_chat.sh`), herramientas (`item/started`/`item/completed`), aprobaciones parametrizadas con `option_id` y argumentos tipados (`e2e_p4_codex_approval.sh`), `turn/interrupt` (`e2e_p4_codex_interrupt.sh`), modelos/esfuerzos descubiertos (`e2e_p4_codex_controls.sh`), enumeración de sesiones e importación de historial (`e2e_p4_codex_discovery.sh`), supervivencia a SIGKILL de `fleetd` (`e2e_p4_codex_survival.sh`) y concurrencia con OpenCode (`e2e_p4_codex_concurrency.sh`).
+
+Siguen **UNSUPPORTED/UNTESTED**: adopción con escritura (sin exclusividad verificable), recuperación de turno en vuelo entre procesos, `turn/steer` y cambios de modelo/esfuerzo dentro de un turno activo (requieren `experimentalApi`, no habilitado). No se ha probado Windows/macOS; siguen en P7.

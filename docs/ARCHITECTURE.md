@@ -117,6 +117,12 @@ Dos consecuencias arquitectónicas a respetar en los próximos cortes:
 
 No se han creado crates, tablas ni migraciones en P4.0: la tabla de vínculo de adopción (V4) y las operaciones wire se propondrán solo cuando un corte ejecute el caso de uso real. Tampoco se toma Gentle Shell GPUI como referencia (P4-F17).
 
+## P4.1 — segundo driver real
+
+`fleet-driver-codex` se inserta en el punto de extensión ya existente: `ProviderRegistry` sigue siendo la única autoridad de catálogo, la composición concreta se movió a `fleet-providers` (fuera de `fleet-agent`, sin ciclos) y `SessionManager` no conoce proveedores. El App Server corre dentro de `fleet-runner`; el canal es JSON-RPC acotado sobre stdio con un hilo lector que no bloquea las aprobaciones entrantes.
+
+Los eventos y aprobaciones ampliados (`options`, `arguments`, controles, historial con procedencia) usan campos opcionales versionados; los frames antiguos siguen deserializando. La adopción de sesiones externas con escritura permanece deshabilitada porque el proveedor no ofrece exclusividad verificable. Ver [`P4_1_RESULTS.md`](P4_1_RESULTS.md).
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

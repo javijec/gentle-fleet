@@ -71,3 +71,9 @@ Las propuestas con alternativas, severidad y impacto están en [`P4_CONTRACT_DES
 Correcciones locales recomendadas antes de P4.1: redactar los IDs nativos en las rutas de `stop` (hoy `fleet-core` publica `error`/`reason` crudos) y conectar el `RunnerCommand::Interrupt` ya existente a `AgentDriver::interrupt`, que hoy es no-op en ambos bucles. Ambas tienen prueba de regresión prevista en [`P4_TEST_PLAN.md`](P4_TEST_PLAN.md).
 
 Nota de versión: los datos P0 de esta sección corresponden a Pi `1.5.2` dentro de Gentle Shell `4.8.0` y Codex `0.171.0`. El `pi` estándar del PATH es **`1.6.0`**; ver matriz P4 antes de atribuir capacidades a "Pi".
+
+## P4.1 — Codex implementado (22/11/2026)
+
+`fleet-driver-codex` es el segundo driver real. Usa App Server JSON-RPC sobre stdio: el runner posee el proceso, el cliente RPC atiende requests del servidor mientras espera sus respuestas y traduce notificaciones a eventos Fleet sin publicar IDs nativos. El contrato `AgentDriver` se amplió solo con métodos por defecto (`answer_with_args`, controles) para no romper OpenCode ni FakeDriver. La composición de proveedores vive en `fleet-providers`, fuera de `fleet-agent`.
+
+Verificado con Codex `0.171.0`: chat/streaming, herramientas, aprobaciones parametrizadas (`accept`, `cancel`, `amend_execpolicy`) con `option_id` público y argumentos tipados, `turn/interrupt`, modelos/esfuerzos descubiertos y aplicables por turno, descubrimiento de sesiones nativas e importación de historial con procedencia. **No implementado**: adopción con escritura (sin exclusividad demostrable), recuperación de turno en vuelo y cambios de configuración dentro de un turno activo. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).

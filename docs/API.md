@@ -97,3 +97,6 @@ autenticado. Los eventos del runner llegan con `runner_seq`, se deduplican y se
 publican al cliente con el `seq` Fleet. `RunnerHealthChanged` y `RecoveryNotice`
 son los eventos públicos previstos para el estado del runner; la recuperación
 sin evidencia suficiente mantiene `NeedsReconciliation` y no reenvía prompts.
+
+
+**P4.1:** el contrato público incorpora `InterruptTurn`, `ListControls`, `SetControl`, `ListNativeSessions` e `ImportNativeHistory`. `AnswerApproval` acepta `arguments` opcionales (`name` + `values`) y `ApprovalRequested` publica `options` con `option_id` Fleet y esquema de argumentos; los IDs y payloads nativos siguen siendo privados. `ListAgents` reporta `controls` descubiertos por versión. Los nuevos campos son opcionales y compatibles con clientes anteriores. La importación de historial emite `history` con `provenance=imported_from_provider`; nunca se presenta como evento observado en vivo. Ver [`P4_1_RESULTS.md`](P4_1_RESULTS.md).

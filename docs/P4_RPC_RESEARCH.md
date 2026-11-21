@@ -214,3 +214,8 @@ Fleet P4 debe dejar puntos de extensión tipados si hace falta, pero no exponer 
 | P0 real | `docs/research/{CODEX,PI,OPENCODE,PROVIDER_COMPARISON,KNOWN_LIMITATIONS}.md`, `spikes/p0/fixtures/*.jsonl` |
 
 Los ficheros `/tmp/*` son **sondeos transitorios no reproducibles desde otro checkout**: no son fixtures versionados y pueden desaparecer. En P4.1–P4.3 deben reconstruirse como sondas ejecutables y fixtures mínimos, anonimizados y versionados, antes de fundamentar criterios de cierre en esos resultados (§7 del plan de pruebas).
+
+
+## 5. Nota de implementación P4.1
+
+El driver real confirma los hallazgos de esta investigación y añade tres precisiones observadas con la versión instalada: `model/list` expone `id`, `isDefault`, `supportedReasoningEfforts[].reasoningEffort` y `defaultReasoningEffort`; `thread/turns/list` con `itemsView:"full"` devuelve los ítems dentro de cada turno (los objetos de `thread/items/list` están envueltos en `item`); y `serverRequest/resolved` usa `params.requestId` numérico. `availableDecisions` es un campo de runtime no declarado en el esquema generado. Las sondas `/tmp` quedan sustituidas por los scripts versionados `tests/e2e_p4_codex_*.sh` con `GF_E2E_REAL=1`. Detalle en [`P4_1_RESULTS.md`](P4_1_RESULTS.md).

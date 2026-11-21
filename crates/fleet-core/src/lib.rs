@@ -626,30 +626,51 @@ impl SessionManager {
                     .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain);
                 continue;
             }
+            // A valid socket/token alone does not prove the provider survived.
+            if !handle.provider_alive().unwrap_or(false) {
+                self.store
+                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain)
+                    .map_err(to_agent_error)?;
+                self.store
+                    .mark_session_approvals_uncertain(&record.identity.session_id)
+                    .map_err(to_agent_error)?;
+                continue;
+            }
             let runner_id = record.identity.runner_id.clone();
             let session_id = record.identity.session_id.clone();
             let shared: Arc<dyn RunnerHandle> = Arc::from(handle);
+            // Query before handing the reader to the ingress thread.
+            let active = self.store.active_turn_for_session(&session_id).map_err(to_agent_error)?;
             let ingress = self.spawn_ingress(session_id.clone(), Arc::clone(&shared));
             {
                 let mut state = self.state.lock().expect("manager poisoned");
                 if let Some(session) = state.sessions.get_mut(&session_id) {
                     session.runner = Some(shared);
                     session.ingress = Some(ingress);
-                    session.summary.state = SessionState::Recovering;
-                    let active = self
-                        .store
-                        .active_turn_for_session(&session_id)
-                        .ok()
-                        .flatten();
-                    if let Some(turn) = active {
-                        session.active_turn = Some(turn.turn_id);
-                        session.current_operation = Some(turn.operation_id);
+                    if let Some(turn) = &active {
+                        session.summary.state = SessionState::Recovering;
+                        session.active_turn = Some(turn.turn_id.clone());
+                        session.current_operation = Some(turn.operation_id.clone());
                         session.summary.turn_state = TurnState::Uncertain;
+                    } else {
+                        // No in-flight work: authenticated live runner is ready
+                        // to receive the next turn immediately after reattach.
+                        session.summary.state = SessionState::Running;
                     }
+                }
+                if active.is_none() {
+                    self.publish_locked(
+                        &mut state,
+                        &session_id,
+                        EventKind::SessionStateChanged { state: SessionState::Running },
+                    )?;
                 }
             }
             self.store
-                .update_runner_status(&runner_id, RunnerStatus::Recovering)
+                .update_runner_status(
+                    &runner_id,
+                    if active.is_some() { RunnerStatus::Recovering } else { RunnerStatus::Active },
+                )
                 .map_err(to_agent_error)?;
             recovered.push(session_id);
         }
@@ -993,6 +1014,30 @@ impl SessionManager {
             state
                 .approvals
                 .insert(resolved.approval_id.clone(), resolved);
+        }
+        // Reattachment is complete when the previously uncertain turn emits
+        // a durable terminal result. Never leave the live session in Recovering.
+        let finish_recovery = state.sessions.get(session_id).is_some_and(|record| {
+            record.summary.state == SessionState::Recovering
+                && record.active_turn.is_none()
+                && matches!(
+                    record.summary.turn_state,
+                    TurnState::Completed | TurnState::Failed | TurnState::Interrupted
+                )
+        });
+        if finish_recovery {
+            if let Some(record) = state.sessions.get_mut(session_id) {
+                record.summary.state = SessionState::Running;
+            }
+            self.publish_locked(
+                &mut state, session_id,
+                EventKind::SessionStateChanged { state: SessionState::Running },
+            )?;
+            if let Some(runner_id) = runner_source.map(|(id, _)| id) {
+                self.store
+                    .update_runner_status(runner_id, RunnerStatus::Active)
+                    .map_err(to_agent_error)?;
+            }
         }
         let event_id = state
             .sessions

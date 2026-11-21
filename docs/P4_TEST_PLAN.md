@@ -97,6 +97,16 @@ Si una cuenta no tiene modelo disponible (caso Pi 1.6.0 en este entorno), el smo
 - Sin extensiones Gentle: no `/gentle:*`, no Desktop RPC, no modos de permiso (Extension UI genérica documentada pero no confundida con capacidades Gentle).
 - Misma validación Rust y CI que P4.1.
 
+### P4.2-H — Regresiones del endurecimiento
+
+- Lector Pi RPC con cola llena antes de una respuesta: el ACK llega sin perder eventos, sin deadlock y sin agrandar indefinidamente el buffer diferido.
+- Frame demasiado grande o JSONL corrupto durante un turno: señal fatal y `TurnUncertain` persistido; sin reintento automático del prompt.
+- Dos mensajes de asistente en un turno, uno con deltas y otro solo final: ambos observables, sin duplicar el primero.
+- Historial JSONL corrupto o de más de 10 000 mensajes: error explícito y ningún lote truncado marcado como completado.
+- Texto importado fiel, contenido no textual estructurado y IDs de fuente distintos entre sesiones diferentes.
+- `notify`/`setStatus`/`setWidget` sin respuestas inexistentes; modelo activo coincide en ID **y** proveedor.
+- CI y suite determinista P1–P4.1; smokes reales Pi reejecutados sobre el último commit antes de cerrar P4.2-H.
+
 ### P4.3 — Gentle Shell
 
 - Proveedor independiente (P4-F02), no alias de Pi; transporte Pi RPC compartido donde corresponda.

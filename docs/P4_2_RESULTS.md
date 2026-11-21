@@ -2,7 +2,7 @@
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
 **Versión verificada:** `pi 1.6.0` (`/home/javijec/.local/share/mise/installs/pi/1.6.0/pi/pi`).
-**Estado:** **P4.2 — CERRADA EN LINUX.** El chat real se verificó después de que el usuario configurara un modelo en Pi; antes de ese momento se mantuvo explícitamente como UNTESTED.
+**Estado:** **P4.2-H — ENDURECIMIENTO EN REVALIDACIÓN.** Las pruebas reales de Pi anteriores se realizaron sobre el driver previo a los cambios de H; los smokes de la nueva revisión no se han repetido todavía.
 
 ## 1. Commits
 
@@ -74,4 +74,19 @@ El transporte JSONL de `fleet-driver-pi` (framing LF, colas acotadas, correlaci�
 
 ## 8. Estado final
 
-**P4.2 — CERRADA EN LINUX.** Pi estándar 1.6.0 opera como proveedor real de Gentle Fleet con RPC estructurado, eventos, controles, historial y recuperación integrados, sin romper OpenCode ni Codex. No se comenzó P4.3 ni se hizo merge a `main`.
+**P4.2-H — EN REVALIDACIÓN.** El driver Pi ya dispone de correcciones de integridad y regresiones deterministas. Los resultados reales de P4.2 son evidencia de la integración previa, no de los commits nuevos; repetir los smokes relevantes antes de ratificar el cierre. No se comenzó P4.3 ni se hizo merge a `main`.
+
+## 9. P4.2-H — Endurecimiento posterior a auditoría
+
+Se corrigieron los hallazgos P4.2-H de transporte, eventos, historial, interacciones y controles:
+
+- **RPC y backpressure:** `PiRpc::call` drena y retiene temporalmente los eventos y solicitudes UI mientras espera el ACK. El buffering está acotado: si se supera, el resultado se declara incierto explícitamente, sin ocultar ni confirmar un evento perdido. Una prueba con proceso JSONL sintético satura la cola del lector antes de devolver un ACK y comprueba que el comando y los eventos sobreviven.
+- **Frames inválidos / EOF:** un frame corrupto o mayor que 1 MiB pasa a ser fallo fatal del lector. Si un turno está activo, Fleet emite `TurnUncertain` en lugar de mantenerlo `Running` o asumir `Failed`; las llamadas `prompt` cuyo ACK es ambiguo también dejan la operación incierta, sin reenviarla automáticamente.
+- **Deltas y mensajes:** la deduplicación se reinicia en cada límite de mensaje, de modo que los deltas del primer mensaje no ocultan un mensaje posterior. Regresión determinista agregada.
+- **Historial:** todo JSONL inválido en el archivo se informa con error; el límite de 10 000 mensajes devuelve `HistoryResultLimit` en vez de truncar el lote. Se preserva el contenido textual original y se serializan los bloques no textuales para no perderlos. `source_ref` incluye sesión y entrada; se verifica la cabecera al importar y el descubrimiento lee solo la cabecera, evitando cargar historiales completos. La adopción con escritura permanece bloqueada.
+- **Extension UI:** `notify`, `setStatus` y `setWidget` no reciben una respuesta `cancelled` ficticia.
+- **Modelos:** el modelo activo se determina por combinación de proveedor e ID, no solo ID.
+
+**Evidencia disponible:** las pruebas unitarias/deterministas nuevas y las regresiones del CI sobre el HEAD correctivo. **No afirmar que los smokes reales de Pi se repitieron después de H**; esa validación requiere un entorno Linux con Pi 1.6.0, modelo disponible y ejecución opt-in de `tests/e2e_p4_pi_*.sh` (las cuatro pruebas reales pueden consumir tokens).
+
+**Limitaciones conservadas:** sin adopción externa con escritura, sin reanudación de un turno cuyo proceso Pi murió y sin permisos nativos reales de Pi estándar cuando no hay extensión que los solicite.

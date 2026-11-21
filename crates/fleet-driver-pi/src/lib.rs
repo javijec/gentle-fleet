@@ -70,8 +70,8 @@ fn metadata(version: ProviderVersion, availability: ProviderAvailability) -> Pro
             tool_events: true,
             session_history: true,
             native_turn_ids: false,
-            cancel_turn: false, // no se declara hasta verificarlo con modelo real
-            approvals: false,   // solo Extension UI si una extensión la usa
+            cancel_turn: true, // verificado con e2e_p4_pi_interrupt.sh sobre Pi 1.6.0
+            approvals: false,  // solo Extension UI si una extensión la usa
             can_own_process: true,
             can_attach_service: false,
         },
@@ -159,6 +159,35 @@ fn parse_model_controls(models: &Value, levels: &Value, state: &Value) -> Vec<Co
             status: "applied".into(),
         },
     ]
+}
+
+/// Consulta barata de capacidades: abre un Pi aislado, negocia modelos y
+/// esfuerzos y lo cierra. No toma posesión de ninguna sesión externa.
+fn discover_controls() -> Vec<ControlState> {
+    let dir = std::env::temp_dir().join(format!("gf-pi-probe-{}", uuid::Uuid::new_v4()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Vec::new();
+    }
+    let result = (|| -> Result<Vec<ControlState>, AgentError> {
+        let mut rpc = PiRpc::spawn(Path::new(&dir), &dir).map_err(map_rpc)?;
+        let state = rpc
+            .call("get_state", json!({}), Duration::from_secs(5))
+            .map_err(map_rpc)?;
+        let models = rpc
+            .call("get_available_models", json!({}), Duration::from_secs(5))
+            .map_err(map_rpc)?;
+        let levels = rpc
+            .call(
+                "get_available_thinking_levels",
+                json!({}),
+                Duration::from_secs(5),
+            )
+            .map_err(map_rpc)?;
+        let _ = rpc.close();
+        Ok(parse_model_controls(&models, &levels, &state))
+    })();
+    let _ = std::fs::remove_dir_all(dir);
+    result.unwrap_or_default()
 }
 
 pub struct PiDriver {
@@ -325,11 +354,13 @@ impl AgentDriver for PiDriver {
     }
 
     fn send(&mut self, input: AgentInput) -> Result<SendReceipt, AgentError> {
-        self.mapper.begin_turn(input.turn_id.clone());
-        let mut params = json!({"message": input.text});
+        // Los controles se aplican al proceso Pi ANTES del prompt: la API
+        // estable de Pi solo permite cambiarlos cuando no hay turno activo.
         for control in &input.controls {
-            params["control"] = json!({"name": control.name, "value": control.value});
+            self.set_control(&control.name, &control.value, "turn")?;
         }
+        self.mapper.begin_turn(input.turn_id.clone());
+        let params = json!({"message": input.text});
         let response = self
             .rpc_mut()?
             .call("prompt", params, CALL_TIMEOUT)
@@ -533,6 +564,11 @@ impl AgentDriver for PiDriver {
         } else {
             "rejected".into()
         };
+        // El estado efectivo confirmado por Pi se publica como aviso durable:
+        // el cliente no debe confundir la preferencia Fleet con su aplicación.
+        self.emit(DomainEvent::AgentNotice {
+            message: format!("control {} {}: {}", name, control.status, value),
+        });
         Ok(control)
     }
 }
@@ -566,7 +602,11 @@ impl DriverFactory for PiFactory {
     }
 
     fn probe(&self) -> ProviderDescriptor {
-        PiDriver::new().probe()
+        let mut descriptor = PiDriver::new().probe();
+        if descriptor.controls.is_empty() {
+            descriptor.controls = discover_controls();
+        }
+        descriptor
     }
 
     /// Descubrimiento no intrusivo de archivos de sesión nativos. Nunca crea
@@ -739,7 +779,7 @@ mod tests {
         assert!(!factory.supports(&ProviderVersion::parse("2.0.0")));
         let descriptor = factory.metadata();
         assert!(!descriptor.capabilities.can_attach_service);
-        assert!(!descriptor.capabilities.cancel_turn);
+        assert!(descriptor.capabilities.cancel_turn);
     }
 
     #[test]

@@ -513,41 +513,43 @@ impl SessionManager {
                         Ok(true) => {}
                         Ok(false) => {
                             manager.mark_runner_uncertain(
-                                &session_id, &runner_id, "native provider is no longer alive",
+                                &session_id,
+                                &runner_id,
+                                "native provider is no longer alive",
                             );
                             break;
                         }
                         Err(error) => {
                             manager.mark_runner_uncertain(
-                                &session_id, &runner_id, &error.to_string(),
+                                &session_id,
+                                &runner_id,
+                                &error.to_string(),
                             );
                             break;
                         }
                     }
                 }
                 match handle.recv(Duration::from_millis(50)) {
-                Ok(Some(RunnerEvent {
-                    runner_id: event_runner_id,
-                    runner_seq,
-                    event,
-                })) => {
-                    if event_runner_id != runner_id {
-                        continue;
+                    Ok(Some(RunnerEvent {
+                        runner_id: event_runner_id,
+                        runner_seq,
+                        event,
+                    })) => {
+                        if event_runner_id != runner_id {
+                            continue;
+                        }
+                        if let Err(error) =
+                            manager.ingest_runner_event(&session_id, &runner_id, runner_seq, event)
+                        {
+                            eprintln!("runner event could not be ingested: {error}");
+                        }
                     }
-                    if let Err(error) =
-                        manager.ingest_runner_event(&session_id, &runner_id, runner_seq, event)
-                    {
-                        eprintln!("runner event could not be ingested: {error}");
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("runner ingress stopped for {session_id}: {error}");
+                        manager.mark_runner_uncertain(&session_id, &runner_id, &error.to_string());
+                        break;
                     }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!("runner ingress stopped for {session_id}: {error}");
-                    manager.mark_runner_uncertain(
-                        &session_id, &runner_id, &error.to_string(),
-                    );
-                    break;
-                }
                 }
             }
         })
@@ -555,9 +557,16 @@ impl SessionManager {
 
     fn mark_runner_uncertain(&self, session_id: &str, runner_id: &str, reason: &str) {
         let mut state = self.state.lock().expect("manager poisoned");
-        let Some(record) = state.sessions.get_mut(session_id) else { return; };
-        if !matches!(record.summary.state, SessionState::Running | SessionState::Recovering)
-            || record.runner.as_ref().is_none_or(|handle| handle.identity().runner_id != runner_id)
+        let Some(record) = state.sessions.get_mut(session_id) else {
+            return;
+        };
+        if !matches!(
+            record.summary.state,
+            SessionState::Running | SessionState::Recovering
+        ) || record
+            .runner
+            .as_ref()
+            .is_none_or(|handle| handle.identity().runner_id != runner_id)
         {
             // A deliberate Stop must not be reclassified as a crash.
             return;
@@ -584,7 +593,10 @@ impl SessionManager {
                 state: SessionState::NeedsReconciliation,
             },
         );
-        if let Err(error) = self.store.update_runner_status(runner_id, RunnerStatus::Uncertain) {
+        if let Err(error) = self
+            .store
+            .update_runner_status(runner_id, RunnerStatus::Uncertain)
+        {
             eprintln!("cannot persist runner uncertainty: {error:?}; original: {reason}");
         }
     }

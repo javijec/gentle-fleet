@@ -183,3 +183,41 @@ reconciliación manual; no se intenta reiniciar ni duplicar trabajo.
 
 La rama no debe integrarse en `main` hasta que CI y la revisión externa
 confirmen las garantías de P3.1.
+
+## P3.2 — revisión senior y correcciones (22/11/2026)
+
+Revisión exhaustiva del estado actual de la rama (sin fiarse de CI verde ni de
+la documentación) con dos revisores independientes y ejecución de todas las
+validaciones y E2E. Hallazgos verificados y corregidos:
+
+| # | Problema | Corrección | Evidencia |
+|---|---|---|---|
+| 1 | `finish_stop` no persistía `RunnerStatus::Stopped`; un session stop confirmado podía ser reatachado como `Running` en el próximo arranque | Persistir `Stopped`/`StopUnconfirmed` en la DB al confirmar/fallar el cierre; añadir `StopUnconfirmed` al enum | `confirmed_stop_persists_runner_status_and_is_not_revived` |
+| 2 | `recover_runners` no consultaba el estado lógico de la sesión: `Stopped`/`StopUnconfirmed`/`Failed` podían reviveirse | Filtrar por estado de sesión antes de reatachar | mismo test |
+| 3 | Llamadas repetidas a `recover_runners` podían crear ingress duplicados sobre el mismo stream | Guard: si la sesión ya tiene `runner`/`ingress`, se omite | `duplicate_recovery_does_not_spawn_second_ingress` |
+| 4 | Un error de lectura en una sesión abortaba la recuperación de todos los runners | Error por runner: marcarlo `Uncertain` y continuar | code-inspected + suite |
+| 5 | `mark_runner_uncertain` no fijaba `storage_fault` si fallaba escribir el estado del runner | Fail-closed: fijar fault para bloquear nuevos efectos | tests de fault existentes |
+| 6 | Una sesión `recovering` huérfana tras crash entre fases de publicación no se normalizaba al reiniciar | `recover_after_restart` normaliza también `recovering` → `needs_reconciliation` | suite de persistencia |
+| 7 | El aviso de `spool_full` nunca se persistía: `append` del aviso fallaba porque el spool estaba lleno | Tabla `notices` acotada (16) con capacidad propia; expuesta en `RunnerResponse::Status` y logueada por el daemon | code-inspected |
+| 8 | `fleet-runner` no compilaba en Windows por un `use std::os::unix` incondicional | `#[cfg(unix)]` para permisos; fallback Windows documentado | `cargo check --workspace --all-targets` |
+| 9 | Token de runner creado con umask antes del chmod 0600 | Crear con `OpenOptions::mode(0o600)` en Unix; el directorio de runtime ya es 0700 | code-inspected |
+| 10 | `operation_key` del runner se regeneraba con UUID, haciendo vacuo el dedup en el spool | Propagar el `operation_key` de Fleet a través de `RunnerCommand` hasta `reserve_operation` | suite P1/P2/P3 |
+| 11 | Fail-closed por salud del proveedor sin cobertura (CI podía pasar con `provider_alive` hardcoded a true) | Hook determinista de marker de proveedor muerto + `e2e_p3_provider_health.sh` en CI | PASS |
+| 12 | `e2e_opencode_survival.sh` leía la timeline justo después del cambio de estado `Recovering` (publicado antes del replay) | Esperar al evento terminal durable, no al estado | PASS en ejecución real |
+
+### Validación de la revisión
+
+- `cargo fmt --all -- --check`: PASS
+- `cargo check --workspace --all-targets`: PASS
+- `cargo clippy --workspace --all-targets -- -D warnings`: PASS
+- `cargo test --workspace`: PASS — **42 tests unitarios**
+- `cargo build --workspace`: PASS
+- 12 E2E deterministas + 2 smokes reales de OpenCode: PASS
+- `git diff --check`: PASS; sin secretos ni artefactos de compilación en el repo
+
+### Pendiente tras la revisión (prioridad)
+
+- **P2**: validar Windows de extremo a extremo (compilación condicional ya corregida; ACL de named pipe sin verificar).
+- **P2**: saturar realmente el spool de 1024 eventos para comprobar la política de backpressure con el daemon caído.
+- **P3**: `provider_alive` puede quedar desactualizado mientras el worker está bloqueado en una llamada HTTP larga; el marker deterministico permite fallo inmediato cuando se detecta externamente, pero no sustituye una sonda nativa asíncrona.
+- **P3**: limpieza de la tabla `operations` del spool del runner (crece con cada submit único; el dedup ya usa el key de Fleet).

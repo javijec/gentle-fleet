@@ -103,3 +103,10 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
   desconexión e identidad de runner. Los smokes OpenCode reales siguen opt-in.
 - Considerar PASS solamente la ejecución correspondiente al HEAD integrado,
   nunca la salida de un commit anterior.
+
+### P3.2 — revisión independiente verificada
+
+- 42 tests unitarios (añadidos: persistencia de estado de runner al parar, guard de recovery duplicado, normalización de sesión `recovering` huérfana).
+- `tests/e2e_p3_provider_health.sh`: fail-closed ante pérdida de salud del proveedor con runner IPC vivo; ejecutado y en verde, añadido a CI.
+- Correcciones de revisión: estados de runner al parar, `recover_runners` por estado de sesión, guard de ingress duplicado, fail-closed en writes de estado, avisos de spool duraderos, compilación Windows del runner, permisos del token y propagación de `operation_key`.
+- `e2e_opencode_survival.sh` espera ahora al evento terminal durable antes de aseverar replay (la transición a `Recovering` se publica antes de que el ingress consuma el spool).

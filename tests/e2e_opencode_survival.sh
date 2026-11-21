@@ -62,7 +62,13 @@ for _ in $(seq 1 100); do
   "$BIN/fleetctl" session list | awk -F '\t' -v id="$SID" '$1==id && ($4=="Running" || $4=="Recovering") {found=1} END{exit !found}' && break
   sleep 0.1
 done
-"$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 >"$RUNTIME/timeline"
+# La transición a Recovering se publica ANTES de que el ingress replay el spool:
+# esperar al evento terminal durable, no sólo al cambio de estado.
+for _ in $(seq 1 200); do
+  "$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 >"$RUNTIME/timeline"
+  grep -q 'turn_completed' "$RUNTIME/timeline" && break
+  sleep 0.1
+done
 grep -q 'tool_completed' "$RUNTIME/timeline" || { echo "FAIL: tool completion not replayed"; exit 1; }
 grep -q 'turn_completed' "$RUNTIME/timeline" || { echo "FAIL: terminal turn not replayed"; exit 1; }
 USER_MSGS="$(grep -c 'user.Run exactly this shell command' "$RUNTIME/timeline" || true)"

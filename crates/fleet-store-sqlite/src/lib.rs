@@ -1979,13 +1979,19 @@ mod tests {
             created_at_ms: 1,
             updated_at_ms: 1,
         };
-        store.save_workspace(&WorkspaceRecord {
-            id: "ws-controls".into(),
-            path: "/tmp/test-controls".into(),
-        }).unwrap();
+        store
+            .save_workspace(&WorkspaceRecord {
+                id: "ws-controls".into(),
+                path: "/tmp/test-controls".into(),
+            })
+            .unwrap();
         store.save_session(&session).unwrap();
-        store.save_session_control("session-controls", "effort", "high").unwrap();
-        store.save_session_control("session-controls", "effort", "medium").unwrap();
+        store
+            .save_session_control("session-controls", "effort", "high")
+            .unwrap();
+        store
+            .save_session_control("session-controls", "effort", "medium")
+            .unwrap();
         drop(store);
         let store = SqliteStore::open(path).unwrap();
         let controls = store.list_session_controls("session-controls").unwrap();
@@ -1993,5 +1999,4 @@ mod tests {
         assert_eq!(controls[0].name, "effort");
         assert_eq!(controls[0].value, "medium");
     }
-
 }

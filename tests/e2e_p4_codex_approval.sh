@@ -53,7 +53,7 @@ if [[ -z "$APPR" ]]; then
   exit 1
 fi
 "$BIN/fleetctl" approval "$APPR"
-if ! grep -Eq '(^|,)accept(,|$)' "$RUNTIME/approvals.out"; then
+if ! awk -F '\t' -v id="$APPR" '$1 == id {n=split($5, opts, ","); for (i=1;i<=n;i++) if (opts[i]=="accept") found=1} END {exit !found}' "$RUNTIME/approvals.out"; then
   echo "FAIL: Codex did not offer the accept option; refusing to invent a decision."
   exit 1
 fi

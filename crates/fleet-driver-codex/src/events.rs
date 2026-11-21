@@ -305,7 +305,7 @@ fn defaults_for(method: &str) -> Vec<ApprovalOptionSpec> {
             option("decline", "Deny and continue", vec![]),
             option("cancel", "Deny and stop the turn", vec![]),
         ],
-        "item/tool/requestUserInput" => vec![option(
+        "tool/requestUserInput" | "item/tool/requestUserInput" => vec![option(
             "answer",
             "Answer",
             vec![arg("answers", "text_list", true)],
@@ -381,6 +381,7 @@ pub fn parse_approval_request(request: &ServerRequest) -> Option<NativeApproval>
         "item/commandExecution/requestApproval",
         "item/fileChange/requestApproval",
         "item/tool/requestUserInput",
+        "tool/requestUserInput",
         "item/permissions/requestApproval",
         "applyPatchApproval",
         "execCommandApproval",
@@ -389,7 +390,10 @@ pub fn parse_approval_request(request: &ServerRequest) -> Option<NativeApproval>
         return None;
     }
     // Construir el esquema de preguntas con sus IDs nativos reales.
-    let options = if request.method == "item/tool/requestUserInput" {
+    let options = if matches!(
+        request.method.as_str(),
+        "tool/requestUserInput" | "item/tool/requestUserInput"
+    ) {
         let questions = request.params.get("questions")?.as_array()?;
         let mut seen = std::collections::HashSet::new();
         let mut fields = Vec::new();
@@ -725,6 +729,18 @@ mod tests {
         .unwrap();
         assert!(answer.to_string().contains("acceptWithExecpolicyAmendment"));
     }
+    #[test]
+    fn documented_user_input_request_is_supported() {
+        let request = ServerRequest {
+            id: json!(18),
+            method: "tool/requestUserInput".into(),
+            params: json!({"questions":[{"id":"reason"}]}),
+        };
+        let approval = parse_approval_request(&request).expect("documented method must parse");
+        assert_eq!(approval.options[0].option_id, "answer");
+        assert_eq!(approval.options[0].args[0].name, "question:reason");
+    }
+
     #[test]
     fn native_user_question_ids_are_preserved() {
         let request = ServerRequest {

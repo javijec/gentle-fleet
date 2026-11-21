@@ -249,6 +249,8 @@ pub struct GentleShellDriver {
     pending: HashMap<String, NativeApproval>,
     pending_events: VecDeque<fleet_domain::AgentEvent>,
     permission_mode: Option<String>,
+    native_session_id: Option<String>,
+    last_desktop_snapshot: Option<Value>,
     closed: bool,
 }
 
@@ -272,6 +274,8 @@ impl GentleShellDriver {
             pending: HashMap::new(),
             pending_events: VecDeque::new(),
             permission_mode: None,
+            native_session_id: None,
+            last_desktop_snapshot: None,
             closed: false,
         }
     }
@@ -348,6 +352,23 @@ impl GentleShellDriver {
         });
     }
 
+    /// Un snapshot puede restaurar la secuencia solo si identifica la
+    /// sesión Fleet actual. Si faltan identidad o secuencia, no se publica
+    /// reconciliación ficticia.
+    fn reconcile_desktop_snapshot(&mut self, data: &Value) -> bool {
+        let seq = data.get("seq").and_then(Value::as_u64).unwrap_or_default();
+        let id = text(data, "sessionId").or_else(|| text(data, "session_id"));
+        if seq == 0 || id.as_ref() != self.native_session_id.as_ref() {
+            return false;
+        }
+        self.last_desktop_snapshot = Some(data.clone());
+        self.desktop.sequence.resync(seq);
+        if let Some(mode) = text(data, "permissionMode") {
+            self.permission_mode = Some(mode);
+        }
+        true
+    }
+
     fn handle_desktop_events(&mut self) {
         let events: Vec<_> = self.desktop.events.drain(..).collect();
         for event in events {
@@ -362,12 +383,26 @@ impl GentleShellDriver {
                         &json!({}),
                         CALL_TIMEOUT,
                     );
-                    if let Ok(data) = result {
-                        let seq = data.get("seq").and_then(Value::as_u64).unwrap_or(0);
-                        if seq > 0 {
-                            self.desktop.sequence.resync(seq);
+                    match result {
+                        Ok(data) if self.reconcile_desktop_snapshot(&data) => {
+                            self.emit(DomainEvent::AgentNotice {
+                                message: "Desktop RPC snapshot reconciled for the current session".into(),
+                            });
+                        }
+                        Ok(_) | Err(_) => {
+                            self.emit(DomainEvent::AgentNotice {
+                                message: "Desktop RPC snapshot missing valid session identity or sequence; reconciliation remains incomplete".into(),
+                            });
                         }
                     }
+                }
+                continue;
+            }
+            if event.event == "session_snapshot" {
+                if !self.reconcile_desktop_snapshot(&event.data) {
+                    self.emit(DomainEvent::AgentNotice {
+                        message: "ignored Desktop RPC snapshot without matching native session identity".into(),
+                    });
                 }
                 continue;
             }
@@ -417,6 +452,7 @@ impl AgentDriver for GentleShellDriver {
             .call("get_state", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
         let native = text(&state, "sessionId").unwrap_or_default();
+        self.native_session_id = Some(native.clone());
         self.workspace = Some(ctx.workspace);
         self.rpc = Some(rpc);
         self.desktop
@@ -876,6 +912,43 @@ mod tests {
         assert!(descriptor.capabilities.approvals);
         assert!(descriptor.capabilities.cancel_turn);
         assert!(!descriptor.capabilities.can_attach_service);
+    }
+
+    #[test]
+    fn snapshot_reconciliation_requires_native_session_identity() {
+        let mut driver = GentleShellDriver::new();
+        driver.native_session_id = Some("local-session".into());
+        assert!(!driver.reconcile_desktop_snapshot(
+            &json!({"seq": 24, "sessionId":"foreign-session"})
+        ));
+        assert!(!driver.reconcile_desktop_snapshot(&json!({"seq":24})));
+        assert!(!driver.reconcile_desktop_snapshot(
+            &json!({"seq":0, "sessionId":"local-session"})
+        ));
+        assert!(driver.reconcile_desktop_snapshot(
+            &json!({"seq":24, "sessionId":"local-session", "permissionMode":"normal"})
+        ));
+        assert_eq!(driver.permission_mode.as_deref(), Some("normal"));
+        assert_eq!(driver.last_desktop_snapshot.as_ref().unwrap()["seq"], 24);
+    }
+
+    #[test]
+    fn duplicate_native_model_ids_are_never_ambiguous() {
+        let models = json!({"models":[
+            {"id":"same","provider":"a"},
+            {"id":"same","provider":"b"}
+        ]});
+        let state = json!({"model":{"id":"same"}});
+        assert!(parse_controls(&models, &json!({}), &state, None)[0]
+            .current
+            .is_none());
+        let exact = json!({"model":{"id":"same","provider":"b"}});
+        assert_eq!(
+            parse_controls(&models, &json!({}), &exact, None)[0]
+                .current
+                .as_deref(),
+            Some("b:same")
+        );
     }
 
     #[test]

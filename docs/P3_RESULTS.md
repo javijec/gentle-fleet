@@ -142,3 +142,44 @@ Registrar los drivers Codex y Pi con el mismo `AgentDriver` y `RunnerLauncher`,
 reutilizando este spool y este modelo de aprobaciones sin tocar `SessionManager`.
 El driver Pi necesita propiedad estricta del proceso (stdio muere con el
 Cliente); el driver Codex debe aislar `CODEX_HOME` sin perder autenticación.
+
+## P3.1 — estabilización posterior a revisión
+
+Esta rama contiene las correcciones de integridad detectadas después del
+primer cierre de P3; la evidencia de CI debe referirse al commit que se revise.
+
+- El lector IPC del daemon conserva su `BufReader` entre RPC; descartar el
+  lector anterior podía perder bytes precargados. Las colas de eventos son FIFO
+  (`VecDeque`) y no LIFO.
+- Los ACK son acumulativos pero **solo** se envían para secuencias contiguas;
+  el cursor del nuevo cliente daemon arranca desde el último ACK confirmado
+  por el runner en el handshake.
+- El evento, la proyección de sesión/turno/aprobación, `runner_events` y el
+  watermark de ACK se guardan **en una única transacción SQLite**. Los
+  eventos nativos ignorados también dejan un marcador de ingestión.
+- La prueba SQLite simula una colisión de secuencia y comprueba que ni la
+  timeline ni la deduplicación avanzan con una transacción fallida.
+- Al reattach se restaura primero el turno activo y después se inicia el
+  hilo de lectura. Un runner vivo, autenticado y sin turno pendiente pasa a
+  `Running`; si la ejecución estaba activa, se sale de `Recovering`
+  solamente tras persistir su resultado terminal.
+- Reiniciar el daemon ya no convierte turnos *completados* en `Uncertain`;
+  solo los efectos realmente in-flight quedan inciertos.
+- `provider_alive` refleja el hilo del driver y su evidencia de recuperación;
+  OpenCode comprueba la sesión nativa con una solicitud HTTP acotada. El
+  runner publica su identidad solo después de abrir el proveedor y usa
+  tokens/identidades de arranque aleatorios.
+- Si se pierde la conexión con el runner o el proveedor deja de responder,
+  `SessionManager` marca la sesión como `NeedsReconciliation`, sin crear
+  procesos ni reenviar prompts automáticamente.
+- `tests/e2e_persistence.sh` comprueba un segundo prompt después del
+  reattach. `tests/e2e_p3_survival.sh` diferencia la finalización del turno
+  del evento posterior de recuperación de sesión.
+
+**Límites que se mantienen:** Windows no validado; la prueba real de
+supervivencia OpenCode y su monitor de salud deben repetirse de forma opt-in
+tras los cambios P3.1. Un fallo de red y uno del proveedor pueden requerir
+reconciliación manual; no se intenta reiniciar ni duplicar trabajo.
+
+La rama no debe integrarse en `main` hasta que CI y la revisión externa
+confirmen las garantías de P3.1.

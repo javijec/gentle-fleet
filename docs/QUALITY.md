@@ -89,3 +89,17 @@ Antes de corregir un fallo: reproducirlo; identificar contrato o invariante afec
 - `tests/e2e_p3_identity.sh`: token manipulado y versión incompatible rechazados.
 - `tests/e2e_opencode_survival.sh` (opt-in): comando `sleep 12` real con daemon muerto, archivo y timeline verificados.
 - Smoke real de aprobaciones `once`/`reject` y suite P1/P2 sin regresiones.
+
+### P3.1 — regresiones tras la revisión
+
+- Unit test `runner_event_and_dedup_are_one_atomic_commit`: commit
+  único de timeline/deduplicación/ACK, replay idempotente y rollback en
+  secuencia conflictiva.
+- E2E `e2e_persistence.sh`: la sesión finalizada se recupera y permite
+  un segundo prompt con nueva clave, sin duplicar el anterior.
+- E2E `e2e_p3_survival.sh`: respeta el corte del watcher en
+  `TurnCompleted` y comprueba por separado `SessionStateChanged(Running)`.
+- El CI comprueba los E2E de supervivencia, aprobaciones durante
+  desconexión e identidad de runner. Los smokes OpenCode reales siguen opt-in.
+- Considerar PASS solamente la ejecución correspondiente al HEAD integrado,
+  nunca la salida de un commit anterior.

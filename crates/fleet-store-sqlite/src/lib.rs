@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS runner_events (
 );
 "#;
 
+const MIGRATION_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS session_controls (
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, name)
+);
+"#;
+
 pub struct SqliteStore {
     path: PathBuf,
 }
@@ -380,7 +390,22 @@ impl SessionStore for SqliteStore {
                 .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
             version = 3;
         }
-        if version != 3 {
+        if version == 3 {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| StoreError::new("transaction_failed", e.to_string()))?;
+            transaction
+                .execute_batch(MIGRATION_V4)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .pragma_update(None, "user_version", 4)
+                .map_err(|e| StoreError::new("migration_failed", e.to_string()))?;
+            transaction
+                .commit()
+                .map_err(|e| StoreError::new("commit_failed", e.to_string()))?;
+            version = 4;
+        }
+        if version != 4 {
             return Err(StoreError::new(
                 "unsupported_schema_version",
                 format!("unsupported SQLite schema version {version}; upgrade Fleet instead of guessing"),
@@ -527,6 +552,40 @@ impl SessionStore for SqliteStore {
                     turn_state: parse_turn(&row.get::<_, String>(4)?),
                     created_at_ms: row.get::<_, i64>(5)? as u64,
                     updated_at_ms: row.get::<_, i64>(6)? as u64,
+                })
+            })
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))
+    }
+
+    fn save_session_control(&self, session_id: &str, name: &str, value: &str) -> StoreResult<()> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT INTO session_controls(session_id,name,value,updated_at)
+                 VALUES (?1,?2,?3,?4)
+                 ON CONFLICT(session_id,name) DO UPDATE
+                 SET value=excluded.value, updated_at=excluded.updated_at",
+                params![session_id, name, value, now_ms() as i64],
+            )
+            .map_err(|e| StoreError::new("store_write_failed", e.to_string()))?;
+        Ok(())
+    }
+
+    fn list_session_controls(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Vec<fleet_domain::RequestedControl>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT name, value FROM session_controls WHERE session_id=?1 ORDER BY name")
+            .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
+        let rows = statement
+            .query_map(params![session_id], |row| {
+                Ok(fleet_domain::RequestedControl {
+                    name: row.get(0)?,
+                    value: row.get(1)?,
                 })
             })
             .map_err(|e| StoreError::new("store_read_failed", e.to_string()))?;
@@ -1563,12 +1622,12 @@ mod tests {
     fn migration_and_health_are_verified() {
         let (store, path) = temp_store();
         let health = store.health().unwrap();
-        assert_eq!(health.schema_version, 3);
+        assert_eq!(health.schema_version, 4);
         assert!(health.integrity_ok);
         // Reabrir no vuelve a ejecutar la migración.
         drop(store);
         let reopened = SqliteStore::open(path).unwrap();
-        assert_eq!(reopened.health().unwrap().schema_version, 3);
+        assert_eq!(reopened.health().unwrap().schema_version, 4);
     }
 
     #[test]
@@ -1908,4 +1967,31 @@ mod tests {
             0
         );
     }
+    #[test]
+    fn deferred_session_controls_survive_reopen() {
+        let (store, path) = temp_store();
+        let session = SessionRecord {
+            session_id: "session-controls".into(),
+            workspace_id: "ws-controls".into(),
+            provider_id: "codex".into(),
+            state: SessionState::Running,
+            turn_state: TurnState::Idle,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        store.save_workspace(&WorkspaceRecord {
+            workspace_id: "ws-controls".into(),
+            path: "/tmp/test-controls".into(),
+        }).unwrap();
+        store.save_session(&session).unwrap();
+        store.save_session_control("session-controls", "effort", "high").unwrap();
+        store.save_session_control("session-controls", "effort", "medium").unwrap();
+        drop(store);
+        let store = SqliteStore::open(path).unwrap();
+        let controls = store.list_session_controls("session-controls").unwrap();
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].name, "effort");
+        assert_eq!(controls[0].value, "medium");
+    }
+
 }

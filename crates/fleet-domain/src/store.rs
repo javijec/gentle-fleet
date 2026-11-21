@@ -174,6 +174,27 @@ pub trait SessionStore: Send + Sync {
     fn get_session(&self, session_id: &str) -> StoreResult<Option<SessionRecord>>;
     fn list_sessions(&self) -> StoreResult<Vec<SessionRecord>>;
 
+    /// Opciones de modelo/esfuerzo diferidas y persistentes por sesión.
+    /// El valor nativo solo se aplica durante el próximo turno verificado.
+    fn save_session_control(
+        &self,
+        _session_id: &str,
+        _name: &str,
+        _value: &str,
+    ) -> StoreResult<()> {
+        Err(StoreError::new(
+            "unsupported_capability",
+            "this store cannot persist session controls",
+        ))
+    }
+
+    fn list_session_controls(
+        &self,
+        _session_id: &str,
+    ) -> StoreResult<Vec<crate::RequestedControl>> {
+        Ok(Vec::new())
+    }
+
     fn max_seq(&self, session_id: &str) -> StoreResult<u64>;
     fn append_event(&self, event: &Event) -> StoreResult<()>;
     /// Commit an event and its session/turn/operation/approval projection atomically.

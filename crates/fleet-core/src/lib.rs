@@ -380,6 +380,10 @@ impl SessionManager {
                 }
                 other => (other, stored.turn_state),
             };
+            let desired_controls = self
+                .store
+                .list_session_controls(&stored.session_id)
+                .map_err(to_agent_error)?;
             state.sessions.insert(
                 stored.session_id.clone(),
                 SessionRecord {
@@ -395,7 +399,7 @@ impl SessionManager {
                     ingress: None,
                     active_turn: None,
                     current_operation: None,
-                    desired_controls: Vec::new(),
+                    desired_controls,
                 },
             );
         }
@@ -1919,6 +1923,11 @@ impl SessionManager {
                 message: "session has no live runner".into(),
             });
         }
+        // Escribir antes de actualizar memoria: la preferencia y los turnos
+        // futuros deben sobrevivir a la muerte de fleetd (P3).
+        self.store
+            .save_session_control(session_id, name, value)
+            .map_err(to_agent_error)?;
         record
             .desired_controls
             .retain(|requested| requested.name != name);

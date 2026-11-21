@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0, P1, P1.1, P2, P3, P4.1 CERRADA EN LINUX; P4.2-H EN REVALIDACIÓN; P4.0 COMPLETADO** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 hasta completar P6**; la validación funcional de Windows y macOS se realiza en P7, sin declarar compatibilidad antes. P4.3 y P4.4 siguen pendientes. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md`, `docs/P3_RESULTS.md`, `docs/P4_1_RESULTS.md`, `docs/P4_2_RESULTS.md` y entregables P4.0 (`docs/P4_PROVIDER_MATRIX.md`, `docs/P4_RPC_RESEARCH.md`, `docs/P4_CONTRACT_DESIGN.md`, `docs/P4_TEST_PLAN.md`).
+**Estado:** **P0, P1, P1.1, P2, P3, P4.1 y P4.2 CERRADOS EN LINUX (P4.2 tras P4.2-H); P4.0 COMPLETADO** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 hasta completar P6**; la validación funcional de Windows y macOS se realiza en P7, sin declarar compatibilidad antes. P4.3 y P4.4 siguen pendientes. Resultados: `docs/P1_RESULTS.md`, `docs/P1_1_RESULTS.md`, `docs/P2_RESULTS.md`, `docs/P3_RESULTS.md`, `docs/P4_1_RESULTS.md`, `docs/P4_2_RESULTS.md` y entregables P4.0 (`docs/P4_PROVIDER_MATRIX.md`, `docs/P4_RPC_RESEARCH.md`, `docs/P4_CONTRACT_DESIGN.md`, `docs/P4_TEST_PLAN.md`).
 
 ## Estrategia de plataforma
 

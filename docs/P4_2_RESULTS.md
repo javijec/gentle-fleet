@@ -2,7 +2,7 @@
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
 **Versión verificada:** `pi 1.6.0` (`/home/javijec/.local/share/mise/installs/pi/1.6.0/pi/pi`).
-**Estado:** **P4.2-H — ENDURECIMIENTO EN REVALIDACIÓN.** Las pruebas reales de Pi anteriores se realizaron sobre el driver previo a los cambios de H; los smokes de la nueva revisión no se han repetido todavía.
+**Estado:** **P4.2 — CERRADA EN LINUX** tras P4.2-H. El usuario ejecutó los ocho smokes reales sobre el HEAD final del endurecimiento y confirmó PASS; CI verde en `d20c5b0`.
 
 ## 1. Commits
 
@@ -74,7 +74,7 @@ El transporte JSONL de `fleet-driver-pi` (framing LF, colas acotadas, correlaci�
 
 ## 8. Estado final
 
-**P4.2-H — EN REVALIDACIÓN.** El driver Pi ya dispone de correcciones de integridad y regresiones deterministas. Los resultados reales de P4.2 son evidencia de la integración previa, no de los commits nuevos; repetir los smokes relevantes antes de ratificar el cierre. No se comenzó P4.3 ni se hizo merge a `main`.
+**P4.2 — CERRADA EN LINUX.** El driver Pi dispone de las correcciones de integridad de P4.2-H y el usuario confirmó los ocho smokes reales sobre el HEAD final (`d20c5b0`, CI success `44946545342`). Las limitaciones documentadas se conservan: sin adopción externa con escritura, sin reanudación de turno cuyo proceso murió y sin permisos nativos reales en Pi estándar cuando no hay extensión que los solicite. No se hizo merge a `main`.
 
 ## 9. P4.2-H — Endurecimiento posterior a auditoría
 
@@ -87,6 +87,19 @@ Se corrigieron los hallazgos P4.2-H de transporte, eventos, historial, interacci
 - **Extension UI:** `notify`, `setStatus` y `setWidget` no reciben una respuesta `cancelled` ficticia.
 - **Modelos:** el modelo activo se determina por combinación de proveedor e ID, no solo ID.
 
-**Evidencia disponible:** las pruebas unitarias/deterministas nuevas y las regresiones del CI sobre el HEAD correctivo. **No afirmar que los smokes reales de Pi se repitieron después de H**; esa validación requiere un entorno Linux con Pi 1.6.0, modelo disponible y ejecución opt-in de `tests/e2e_p4_pi_*.sh` (las cuatro pruebas reales pueden consumir tokens).
+**Evidencia disponible:** pruebas unitarias/deterministas nuevas, regresiones del CI sobre el HEAD correctivo y los ocho smokes reales ejecutados por el usuario sobre `d20c5b0`:
+
+| Smoke Pi (P4.2-H) | Resultado confirmado |
+|---|---|
+| Lifecycle | PASS |
+| Discovery e historial | PASS |
+| Recovery | PASS |
+| Concurrency Pi + Codex | PASS |
+| Chat real | PASS |
+| Tools reales | PASS |
+| Controls reales | PASS |
+| Interrupt real | PASS |
+
+Los smokes son opt-in y requieren Pi 1.6.0 con modelo disponible; se ejecutaron en workspaces temporales sin modificar credenciales personales.
 
 **Limitaciones conservadas:** sin adopción externa con escritura, sin reanudación de un turno cuyo proceso Pi murió y sin permisos nativos reales de Pi estándar cuando no hay extensión que los solicite.

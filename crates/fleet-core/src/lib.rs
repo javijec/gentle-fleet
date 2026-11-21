@@ -48,7 +48,10 @@ fn check_approval_fields(
                 message: "duplicate approval argument".into(),
             });
         }
-        let field = option.args.iter().find(|spec| spec.name == input.name)
+        let field = option
+            .args
+            .iter()
+            .find(|spec| spec.name == input.name)
             .ok_or_else(|| AgentError {
                 code: "InvalidArgument".into(),
                 message: "approval argument was not offered".into(),
@@ -1347,14 +1350,20 @@ impl SessionManager {
     ) -> Result<(), AgentError> {
         let mut since = 0u64;
         loop {
-            let events = self.store
+            let events = self
+                .store
                 .read_events(&approval.session_id, since, TIMELINE_PAGE)
                 .map_err(to_agent_error)?;
             if events.is_empty() {
                 break;
             }
             for event in &events {
-                if let EventKind::ApprovalRequested { approval_id, options, .. } = &event.kind {
+                if let EventKind::ApprovalRequested {
+                    approval_id,
+                    options,
+                    ..
+                } = &event.kind
+                {
                     if approval_id == &approval.approval_id {
                         let option = options.iter().find(|spec| spec.option_id == decision);
                         return check_approval_fields(option, args);
@@ -3546,14 +3555,21 @@ mod tests {
             ],
         };
         assert!(check_approval_fields(Some(&spec), &[]).is_err());
-        assert!(check_approval_fields(Some(&spec), &[fleet_domain::ApprovalArgument {
-            name: "unknown".into(),
-            values: vec!["value".into()],
-        }]).is_err());
-        assert!(check_approval_fields(Some(&spec), &[fleet_domain::ApprovalArgument {
-            name: "permissions".into(),
-            values: vec!["read".into()],
-        }]).is_ok());
+        assert!(check_approval_fields(
+            Some(&spec),
+            &[fleet_domain::ApprovalArgument {
+                name: "unknown".into(),
+                values: vec!["value".into()],
+            }]
+        )
+        .is_err());
+        assert!(check_approval_fields(
+            Some(&spec),
+            &[fleet_domain::ApprovalArgument {
+                name: "permissions".into(),
+                values: vec!["read".into()],
+            }]
+        )
+        .is_ok());
     }
-
 }

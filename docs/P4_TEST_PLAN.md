@@ -176,3 +176,14 @@ Se ejecutaron 85 tests unitarios, 14 E2E deterministas P1–P3, 8 smokes Codex d
 ## 8. Cierre P4.3
 
 Ejecutados 108 tests unitarios, 14 E2E deterministas P1–P3, 8 smokes Codex, 8 smokes Pi y 6 scripts Gentle Shell (3 deterministas y 3 reales). Evidencia y clasificación en `docs/P4_3_RESULTS.md`. No se ejecutaron pruebas de P4.4.
+
+
+### P4.3-H — Regresiones de endurecimiento
+
+- Controles `model` y `effort`: configuración nativa previa a prompt, estado efectivo confirmado, rechazo de valores inválidos, IDs ambiguos de proveedores y fallo-cerrado si no se aplica.
+- ACK de prompt perdido, frame corrupto o EOF durante un turno: `TurnUncertain`, sin retry, sin estado `Running` perpetuo.
+- Desktop RPC: más de 256 eventos ordinarios antes de respuesta `setWidget`, correlación correcta y ningún delta/evento perdido.
+- Secuencia Desktop: duplicado, salto, reset ambiguo y reset con `session_snapshot`; no aplicar snapshot de otra sesión.
+- Descubrimiento a nivel de factory, independiente de caches entre `fleetd`/runner; `sessions_unavailable` da error explícito.
+- Importación de historial no verificada con sesión enlazada: `UNSUPPORTED` tipado, nunca datos de la sesión efímera sustituta.
+- Permisos tipados Extension UI: test determinista de respuesta y opción; permiso nativo real UNTESTED mientras el modo no produzca solicitudes.

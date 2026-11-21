@@ -1,7 +1,7 @@
 # P4.3 — Gentle Shell: resultados (Linux x86_64)
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
-**Estado:** **P4.3 — CERRADA EN LINUX** con limitaciones explícitas (permisos nativos y perfiles no verificables en el entorno actual).
+**Estado:** **P4.3-H — EN REVALIDACIÓN** tras la auditoría del driver. El CI y los smokes reales anteriores pertenecen a los commits previos al endurecimiento; las pruebas reales sobre el HEAD correctivo están pendientes.
 **Proveedor:** `gentle-shell`. **No se implementó P4.4 ni se hizo merge.**
 
 ## 1. Versiones verificadas
@@ -56,18 +56,18 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 | Chat real | **PASS** | `e2e_p4_gs_chat.sh`: respuesta `P4 GS OK` |
 | Streaming | **PASS** | deltas observados en el mismo smoke |
 | Herramientas | **PASS** | `e2e_p4_gs_tools.sh`: `tool_started`/`tool_completed` reales |
-| Aprobaciones nativas | **UNSUPPORTED** en la configuración actual | El modo nativo es `super-yolo` y no hay extensión que emita `select`; la traducción Extension UI existe y está cubierta por tests unitarios, sin simulación |
-| Controles de sesión | **PASS** | `fleetctl controls` lista modelo, esfuerzo, modo y Pi embebido (verificación real de negociación) |
-| Modos de permiso | **OBSERVED** | `get_permission_mode` → `super-yolo`; escritura protegida por flag explícito y sin persistencia |
+| Aprobaciones nativas | **UNTESTED** con permiso real | El modo activo `super-yolo` no emitió `select` durante los smokes. Hay captura nativa previa y pruebas deterministas de opciones y respuestas; falta ejecución nativa con modo seguro y home aislado |
+| Controles de sesión | **EN REVALIDACIÓN** | Modelo y esfuerzo ahora se aplican antes del prompt mediante setters Pi nativos y se verifican con `get_state`; el smoke de controles sobre el HEAD correctivo falta |
+| Modos de permiso | **OBSERVED / READ-ONLY** | `get_permission_mode` → `super-yolo`; se desactivó el setter hasta verificar un home aislado: una variable de entorno no demuestra aislamiento |
 | Perfiles | **UNTESTED** | `get_config`/`apply_profile` no se ejecutan: no hay home aislada con credenciales sin copiar secretos |
-| Descubrimiento | **PARCIAL** | `list_sessions` responde `sessions_unavailable` con `--no-session`; el driver expone la limitación y no inventa sesiones |
-| Historial | **PARCIAL / UNTESTED** | Ruta de importación implementada con `source_ref` estable; sin sesión nativa enlazada disponible no se ejecutó un smoke real |
-| Snapshot y secuencias | **OBSERVED / PARCIAL** | `session_snapshot` aparece en la negociación real; duplicados, huecos y resync probados en tests unitarios |
+| Descubrimiento | **PARCIAL / ERROR EXPLÍCITO** | La consulta ahora se hace desde la fábrica en `fleetd`, no desde un cache del runner; `sessions_unavailable` en `--no-session` se propaga en vez de inventar sesiones |
+| Historial | **UNSUPPORTED por seguridad** | La importación efímera con `get_messages` no podía probar la identidad nativa; se deshabilitó hasta disponer de un RPC de lectura enlazado a la sesión solicitada, sin falsas importaciones |
+| Snapshot y secuencias | **PARCIAL / CONSERVADOR** | Un `seq=1` ambiguo provoca reconciliación; solo un `session_snapshot` explícito permite reset. Snapshot validado por `sessionId` y `seq` antes de aplicarse. Falta validar un reset real |
 | Interrupción | **PASS** | `e2e_p4_gs_interrupt.sh`: `agent_settled{aborted}` → un solo `turn_completed Interrupted` |
 | Supervivencia P3 | **PASS** | `e2e_p4_gs_recovery.sh`: runner vivo tras SIGKILL de `fleetd`, reattach y timeline sin duplicados |
 | Concurrencia | **PASS** | `e2e_p4_gs_concurrency.sh`: matar el runner Gentle Shell no detiene Codex |
 | Regresiones anteriores | **PASS** | 14 E2E deterministas P1–P3, 8 smokes Codex y 8 smokes Pi |
-| GitHub Actions | **PASS** | CI `44950955792` sobre `617a94d` → success (los commits anteriores fallaron por un test dependiente del entorno, corregido en `617a94d`) |
+| GitHub Actions | **PENDING** | La validación correspondiente al último commit P4.3-H debe consultarse antes del cierre. El CI anterior `44951201465` fue PASS sobre `47404f1` |
 
 ## 6. Pruebas ejecutadas
 
@@ -82,10 +82,10 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 
 | Riesgo | Severidad | Estado |
 |---|---|---|
-| Sin permisos interactivos reales (modo `super-yolo`) | Media | UNSUPPORTED documentado; no se cambió el modo global ni se simuló una aprobación |
+| Sin permisos interactivos reales (modo `super-yolo`) | Media | UNTESTED: no se cambió el modo global; falta un permiso real en entorno con aislamiento demostrado |
 | Perfiles sin entorno aislado con credenciales | Media | UNTESTED; no se copiaron credenciales |
 | `list_sessions` con `--no-session` → `sessions_unavailable` | Media | Descubrimiento parcial; sin adopción con escritura |
-| Historial de sesión enlazada no ejecutado | Media | Ruta implementada, sin evidencia real; no se marca PASS |
+| Historial de sesión enlazada no ejecutado | Alta | UNSUPPORTED: ruta anterior deshabilitada por no verificar identidad, sin posibilidad de importar silenciosamente otra sesión |
 | Mensajes `session_snapshot` condicionales por sesión | Media | El driver no los asume; se negocian y se reconcilian con `get_snapshot` |
 | Subagentes anunciados por el proveedor | Baja | Inventario solamente; fuera de alcance hasta después de P6 |
 | Windows/macOS | Media (P7) | Sin validar funcionalmente; no se declara compatibilidad |
@@ -96,4 +96,17 @@ No se autoaprobó ninguna solicitud, no se modificó el modo global del usuario,
 
 ## 9. Veredicto y recomendación
 
-**P4.3 — CERRADA EN LINUX.** Gentle Shell funciona como cuarto proveedor real con chat estructurado, Desktop RPC negociado, controles comprobados, eventos/herramientas, interrupción y recuperación P3, sin romper OpenCode, Codex ni Pi. Las capacidades no verificables por el entorno (permisos interactivos, perfiles, historial de sesión enlazada) permanecen UNSUPPORTED/UNTESTED con evidencia, no como éxitos simulados. Se recomienda revisión antes de autorizar P4.4.
+**P4.3-H — EN REVALIDACIÓN.** Los smokes reales iniciales establecen la viabilidad del proveedor; los fixes P4.3-H requieren nuevo CI y comprobación sobre el commit final. La importación de historial y modificación de modos se mantienen bloqueadas por seguridad hasta contar con garantías nativas y aislamiento verificable. No comenzar P4.4.
+
+
+## 10. P4.3-H — Correcciones de auditoría
+
+- **Controles efectivos:** `model`/`effort` se configuran por Pi RPC antes del prompt y se verifican consultando el estado nativo. Si no aplican, el turno falla explícitamente en vez de continuar con otra configuración. `permission_mode` es de solo lectura hasta probar aislamiento real; no basta un flag.
+- **Fallos RPC:** si se pierde el ACK después de enviar `prompt`, el driver emite `TurnUncertain` y prohíbe reenvío implícito. Frames corruptos y EOF sin `agent_settled` también producen un resultado incierto.
+- **Desktop RPC saturado:** la espera de respuesta drena la cola ordinaria de eventos Pi en el buffer acotado del transporte, preservando el orden. El exceso de capacidad produce error explícito sin éxito ficticio.
+- **Secuencias y snapshots:** un contador reiniciado sin señal nativa se trata como hueco; `session_snapshot` permite reconocer el reset. La reconciliación comprueba `seq` y `sessionId` antes de almacenar el snapshot o actualizar el modo de la sesión.
+- **Descubrimiento:** se consulta en el proceso de la fábrica en `fleetd`, no mediante caché estática del runner. Si Desktop RPC responde `sessions_unavailable`, se informa el error.
+- **Historial:** importación deshabilitada por seguridad hasta demostrar lectura de la sesión solicitada, identidad y fidelidad. Se conserva únicamente el descubrimiento de solo lectura cuando está disponible.
+- **Permisos:** el parser y el constructor de respuestas continúan tipados. La ausencia de solicitudes reales bajo `super-yolo` implica UNTESTED, no UNSUPPORTED; se prohíbe modificar el perfil real para provocar un permiso.
+
+**Revalidación pendiente:** ejecutar CI sobre el último commit y repetir los seis smokes `e2e_p4_gs_{lifecycle,chat,tools,interrupt,recovery,concurrency}.sh` en Linux. Las pruebas con modelos son opt-in y pueden consumir tokens. Antes de afirmar cierre, verificar el efecto real de `model`/`effort` y los límites de recuperación de sesión.

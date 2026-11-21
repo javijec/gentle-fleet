@@ -411,9 +411,11 @@ mod tests {
             tracker.observe_with_reset_marker(1, false),
             SequenceOutcome::Event
         );
+        // Sin un segundo snapshot, seq=1 vuelve a ser ambiguo: no se
+        // descarta silenciosamente como duplicado.
         assert_eq!(
             tracker.observe_with_reset_marker(1, false),
-            SequenceOutcome::Duplicate
+            SequenceOutcome::Gap
         );
         assert_eq!(
             tracker.observe_with_reset_marker(3, false),

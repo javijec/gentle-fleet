@@ -173,3 +173,20 @@ El chat real era UNTESTED hasta que el usuario configuró un modelo; se repitió
 | Permisos interactivos / perfiles | UNSUPPORTED / UNTESTED por el entorno; no simulados |
 
 Detalle en [`P4_3_RESULTS.md`](P4_3_RESULTS.md).
+
+
+### P4.3-H — Revalidación final de Gentle Shell (Linux x86_64)
+
+| Prueba | Estado y evidencia |
+|---|---|
+| Formato, Clippy `-D warnings`, tests Rust, build, E2E deterministas P1–P3 | **PASS** — GitHub Actions [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212), commit `5ba188a` |
+| RPC lifecycle | **PASS** reportado por el usuario |
+| Recovery y reattach sin duplicados tras SIGKILL de `fleetd` | **PASS** reportado por el usuario |
+| Aislamiento Gentle Shell + Codex | **PASS** reportado por el usuario |
+| Chat, streaming de herramientas e interrupción reales | **PASS** reportado por el usuario |
+| Controles modelo/esfuerzo efectivos y modo de permisos solo lectura | **PASS** reportado por el usuario, `e2e_p4_gs_controls.sh` |
+| Permiso interactivo nativo bajo perfil aislado | **UNTESTED**; fixture determinista PASS |
+| Importación de historial externo sin identidad comprobable | **UNSUPPORTED por seguridad** |
+| Modificación de perfiles / permisos globales | **UNTESTED / bloqueada** |
+
+P4.3-H se considera **CERRADA EN LINUX con limitaciones explícitas**. Estos resultados no autorizan por sí solos P4.4, Windows/macOS ni adopción de sesiones externas.

@@ -1,7 +1,7 @@
 # P4.3 — Gentle Shell: resultados (Linux x86_64)
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026.
-**Estado:** **P4.3-H — EN REVALIDACIÓN** tras la auditoría del driver. El CI y los smokes reales anteriores pertenecen a los commits previos al endurecimiento; las pruebas reales sobre el HEAD correctivo están pendientes.
+**Estado:** **P4.3-H — CERRADA EN LINUX (con limitaciones explícitas)**. Revalidación real de Gentle Shell PASS sobre el código correctivo `5ba188a`; el CI del mismo commit finalizó en PASS (`44953487212`).
 **Proveedor:** `gentle-shell`. **No se implementó P4.4 ni se hizo merge.**
 
 ## 1. Versiones verificadas
@@ -43,7 +43,7 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 - `desktop.rs`: validación de límites (64 KiB/request, 128 caracteres de `requestId`, 64 de método), serialización, correlación por `requestId`, errores tipados (`UnsupportedMethod`, `NativeError`, `DesktopTimeout`, `Transport`), seguimiento de `seq` con detección de duplicados/huecos/resets y `get_snapshot` para reconciliar. Los frames Desktop nunca se publican como texto del asistente.
 - `events.rs`: streaming, mensaje final, herramientas y `agent_settled` como terminal; `agent_end` no cierra el turno. Deltas y mensajes finales se deduplican.
 - Aprobaciones Extension UI: opciones `select`/`confirm`/`input`/`editor` → `ApprovalRequested` con `option_id` público, argumentos tipados, id nativo privado y entrega vía `extension_ui_response`; notificaciones fire-and-forget no reciben respuestas ficticias.
-- Controles: modelos/esfuerzos descubiertos en runtime; `permission_mode` leído con `get_permission_mode`; `set_permission_mode` solo con `FLEET_GS_ALLOW_MODE_WRITE=1` y `persist:false`, nunca sobre el modo global del usuario.
+- Controles: modelo y esfuerzo se aplican antes del prompt mediante RPC nativo y se comprueba el estado efectivo. `permission_mode` es solo lectura; se deshabilitó la escritura porque un flag no demuestra aislamiento del perfil global.
 - Registro único en `fleet-providers`; `fleetctl agents` muestra cinco entradas (cuatro reales + FakeDriver).
 
 ## 5. Matriz de estado
@@ -57,7 +57,7 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 | Streaming | **PASS** | deltas observados en el mismo smoke |
 | Herramientas | **PASS** | `e2e_p4_gs_tools.sh`: `tool_started`/`tool_completed` reales |
 | Aprobaciones nativas | **UNTESTED** con permiso real | El modo activo `super-yolo` no emitió `select` durante los smokes. Hay captura nativa previa y pruebas deterministas de opciones y respuestas; falta ejecución nativa con modo seguro y home aislado |
-| Controles de sesión | **EN REVALIDACIÓN** | Modelo y esfuerzo ahora se aplican antes del prompt mediante setters Pi nativos y se verifican con `get_state`; el smoke de controles sobre el HEAD correctivo falta |
+| Controles de sesión | **PASS (real, P4.3-H)** | `GF_E2E_REAL=1 bash tests/e2e_p4_gs_controls.sh`: modelo y esfuerzo aplicados por RPC nativo y `permission_mode` rechazado como solo lectura; ejecución confirmada por el usuario sobre `5ba188a` |
 | Modos de permiso | **OBSERVED / READ-ONLY** | `get_permission_mode` → `super-yolo`; se desactivó el setter hasta verificar un home aislado: una variable de entorno no demuestra aislamiento |
 | Perfiles | **UNTESTED** | `get_config`/`apply_profile` no se ejecutan: no hay home aislada con credenciales sin copiar secretos |
 | Descubrimiento | **PARCIAL / ERROR EXPLÍCITO** | La consulta ahora se hace desde la fábrica en `fleetd`, no desde un cache del runner; `sessions_unavailable` en `--no-session` se propaga en vez de inventar sesiones |
@@ -67,7 +67,7 @@ Estos números son observaciones de esta versión, no constantes de compatibilid
 | Supervivencia P3 | **PASS** | `e2e_p4_gs_recovery.sh`: runner vivo tras SIGKILL de `fleetd`, reattach y timeline sin duplicados |
 | Concurrencia | **PASS** | `e2e_p4_gs_concurrency.sh`: matar el runner Gentle Shell no detiene Codex |
 | Regresiones anteriores | **PASS** | 14 E2E deterministas P1–P3, 8 smokes Codex y 8 smokes Pi |
-| GitHub Actions | **PENDING** | La validación correspondiente al último commit P4.3-H debe consultarse antes del cierre. El CI anterior `44951201465` fue PASS sobre `47404f1` |
+| GitHub Actions | **PASS** | Ejecución [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) sobre `5ba188a`: formato, Clippy, tests Rust, compilación y E2E deterministas PASS |
 
 ## 6. Pruebas ejecutadas
 
@@ -96,7 +96,7 @@ No se autoaprobó ninguna solicitud, no se modificó el modo global del usuario,
 
 ## 9. Veredicto y recomendación
 
-**P4.3-H — EN REVALIDACIÓN.** Los smokes reales iniciales establecen la viabilidad del proveedor; los fixes P4.3-H requieren nuevo CI y comprobación sobre el commit final. La importación de historial y modificación de modos se mantienen bloqueadas por seguridad hasta contar con garantías nativas y aislamiento verificable. No comenzar P4.4.
+**P4.3-H — CERRADA EN LINUX con limitaciones explícitas.** CI final y smokes reales de ciclo de vida, recuperación, concurrencia, chat, herramientas, interrupción y controles efectivos: PASS. La importación de historial externo y modificación de modos siguen bloqueadas por seguridad hasta contar con garantías nativas y aislamiento verificable. Permisos interactivos y perfiles reales siguen UNTESTED. P4.4 permanece pendiente, sin merge a `main`.
 
 
 ## 10. P4.3-H — Correcciones de auditoría
@@ -109,4 +109,21 @@ No se autoaprobó ninguna solicitud, no se modificó el modo global del usuario,
 - **Historial:** importación deshabilitada por seguridad hasta demostrar lectura de la sesión solicitada, identidad y fidelidad. Se conserva únicamente el descubrimiento de solo lectura cuando está disponible.
 - **Permisos:** el parser y el constructor de respuestas continúan tipados. La ausencia de solicitudes reales bajo `super-yolo` implica UNTESTED, no UNSUPPORTED; se prohíbe modificar el perfil real para provocar un permiso.
 
-**Revalidación pendiente:** ejecutar CI sobre el último commit y repetir los seis smokes `e2e_p4_gs_{lifecycle,chat,tools,interrupt,recovery,concurrency}.sh` en Linux. Las pruebas con modelos son opt-in y pueden consumir tokens. Antes de afirmar cierre, verificar el efecto real de `model`/`effort` y los límites de recuperación de sesión.
+**Revalidación completada:** CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) PASS en `5ba188a`. El usuario ejecutó los seis scripts `e2e_p4_gs_{lifecycle,chat,tools,interrupt,recovery,concurrency}.sh` y el nuevo `e2e_p4_gs_controls.sh`; todos dieron PASS. La prueba `recovery` informó por separado supervivencia a SIGKILL y reattach sin duplicación. El smoke de controles confirmó aplicación nativa de modelo/esfuerzo y modo de permisos de solo lectura. Los logs locales no se adjuntaron al repositorio, por lo que la evidencia de los smokes procede del resultado compartido por el usuario; los resultados deterministas de CI sí están publicados.
+
+
+## 11. Evidencia final de cierre P4.3-H
+
+| Verificación Linux sobre `5ba188a` | Resultado |
+|---|---|
+| RPC lifecycle / runner ownership / stop | PASS reportado por usuario |
+| `fleetd` SIGKILL: runner sigue vivo | PASS reportado por usuario |
+| Reattach, timeline durable, sin eventos duplicados | PASS reportado por usuario |
+| Aislamiento Gentle Shell y Codex, incluso tras falla de runner Gentle Shell | PASS reportado por usuario |
+| Chat real mediante Fleet API | PASS reportado por usuario |
+| Herramienta real en streaming | PASS reportado por usuario |
+| Interrupción real: un único terminal `Interrupted` por `agent_settled` | PASS reportado por usuario |
+| Controles: modelo/esfuerzo aplicados y modo de permisos solo lectura | PASS reportado por usuario |
+| GitHub Actions [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) | PASS verificado |
+
+**Alcance del cierre:** Linux x86_64; funcionalidades soportadas y verificadas. No equivale a soporte de adopción externa, importación histórica sin identidad comprobada, permisos nativos interactivos reales, perfiles, Windows/macOS ni P4.4.

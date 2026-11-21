@@ -114,3 +114,8 @@ Gentle Shell 4.8.0 (Pi embebido 1.5.2): VERIFIED para RPC base, Desktop RPC nego
 ## 10. P4.3-H — Límites de capacidad tras auditoría
 
 Los smokes reales iniciales de Gentle Shell son evidencia de la integración previa a H. El último driver debe revalidarse antes de ratificar el cierre. Los controles modelo/esfuerzo requieren confirmación nativa; `permission_mode` se expone solo para lectura mientras no se pruebe aislamiento fiable de home y perfil. `list_sessions` se sondea desde la fábrica sin caché del runner y puede responder `sessions_unavailable`; importar historia ajena desde un proceso `--no-session` permanece **UNSUPPORTED** para impedir mezclas de identidad. La aprobación nativa de permisos es **UNTESTED** en el entorno `super-yolo`, aunque su traducción tipada tiene pruebas de protocolo.
+
+
+## 11. Evidencia de cierre P4.3-H
+
+El commit `5ba188a` pasó CI `44953487212`. El usuario confirmó PASS de los siete scripts P4.3-H en Linux: lifecycle, recovery, concurrency, chat, tools, interrupt y controls. Los resultados de `recovery` verificaron tanto supervivencia a SIGKILL de `fleetd` como reattach sin eventos duplicados. `model` y `effort` se aplicaron realmente en Gentle Shell; `permission_mode` permaneció de solo lectura. Mantener explícitos `UNTESTED` (permisos interactivos nativos y perfiles) y `UNSUPPORTED` (importación externa sin identidad de sesión verificable); no inferir cobertura de Windows/macOS ni iniciar P4.4 sin auditoría.

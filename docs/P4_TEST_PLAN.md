@@ -187,3 +187,8 @@ Ejecutados 108 tests unitarios, 14 E2E deterministas P1–P3, 8 smokes Codex, 8 
 - Descubrimiento a nivel de factory, independiente de caches entre `fleetd`/runner; `sessions_unavailable` da error explícito.
 - Importación de historial no verificada con sesión enlazada: `UNSUPPORTED` tipado, nunca datos de la sesión efímera sustituta.
 - Permisos tipados Extension UI: test determinista de respuesta y opción; permiso nativo real UNTESTED mientras el modo no produzca solicitudes.
+
+
+### P4.3-H — Cierre validado en Linux
+
+CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) sobre `5ba188a` PASS. El usuario reportó PASS de `e2e_p4_gs_{lifecycle,recovery,concurrency,chat,tools,interrupt,controls}.sh` sobre ese código; se verificaron aplicación nativa de modelo/esfuerzo y modo de permisos de solo lectura. Son siete scripts (recovery emite dos confirmaciones) y no se adjuntaron sus logs locales al repositorio. Permisos interactivos nativos y perfiles permanecen UNTESTED, y la importación de historial externo sin identidad verificable, UNSUPPORTED. P4.3-H **CERRADA EN LINUX**; P4.4 pendiente.

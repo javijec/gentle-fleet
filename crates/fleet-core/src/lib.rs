@@ -816,6 +816,7 @@ impl SessionManager {
         }
     }
 
+    #[cfg(test)]
     fn publish_agent(
         &self,
         session_id: &str,

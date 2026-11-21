@@ -49,7 +49,7 @@ impl EventMapper {
 
     pub fn end_turn(&mut self) {
         self.fleet_turn = None;
-        self.emitted_delta = false;
+        self.message_delta_seen = false;
     }
 
     fn scoped(&self, kind: DomainEvent) -> Option<fleet_domain::AgentEvent> {

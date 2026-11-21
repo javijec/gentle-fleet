@@ -102,10 +102,6 @@ pub enum SequenceOutcome {
 }
 
 impl SequenceTracker {
-    pub fn observe(&mut self, seq: u64) -> SequenceOutcome {
-        self.observe_with_reset_marker(seq, false)
-    }
-
     /// El contador por sí solo no demuestra un reset: seq=1 también puede
     /// ser un evento retrasado. Solo un snapshot nativo explícito autoriza
     /// reiniciar la época; en otros casos se pide reconciliación.
@@ -411,24 +407,24 @@ mod tests {
     #[test]
     fn sequence_tracker_detects_duplicates_gaps_and_resets() {
         let mut tracker = SequenceTracker::default();
-        assert_eq!(tracker.observe(1), SequenceOutcome::Event);
-        assert_eq!(tracker.observe(1), SequenceOutcome::Duplicate);
-        assert_eq!(tracker.observe(3), SequenceOutcome::Gap);
+        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Event);
+        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Duplicate);
+        assert_eq!(tracker.observe_with_reset_marker(3, false), SequenceOutcome::Gap);
         tracker.resync(3);
-        assert_eq!(tracker.observe(4), SequenceOutcome::Event);
+        assert_eq!(tracker.observe_with_reset_marker(4, false), SequenceOutcome::Event);
     }
 
     #[test]
     fn seq_one_requires_native_snapshot_before_reset() {
         let mut tracker = SequenceTracker::default();
-        assert_eq!(tracker.observe(8), SequenceOutcome::Event);
-        assert_eq!(tracker.observe(1), SequenceOutcome::Gap);
+        assert_eq!(tracker.observe_with_reset_marker(8, false), SequenceOutcome::Event);
+        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Gap);
         assert_eq!(
             tracker.observe_with_reset_marker(1, true),
             SequenceOutcome::Reset
         );
-        assert_eq!(tracker.observe(2), SequenceOutcome::Event);
-        assert_eq!(tracker.observe(1), SequenceOutcome::Duplicate);
+        assert_eq!(tracker.observe_with_reset_marker(2, false), SequenceOutcome::Event);
+        assert_eq!(tracker.observe_with_reset_marker(1, false), SequenceOutcome::Duplicate);
     }
 
     #[test]

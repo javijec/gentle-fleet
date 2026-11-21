@@ -1,6 +1,8 @@
 //! Traducción pura de notificaciones/requests de Codex a eventos Fleet.
 //! Ningún ID nativo (`threadId`, `turnId`, `itemId`, ID JSON-RPC) se publica.
 
+use std::collections::{HashMap, HashSet};
+
 use fleet_agent::{redact_provider_error, AgentError};
 use fleet_domain::{
     ApprovalArgSpec, ApprovalArgument, ApprovalOptionSpec, DomainEvent, TurnStatus,
@@ -14,8 +16,10 @@ pub struct EventMapper {
     pub native_thread: Option<String>,
     pub native_turn: Option<String>,
     pub fleet_turn: Option<String>,
-    emitted_delta: bool,
+    unscoped_delta: bool,
+    delta_items: HashSet<String>,
     last_tool_name: Option<String>,
+    tool_names: HashMap<String, String>,
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -46,15 +50,19 @@ impl EventMapper {
     pub fn begin_turn(&mut self, native_turn: String, fleet_turn: String) {
         self.native_turn = Some(native_turn);
         self.fleet_turn = Some(fleet_turn);
-        self.emitted_delta = false;
+        self.unscoped_delta = false;
+        self.delta_items.clear();
         self.last_tool_name = None;
+        self.tool_names.clear();
     }
 
     pub fn end_turn(&mut self) {
         self.native_turn = None;
         self.fleet_turn = None;
-        self.emitted_delta = false;
+        self.unscoped_delta = false;
+        self.delta_items.clear();
         self.last_tool_name = None;
+        self.tool_names.clear();
     }
 
     fn scoped(&self, params: &Value) -> bool {
@@ -87,7 +95,11 @@ impl EventMapper {
         };
         match method {
             "item/agentMessage/delta" => {
-                self.emitted_delta = true;
+                if let Some(id) = text(&params, "itemId") {
+                    self.delta_items.insert(id);
+                } else {
+                    self.unscoped_delta = true;
+                }
                 let Some(delta) = text(&params, "delta") else {
                     return Vec::new();
                 };
@@ -115,6 +127,9 @@ impl EventMapper {
                         item_type.clone()
                     };
                     self.last_tool_name = Some(name.clone());
+                    if let Some(id) = text(&item, "id") {
+                        self.tool_names.insert(id, name.clone());
+                    }
                     let input = text(&item, "command")
                         .or_else(|| text(&item, "query"))
                         .or_else(|| {
@@ -138,7 +153,10 @@ impl EventMapper {
                 if item_type == "agentMessage" {
                     // No duplicar texto: si ya hubo deltas, el mensaje final
                     // no se vuelve a publicar como AssistantMessage.
-                    if self.emitted_delta {
+                    let streamed = text(&item, "id")
+                        .is_some_and(|id| self.delta_items.remove(&id));
+                    if streamed || self.unscoped_delta {
+                        self.unscoped_delta = false;
                         return Vec::new();
                     }
                     let full = text(&item, "text").or_else(|| {
@@ -163,7 +181,10 @@ impl EventMapper {
                 if !is_tool {
                     return Vec::new();
                 }
-                let name = self.last_tool_name.clone().unwrap_or_else(|| "tool".into());
+                let name = text(&item, "id")
+                    .and_then(|id| self.tool_names.remove(&id))
+                    .or_else(|| self.last_tool_name.clone())
+                    .unwrap_or_else(|| "tool".into());
                 let output = text(&item, "aggregatedOutput")
                     .or_else(|| text(&item, "output"))
                     .or_else(|| text(&item, "result"))
@@ -591,6 +612,25 @@ mod tests {
             "params":{"threadId":"native-thread","item":{"type":"agentMessage","text":"hola"}}
         });
         assert!(mapper.map(&final_item).is_empty());
+    }
+
+    #[test]
+    fn second_message_without_delta_is_not_suppressed_by_first() {
+        let mut mapper = EventMapper::default();
+        mapper.begin_turn("native-turn".into(), "fleet-turn".into());
+        mapper.map(&json!({
+            "method": "item/agentMessage/delta",
+            "params": {"itemId": "m1", "delta": "first"}
+        }));
+        assert!(mapper.map(&json!({
+            "method": "item/completed",
+            "params": {"item": {"id": "m1", "type": "agentMessage", "text": "first"}}
+        })).is_empty());
+        let second = mapper.map(&json!({
+            "method": "item/completed",
+            "params": {"item": {"id": "m2", "type": "agentMessage", "text": "second"}}
+        }));
+        assert!(matches!(second[0].kind, DomainEvent::AssistantMessage { .. }));
     }
 
     #[test]

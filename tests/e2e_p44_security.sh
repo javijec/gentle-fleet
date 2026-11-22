@@ -18,10 +18,16 @@ for _ in $(seq 1 50); do [[ -f "$RUNTIME/fleetd.addr" ]] && break; sleep 0.1; do
 WS="$("$BIN/fleetctl" workspace add "$WORKSPACE" | cut -f1)"
 
 : >"$RUNTIME/public.txt"
+TOKEN_COUNT=0
 PROVIDERS=(opencode codex pi gentle-shell)
 if [[ "${GF_E2E_FAKE_ONLY:-}" == "1" ]]; then PROVIDERS=(fake); fi
 for provider in "${PROVIDERS[@]}"; do
   SES="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$provider" | cut -f1)"
+  TOKEN_FILE="$RUNTIME/fleet-runner-runner-$SES.token"
+  [[ -f "$TOKEN_FILE" ]] || { echo "FAIL: missing runner token for $provider"; exit 1; }
+  MODE="$(stat -c '%a' "$TOKEN_FILE")"
+  [[ "$MODE" == "600" ]] || { echo "FAIL: runner token has permissive mode $MODE"; exit 1; }
+  TOKEN_COUNT=$((TOKEN_COUNT + 1))
   "$BIN/fleetctl" timeline "$SES" --limit 200 >>"$RUNTIME/public.txt"
   "$BIN/fleetctl" approvals --session "$SES" >>"$RUNTIME/public.txt"
   if [[ "$provider" != "fake" ]]; then
@@ -39,9 +45,5 @@ fi
 if grep -Eq 'ses_[a-f0-9]{16,}|per_[a-z0-9_-]{12,}|exec_[a-z0-9-]{12,}|msg_[a-f0-9]{16,}' "$RUNTIME/public.txt"; then
   echo "FAIL: native opaque ID leaked into public API output"; exit 1
 fi
-TOKEN_FILE="$(find "$RUNTIME" -name '*.token' | head -1)"
-if [[ -n "$TOKEN_FILE" ]]; then
-  MODE="$(stat -c '%a' "$TOKEN_FILE")"
-  [[ "$MODE" == "600" ]] || { echo "FAIL: runner token has permissive mode $MODE"; exit 1; }
-fi
-echo "PASS: no secrets or native IDs in public API output; token permissions safe (redaction fixtures: cargo test)"
+[[ "$TOKEN_COUNT" -eq "${#PROVIDERS[@]}" && "$TOKEN_COUNT" -gt 0 ]] || { echo "FAIL: not all live runner tokens verified"; exit 1; }
+echo "PASS: no exposed secrets or native IDs; checked permissions of $TOKEN_COUNT live runner tokens"

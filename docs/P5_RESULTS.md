@@ -1,7 +1,7 @@
 # P5 — Transporte remoto SSH: resultados
 
-**Rama:** `feature/p5-ssh-transport`. **Fecha:** 22/11/2026. **Plataforma:** Linux x86_64.
-**Estado:** **P5 — EN REVALIDACIÓN**: implementación y evidencia localhost con SSH real y dos hosts aislados; falta el recorrido entre dos máquinas Linux independientes para el cierre definitivo.
+**Rama:** `feature/p5-ssh-transport`. **Fecha de cierre:** 22/11/2026. **Plataformas comprobadas:** servidor Linux x86_64; clientes Linux y Windows 11 (PowerShell 7 + OpenSSH_for_Windows_9.5p2).
+**Estado:** **P5 — CERRADA CON ALCANCE EXPLÍCITO**. Transporte SSH y CLI remotos validados contra un servidor Linux en dos equipos reales (Windows → Linux). Se sustituye el criterio anterior «dos Linux independientes» por un recorrido entre **dos máquinas físicas de sistemas operativos diferentes**, que es más representativo para el cliente Windows de P5; no implica soporte de `fleetd`/runners nativos en Windows ni validación macOS.
 
 ## 1. Commits
 
@@ -20,7 +20,7 @@ Comandos nuevos: `fleetctl --host <alias> <comando>` para todos los comandos exi
 
 ## 3. Versiones detectadas
 
-OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0, Gentle Shell 4.8.0 (Pi embebido 1.5.2) en este entorno; los proveedores no se modificaron en P5.
+Los smokes iniciales Linux utilizaron OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0 y Gentle Shell 4.8.0 (Pi embebido 1.5.2). En la prueba manual Windows → Linux del cierre se detectaron OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0 y Gentle Shell `4.9.0-main.023987cb1c91`. Los drivers no se modificaron en P5.
 
 ## 4. Resultados reales
 
@@ -37,7 +37,10 @@ OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0, Gentle Shell 4.8.0 (Pi embebido 1.5.2) 
 | Bridge ausente | PASS | error explícito con stderr del bridge |
 | Dos hosts aislados | PASS | `tests/e2e_p52_two_hosts.sh`: dos sshd/fleetd, workspaces, sesiones, claves de operación y timelines separadas |
 | Chat real por SSH | PASS | OpenCode, Codex, Pi y Gentle Shell completaron `P5 <proveedor> OK` con `GF_E2E_REAL=1` |
-| Dos máquinas Linux físicas distintas | **UNTESTED** | No hay segundo host disponible; se probaron dos instancias aisladas en localhost |
+| Dos máquinas Linux físicas distintas | **UNTESTED, no exigidas para este cierre** | No hay segundo host Linux disponible; reemplazadas en el criterio de cierre por Windows 11 → Linux real |
+| Dos máquinas físicas, Windows 11 → Linux | **PASS manual** | `ssh -o BatchMode=yes`, `host check linux` → `connected linux fleet-v1-p2`; agentes, workspace, sesión, prompt y timeline |
+| Streaming y replay desde Windows | **PASS manual** | FakeDriver `ses_00000002` (11 eventos), OpenCode `ses_0000000c` (turno completo), Gentle Shell `ses_00000025` (turno completo), más Codex y Pi confirmados por el usuario |
+| Recuperación de turno remoto tras pérdida del observador | **PASS para replay; corte manual no confirmado inequívocamente** | OpenCode `ses_00000038`: generación de 150 líneas terminada en evento 82; segundo turno con herramienta `sleep 30`, replay `--since 280` de eventos 281–285, termina `Completed`; no se reenvió el prompt |
 
 ## 5. Unitarias, regresiones y CI
 
@@ -46,16 +49,21 @@ OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0, Gentle Shell 4.8.0 (Pi embebido 1.5.2) 
 - `e2e_p51_ssh.sh` y `e2e_p52_two_hosts.sh`: PASS.
 - CI incorpora ambos scripts P5 con guard `command -v sshd` (SKIP explícito si no hay sshd). Sin modelos de pago.
 
-## 6. Limitaciones
+## 6. Limitaciones aceptadas
 
-- No se declara compatibilidad funcional con Windows/macOS (P7).
-- La identidad de host se apoya en `known_hosts` de OpenSSH; el campo opcional de huella en la configuración Fleet no se valida automáticamente todavía.
-- No se probó un host remoto con otro sistema operativo ni un segundo equipo físico.
-- La reconexión es controlada por el usuario: se recomienda repetir la operación con la misma `operation_key`; no se reenvía automáticamente nada.
+- **Windows 11 comprobado exclusivamente como cliente `fleetctl.exe`**, consumiendo por SSH un `fleetd` y runners Linux. No se verificaron `fleetd`, runners ni proveedores como procesos nativos de Windows; eso permanece en P7. macOS sigue sin validar.
+- No se probaron dos hosts Linux físicos ni una máquina remota Windows actuando como servidor; no son requisitos de aceptación de este corte acotado.
+- El cliente observador `watch` regresó a PowerShell antes de observar todos los `delta` en una prueba manual; posteriormente `timeline` mostró el turno `Completed`. No se confirmó explícitamente si ese regreso fue causado por `Ctrl+C`. El corte SSH forzado sí está automatizado y pasó con `tests/e2e_p51_ssh.sh` sobre Linux localhost; no confundir ambas evidencias.
+- En el segundo turno manual de OpenCode se comprobó el replay por cursor 281–285 y el terminal `Completed`, pero no se ejecutó una verificación externa de ausencia de duplicados para la timeline completa. La E2E determinista sí comprueba duplicados.
+- Los comandos `approvals/answer` están disponibles en el mismo wire y tienen regresiones de capas previas, pero **no se hizo un flujo de aprobación interactiva real Windows → Linux**. Las limitaciones de permisos propias de cada proveedor siguen vigentes.
+- Los avisos `ignored Desktop RPC snapshot without matching native session identity` de Gentle Shell se descartan; durante la prueba no impidieron completar el turno. Registrar su frecuencia como observabilidad P7, no como PASS de una capacidad de snapshot adicional.
+- Se observaron procesos `fleetd` y runners de E2E previos coexistiendo en Linux. Su limpieza/inventario queda como mejora operacional P7; no se modificaron ni terminaron durante la validación.
+- `expected_host_key` no implementa pinning adicional: Fleet rechaza una configuración con ese campo; la verificación efectiva se apoya en el `known_hosts` de OpenSSH.
+- La reconexión es manual, mediante un nuevo `watch --since` o `timeline`; la reconexión automática/backoff pertenece a P6. Los efectos con ACK incierto se recuperan con `fleetctl pending` y `operation <key>`, sin reenvío automático.
 
-## 7. Criterio de cierre
+## 7. Criterio de cierre aceptado
 
-Faltan las dos máquinas Linux independientes para cumplir el criterio 14. Mientras tanto P5 permanece **EN REVALIDACIÓN**; la implementación es funcional y la experiencia local/remota es equivalente en el entorno probado. P6 no se inicia.
+P5 queda **CERRADA** en la rama de función sin merge a `main`. Criterio original adaptado de dos Linux físicos a dos computadoras reales Windows 11 → Linux para validar la interoperabilidad de **cliente y transporte**. Existe evidencia de wire compartido, SSH/host-key, creación de workspace y sesiones, chat real con los cuatro proveedores, herramientas, eventos persistidos, replay por cursor y supervivencia del runner probada en CI frente a la caída del bridge/SSH. Las excepciones de §6 no se presentan como validaciones pasadas ni amplían el alcance a servidor Windows. P6 no se inicia con este commit.
 
 ## 8. P5-H — Auditoría y correcciones posteriores
 
@@ -63,6 +71,6 @@ Se identificaron riesgos en validación de rutas/comando SSH remoto, recuperabil
 
 Cambios: allowlist de argumentos del bridge seguro frente a shell remoto; campo `expected_host_key` no implementado rechazado en lugar de ignorado; journal cliente 0600 con `fleetctl pending` y reconciliación explícita con `operation <key>`; límite JSONL de 8 MiB; manejo de half-close/errores; recolección del proceso SSH; clasificación SSH basada en errores reales; test con cursor capturado después del primer terminal.
 
-**Estado:** EN REVALIDACIÓN. La ejecución CI anterior `45074936294` corresponde al código anterior a P5-H y no certifica estos cambios. El código de P5-H fue validado en el commit `37397a41ecacc8c94d2bbd154cb253d5a5646d1a`: [GitHub Actions #45076529611](https://github.com/javijec/gentle-fleet/actions/runs/45076529611) **PASS**, con fmt, Clippy `-D warnings`, tests Rust, build, regresiones P1–P4.4 y las dos E2E SSH reales sobre localhost (sshd efímero y dos instancias aisladas). La matriz opt-in de proveedores reales y el recorrido entre dos máquinas Linux independientes siguen siendo evidencias distintas de los E2E deterministas con FakeDriver.
+**CI de cierre técnico:** último HEAD anterior a este cierre documental `2b2c33722114a7c8ebf4337be4c316a1e9a78b41`, [GitHub Actions #45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228) **SUCCESS**, con `cargo fmt`, Clippy `-D warnings`, tests Rust, build, regresiones P1–P4.4 y ambos E2E SSH ejecutados como **PASS**. También `37397a4` / [#45076529611](https://github.com/javijec/gentle-fleet/actions/runs/45076529611) PASS para los cambios de código P5-H. Los proveedores reales están documentados por smokes opt-in y las pruebas manuales Windows → Linux; no se confunden con CI FakeDriver.
 
-**Alcance del cierre:** las correcciones de P5-H pasan CI en Linux x86_64. Esto no demuestra comunicación entre dos máquinas Linux independientes: ese recorrido permanece `UNTESTED`, por lo que el estado de P5 sigue siendo `EN REVALIDACIÓN` y no se comienza P6. Los tests de proveedores reales deben distinguirse de FakeDriver en CI.
+**Decisión de cierre:** P5 termina con alcance **servidor Linux + cliente Windows/Linux sobre SSH**. La validación de dos Linux físicos deja de ser condición bloqueante, pero sigue anotada como `UNTESTED`. Los límites de §6 quedan abiertos para sus fases correspondientes. No se hizo merge a `main` ni se inició P6.

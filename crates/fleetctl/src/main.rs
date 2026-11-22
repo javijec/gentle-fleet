@@ -191,22 +191,35 @@ impl Client {
         match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
             Some(frame) => Ok(frame),
             None => {
+                if !self.remote {
+                    return Err("fleetd closed the connection".into());
+                }
                 let code = self.writer.get_mut().ssh_exit_code();
                 let diagnostics = self.writer.get_ref().ssh_diagnostics();
-                let classified = match code {
-                    Some(5) => {
-                        Some("HostKeyRejected: SSH host key verification failed".to_string())
-                    }
-                    Some(6) => Some("AuthFailed or host unreachable".to_string()),
-                    Some(127) => Some("BridgeMissing: remote bridge not found".to_string()),
-                    _ => None,
-                };
-                if let Some(message) = classified {
-                    Err(message)
-                } else if diagnostics.is_empty() {
-                    Err("fleetd closed the connection".into())
+                let context = diagnostics.join(" | ");
+                let lower = context.to_ascii_lowercase();
+                // OpenSSH uses 255 for transport/auth/host-key failures;
+                // exit codes 5 and 6 are not reliable SSH classifications.
+                if lower.contains("host key verification failed")
+                    || lower.contains("remote host identification has changed")
+                    || lower.contains("no matching host key")
+                {
+                    Err(format!("HostKeyRejected: {context}"))
+                } else if lower.contains("permission denied (publickey")
+                    || lower.contains("permission denied (")
+                {
+                    Err(format!("AuthFailed: {context}"))
+                } else if lower.contains("fleetd unavailable") {
+                    Err(format!("DaemonDown: {context}"))
+                } else if code == Some(127)
+                    || lower.contains("fleet-ssh-bridge: not found")
+                    || lower.contains("fleet-ssh-bridge: no such file")
+                {
+                    Err(format!("BridgeMissing: {context}"))
+                } else if code == Some(255) {
+                    Err(format!("SSHDisconnected: {context}"))
                 } else {
-                    Err(format!("SSH transport closed: {}", diagnostics.join(" | ")))
+                    Err(format!("SSH transport closed (status {code:?}): {context}"))
                 }
             }
         }
@@ -220,7 +233,16 @@ impl Client {
                     request_id: id,
                     result,
                 } if id == request_id => {
-                    return result.map_err(|e| format!("{}: {}", e.code, e.message));
+                    let response = result.map_err(|e| format!("{}: {}", e.code, e.message))?;
+                    if let Response::Hello { wire, .. } = &response {
+                        if wire != fleet_protocol::WIRE {
+                            return Err(format!(
+                                "IncompatibleProtocol: expected {}, server reports {wire}",
+                                fleet_protocol::WIRE
+                            ));
+                        }
+                    }
+                    return Ok(response);
                 }
                 Frame::Event { .. } => continue,
                 Frame::Notice { code, message, .. } => {

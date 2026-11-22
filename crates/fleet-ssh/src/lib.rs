@@ -409,8 +409,12 @@ pub fn run_bridge() -> Result<(), String> {
     // EOF on stdout can precede an input-thread exit by a few microseconds.
     // Wait a bounded interval for its result, but never block forever on
     // SSH stdin if fleetd disappeared while the client remains connected.
-    if let Ok(Err(error)) = receiver.recv_timeout(std::time::Duration::from_millis(100)) {
-        return Err(format!("bridge input failed: {error}"));
+    match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+        Ok(Err(error)) => return Err(format!("bridge input failed: {error}")),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return Err("bridge input pump panicked".into());
+        }
+        Ok(Ok(())) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
     }
     output_result.map_err(|error| format!("bridge output failed: {error}"))
 }

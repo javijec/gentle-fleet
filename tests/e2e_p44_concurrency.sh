@@ -43,8 +43,8 @@ for direction in "${DIRECTIONS[@]}"; do
   SA="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$A" | cut -f1)" || { echo "FAIL: create $A"; exit 1; }
   SB="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$B" | cut -f1)" || { echo "FAIL: create $B"; exit 1; }
   [[ -n "$SA" && -n "$SB" && "$SA" != "$SB" ]] || { echo "FAIL: sessions not distinct"; exit 1; }
-  RA="$(pgrep -f "fleet-runner --runner-id runner-$SA " | head -1 || :)"
-  RB="$(pgrep -f "fleet-runner --runner-id runner-$SB " | head -1 || :)"
+  RA="$(pgrep -f "fleet-runner --runner-id runner-$SA .* --workspace $WORKSPACE" | head -1 || :)"
+  RB="$(pgrep -f "fleet-runner --runner-id runner-$SB .* --workspace $WORKSPACE" | head -1 || :)"
   [[ -n "$RA" && -n "$RB" && "$RA" != "$RB" ]] || { echo "FAIL: runners not distinct for $direction"; exit 1; }
 
   kill -9 "$RA"
@@ -52,7 +52,11 @@ for direction in "${DIRECTIONS[@]}"; do
   runner_gone "$RA" || { echo "FAIL: victim runner $A survived SIGKILL"; exit 1; }
   kill -0 "$RB" 2>/dev/null || { echo "FAIL: $B runner died after $A failure"; exit 1; }
 
-  "$BIN/fleetctl" session list >"$RUNTIME/sessions-$EXECUTED.out"
+  for _ in $(seq 1 60); do
+    "$BIN/fleetctl" session list >"$RUNTIME/sessions-$EXECUTED.out"
+    awk -F '\t' -v sid="$SA" '$1 == sid && $4 != "Running" {ok=1} END {exit !ok}' "$RUNTIME/sessions-$EXECUTED.out" && break
+    sleep 0.1
+  done
   awk -F '\t' -v sid="$SB" '$1 == sid && $4 == "Running" {ok=1} END {exit !ok}' "$RUNTIME/sessions-$EXECUTED.out" || {
     echo "FAIL: survivor session $B not Running"; exit 1;
   }

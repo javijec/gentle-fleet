@@ -341,43 +341,63 @@ impl SshStream {
 pub fn run_bridge() -> Result<(), String> {
     let mut stream = connect().map_err(|error| format!("fleetd unavailable: {error}"))?;
     let mut reader = stream.try_clone().map_err(|error| error.to_string())?;
+    // Input runs independently so Fleet can keep streaming while the client
+    // is idle. The output side runs on the main thread and can exit if the
+    // daemon closes without waiting forever on a blocked SSH stdin.
     let to_daemon = std::thread::spawn(move || -> io::Result<()> {
         let stdin = io::stdin();
         let mut input = io::BufReader::new(stdin.lock());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if input.read_line(&mut line)? == 0 {
-                // half-close: el daemon aún puede enviar respuestas pendientes.
-                let _ = reader.shutdown(std::net::Shutdown::Write);
-                return Ok(());
+        let result = (|| -> io::Result<()> {
+            loop {
+                let Some(frame) = read_frame(&mut input)? else {
+                    return Ok(());
+                };
+                let frame = rewrite_hello_for_remote(&frame).map_err(|error| {
+                    io::Error::new(io::ErrorKind::PermissionDenied, error.to_string())
+                })?;
+                write_frame(&mut reader, &frame)?;
             }
-            let frame = serde_json::from_str::<Frame>(&line)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            let frame = rewrite_hello_for_remote(&frame).map_err(|error| {
-                io::Error::new(io::ErrorKind::PermissionDenied, error.to_string())
-            })?;
-            write_frame(&mut reader, &frame)?;
-            reader.flush()?;
-        }
+        })();
+        // An invalid/oversized frame must close the daemon connection,
+        // otherwise the response pump could block indefinitely on read().
+        let how = if result.is_err() {
+            std::net::Shutdown::Both
+        } else {
+            std::net::Shutdown::Write
+        };
+        let _ = reader.shutdown(how);
+        result
     });
-    let to_client = std::thread::spawn(move || -> io::Result<()> {
+    let output_result = (|| -> io::Result<()> {
         let stdout = io::stdout();
         let mut output = stdout.lock();
         let mut buffer = [0u8; 16 * 1024];
         loop {
             let read = stream.read(&mut buffer)?;
             if read == 0 {
-                let _ = output.flush();
-                return Ok(());
+                return output.flush();
             }
             output.write_all(&buffer[..read])?;
             output.flush()?;
         }
-    });
-    let _ = to_daemon.join();
-    let _ = to_client.join();
-    Ok(())
+    })();
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    // If SSH stdout or fleetd closes first, stdin may still be blocked in
+    // read_frame(). Do not wait forever on that thread; process exit ends it.
+    // If it already completed, propagate its error instead of swallowing it.
+    let input_result = if to_daemon.is_finished() {
+        Some(
+            to_daemon
+                .join()
+                .map_err(|_| "SSH bridge input pump panicked".to_string())?,
+        )
+    } else {
+        None
+    };
+    if let Some(Err(error)) = input_result {
+        return Err(format!("bridge input failed: {error}"));
+    }
+    output_result.map_err(|error| format!("bridge output failed: {error}"))
 }
 
 /// Reescribe `Hello` con el token del host remoto. El token local NUNCA viaja
@@ -391,7 +411,8 @@ pub fn rewrite_hello_for_remote(frame: &Frame) -> Result<Frame, SshError> {
             request_id: request_id.clone(),
             request: Request::Hello {
                 client_id: client_id.clone(),
-                token: expected_token().ok().flatten(),
+                token: expected_token()
+                    .map_err(|error| SshError::Protocol(format!("remote token unavailable: {error}")))?,
             },
         }),
         _ => Ok(frame.clone()),

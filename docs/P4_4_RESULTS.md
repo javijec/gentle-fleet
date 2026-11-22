@@ -1,7 +1,7 @@
 # P4.4 — Conformidad, estabilización y entrega multiproveedor
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026. **Plataforma:** Linux x86_64.
-**Estado actual:** **P4.4-H — EN REVALIDACIÓN** tras un hotfix de redacción de secretos en código de producción. El cierre previo correspondió al commit `dd9a2f4`, donde se reportaron la matriz real de cuatro proveedores, las 12 direcciones, el replay a dos clientes y las regresiones. Ese resultado no equivale a reejecutar la matriz real sobre el HEAD posterior. P4.3 continúa cerrada (`7446111`).
+**Estado actual:** **P4.4-H — CERRADA EN LINUX** sobre el commit `4c6b0e31f8390cf43fd96e33d5e3ef6deb6605af`. El usuario reportó la revalidación real posterior al hotfix de redacción: 56 comprobaciones (14 por proveedor) con criterios obligatorios PASS, 12/12 direcciones de aislamiento, seguridad PASS y CI [`44992082537`](https://github.com/javijec/gentle-fleet/actions/runs/44992082537) success. La primera ejecución falló transitoriamente con `os error 11` al consultar OpenCode; la repetición completó las 56 comprobaciones. P4.3 continúa cerrada (`7446111`).
 
 ## 1. Versiones verificadas
 
@@ -10,7 +10,7 @@
 | OpenCode | 2.3.2 |
 | Codex | 0.171.0 |
 | Pi estándar | 1.6.0 |
-| Gentle Shell | 4.8.0 (Pi embebido 1.5.2) |
+| Gentle Shell | 4.9.0 según la revalidación reportada por el usuario; 4.8.0 (Pi embebido 1.5.2) en el entorno local de este agente |
 
 ## 2. Commits
 
@@ -37,7 +37,7 @@ Ejecutores: `tests/e2e_p44_conformity.sh` (determinista y opt-in real), `tests/e
 
 Estado por celda con evidencia. `PASS` implica aserción ejecutada; `UNTESTED`/`UNSUPPORTED` se conservan explícitamente.
 
-| Capacidad | OpenCode 2.3.2 | Codex 0.171.0 | Pi 1.6.0 | Gentle Shell 4.8.0 |
+| Capacidad | OpenCode 2.3.2 | Codex 0.171.0 | Pi 1.6.0 | Gentle Shell 4.9.0 (4.8.0 local) |
 |---|---|---|---|---|
 | Chat | PASS — `real_chat` común | PASS — `real_chat` común | PASS — `real_chat` común | PASS — `real_chat` común |
 | Streaming | PASS — deltas en `real_chat` | PASS — deltas en `real_chat` | PASS — deltas en `real_chat` | PASS — deltas en `real_chat` |
@@ -96,7 +96,7 @@ SQLite V4 sigue siendo el esquema actual; las migraciones V3→V4 y la compatibi
 
 ## 9. Estado final y siguientes etapas
 
-**P4.4-H — EN REVALIDACIÓN EN EL HEAD ACTUAL.** En el cierre anterior, sobre `dd9a2f4`, pasaron: 118 tests unitarios, 19 E2E deterministas, 22 smokes reales de proveedor, la matriz real de 56 celdas, las 12 direcciones de aislamiento, la auditoría de secretos, el replay a dos clientes y la aprobación determinista. Los reportes JSON incluyen SHA, rama, plataforma, fecha, versión por proveedor, estado y justificación; se escriben en `FLEET_CONFORMANCE_REPORT_DIR`. No se modifica `main` ni se comienza P5.
+**P4.4-H — CERRADA EN LINUX.** Revalidación real reportada sobre `4c6b0e3`: OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0 y Gentle Shell 4.9.0 con 14 comprobaciones cada uno (56 total) y criterios obligatorios PASS; 12/12 direcciones de aislamiento; seguridad PASS; CI `44992082537` success. Los estados `UNTESTED`/`UNSUPPORTED` previamente documentados se conservan: permisos interactivos y perfiles de Gentle Shell, historial externo sin identidad verificable, descubrimiento parcial, Windows/macOS para P7. Los reportes JSON incluyen SHA, rama, plataforma, fecha, versión por proveedor, estado y justificación en `FLEET_CONFORMANCE_REPORT_DIR`. No se modifica `main` y P5 comienza en una rama nueva.
 
 Para P5 queda el transporte remoto/SSH conservando el mismo wire; para P6, la interfaz gráfica; para P7, la validación funcional de Windows/macOS y la hardened final del producto.
 
@@ -123,4 +123,4 @@ Se cerraron ventanas de falso PASS del framework:
 
 Se detectaron y corrigieron dos fallas por inspección estática: una clave sensible encontrada más adelante en el mensaje podía omitir un secreto anterior, y una URL HTTPS posterior podía hacer que una URL HTTP previa quedara sin redacción. El sanitizador ahora recorre los mensajes de izquierda a derecha y consume valores JSON entre comillas, claves con `:` o `=`, tokens Bearer y URLs completas con parámetros de consulta. Se añadieron pruebas unitarias de múltiples secretos/URLs y una inyección E2E FakeDriver compuesta con credenciales ficticias.
 
-**Regla de evidencia:** los smokes reales y la matriz de cuatro proveedores reportados sobre `dd9a2f4` son históricos y **no certifican automáticamente los cambios de producción posteriores**. GitHub Actions prueba contratos y regresiones deterministas con FakeDriver; la matriz real debe repetirse en Linux sobre el HEAD final antes de recuperar `CERRADA EN LINUX`. Para ello ejecutar `GF_E2E_REAL=1 GF_KEEP=1 bash tests/e2e_p44_conformity.sh`, `GF_E2E_REAL=1 bash tests/e2e_p44_concurrency.sh` y `bash tests/e2e_p44_security.sh`, más los smokes pertinentes. Conservar el JSON sanitizado y el SHA. No se modifica `main` ni se inicia P5 mientras falte esta evidencia.
+**Evidencia de cierre:** la matriz real se repitió sobre el HEAD final `4c6b0e3` según el reporte del usuario: 56 comprobaciones sin fallos obligatorios, 12/12 direcciones, seguridad PASS y CI `44992082537` success. La ejecución inicial tuvo un fallo transitorio (`os error 11`) al consultar OpenCode; la repetición completó la matriz. GitHub Actions ejecuta contratos y regresiones deterministas con FakeDriver; no sustituye la evidencia real local. Se conservan los reportes JSON sanitizados y el SHA. No se modifica `main`.

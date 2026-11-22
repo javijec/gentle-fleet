@@ -35,3 +35,9 @@
 ## 3. Regresiones
 
 Se ejecutan P1–P3 y P4.1–P4.4 deterministas sobre el HEAD final, además de los scripts P5. CI usa únicamente FakeDriver/sshd efímero; no depende de modelos de pago.
+
+## 4. Regresiones P5-H
+
+Verificar en el CI del HEAD: rechazo de metacaracteres en la ruta remota, configuración con pin no implementado (fail-closed), límite de tamaño JSONL y rechazo de frames parciales, journal durable 0600 anterior al primer prompt remoto y recuperación de `operation_key`, comprobación de un único terminal del **segundo turno** tras cortar SSH, clasificación de errores estándar de OpenSSH y que la caída del bridge no afecta al runner. No dar PASS de tests omisos ni usar el primer `TurnCompleted` de una timeline como evidencia del turno siguiente.
+
+La prueba entre dos máquinas Linux separadas permanece `UNTESTED` hasta ejecutarla realmente. No declarar que los dos `sshd` del mismo localhost equivalen a dos máquinas físicas o virtuales independientes.

@@ -142,6 +142,7 @@ fi
 grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
 
 if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
+  REAL_UNTESTED=0
   for provider in opencode codex pi gentle-shell; do
     REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
     timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
@@ -153,6 +154,7 @@ if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
       kill "$RW" 2>/dev/null || true
       if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
         echo "UNTESTED: $provider has no configured model"
+        REAL_UNTESTED=$((REAL_UNTESTED + 1))
         continue
       fi
       echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
@@ -167,6 +169,7 @@ if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
     "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
     echo "PASS: real remote chat $provider"
   done
+  [[ "$REAL_UNTESTED" == "0" ]] || { echo "FAIL: $REAL_UNTESTED real provider smokes remain UNTESTED"; exit 1; }
 fi
 
 echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"

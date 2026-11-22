@@ -1,6 +1,6 @@
 # P5 — Diseño del transporte remoto SSH
 
-**Rama:** `feature/p5-ssh-transport`. **Estado:** implementación funcional en Linux; ver `P5_RESULTS.md`.
+**Rama:** `feature/p5-ssh-transport`. **Estado:** P5 CERRADA en alcance cliente Windows/Linux → servidor Linux; ver `P5_RESULTS.md`.
 
 ## 1. Objetivo y decisiones
 
@@ -9,7 +9,7 @@ Una persona usa la misma Fleet API en local o en otra máquina mediante SSH. No 
 | ID | Decisión |
 |---|---|
 | P5-D1 | El bridge SSH es un binario Fleet (`fleet-ssh-bridge`) ejecutado por SSH en el host remoto; transporta frames JSONL existentes. |
-| P5-D2 | SSH se invoca con `Command` y argumentos (sin shell, sin PTY, `BatchMode=yes`, `StrictHostKeyChecking=yes`). |
+| P5-D2 | OpenSSH se invoca con `Command` y argumentos (sin shell **local**, sin PTY, `BatchMode=yes`, `StrictHostKeyChecking=yes`); el shell **remoto** ejecuta el bridge, cuya ruta y destino se validan por allowlist de caracteres inertes. |
 | P5-D3 | El token local NUNCA viaja por SSH: el bridge reescribe `Request::Hello` con el token leído en el host remoto. |
 | P5-D4 | `fleetctl` usa `FleetReader`/`FleetWriter`;local y remoto comparten correlación, eventos, errores y timeouts. |
 | P5-D5 | El alias local es configuración de cliente; la identidad autoritativa del host es la clave SSH verificada en `known_hosts`. |
@@ -55,7 +55,7 @@ Sin `StrictHostKeyChecking=no`, sin contraseñas, sin shell interpolation, sin e
 
 ## 7. Fuera de alcance
 
-PTY, VFS remoto, sincronización de archivos, GPUI, plugins, colaboración multiusuario y compatibilidad Windows/macOS (P7).
+PTY, VFS remoto, sincronización de archivos, GPUI, plugins, colaboración multiusuario y ejecución nativa de daemon/runners en Windows o macOS (P7). El cliente `fleetctl.exe` sobre SSH hacia Linux sí se validó en P5.
 
 ## 8. Endurecimiento P5-H
 

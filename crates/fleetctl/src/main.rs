@@ -36,7 +36,9 @@ fn persist_remote_operation(kind: &str, target: &str, key: &str) -> Result<(), S
         return Ok(());
     };
     let path = operation_journal_path()?;
-    let parent = path.parent().ok_or("operation journal needs a parent directory")?;
+    let parent = path
+        .parent()
+        .ok_or("operation journal needs a parent directory")?;
     fs::create_dir_all(parent).map_err(|e| format!("cannot create operation journal: {e}"))?;
     #[cfg(unix)]
     {
@@ -76,7 +78,14 @@ fn persist_remote_operation(kind: &str, target: &str, key: &str) -> Result<(), S
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if file.metadata().map_err(|e| e.to_string())?.permissions().mode() & 0o077 != 0 {
+        if file
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .permissions()
+            .mode()
+            & 0o077
+            != 0
+        {
             return Err("operation journal permissions are too permissive".into());
         }
     }
@@ -84,7 +93,10 @@ fn persist_remote_operation(kind: &str, target: &str, key: &str) -> Result<(), S
         .and_then(|_| file.write_all(b"\n"))
         .and_then(|_| file.sync_data())
         .map_err(|e| format!("cannot durably record remote operation: {e}"))?;
-    eprintln!("remote operation_key={key} host={host} (journal={})", path.display());
+    eprintln!(
+        "remote operation_key={key} host={host} (journal={})",
+        path.display()
+    );
     Ok(())
 }
 
@@ -99,7 +111,10 @@ fn show_pending() -> Result<(), String> {
         let record: serde_json::Value =
             serde_json::from_str(line).map_err(|e| format!("invalid operation journal: {e}"))?;
         let host = record["host"].as_str().unwrap_or("");
-        if selected_host().as_deref().is_some_and(|selected| selected != host) {
+        if selected_host()
+            .as_deref()
+            .is_some_and(|selected| selected != host)
+        {
             continue;
         }
         println!(

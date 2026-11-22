@@ -45,3 +45,11 @@ jobs:
         run: tests/e2e_p3_multi_session.sh
       - name: e2e replay completo con mas de 256 eventos
         run: tests/e2e_long_replay.sh
+      # P4.4-H: fixtures deterministas; no requieren CLIs ni credenciales de pago.
+      # Los 4 proveedores nativos se siguen probando solo con GF_E2E_REAL=1 local.
+      - name: e2e P4.4 conformidad contrato FakeDriver
+        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_conformity.sh
+      - name: e2e P4.4 aislamiento y turno superviviente FakeDriver
+        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_concurrency.sh
+      - name: e2e P4.4 privacidad y tokens FakeDriver
+        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_security.sh

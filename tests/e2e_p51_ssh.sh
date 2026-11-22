@@ -11,7 +11,6 @@ USER_NAME="$(whoami)"
 cleanup() {
   [[ -f "$RUNTIME/sshd.pid" ]] && kill "$(cat "$RUNTIME/sshd.pid")" 2>/dev/null || true
   [[ -n "${DAEMON_PID:-}" ]] && kill "$DAEMON_PID" 2>/dev/null || true
-  pkill -f "$BIN/fleet-ssh-bridge" 2>/dev/null || true
   [[ -n "${GF_KEEP:-}" ]] || { rm -rf "$RUNTIME" "$WORKSPACE"; }
 }
 trap cleanup EXIT
@@ -94,8 +93,11 @@ sleep 1
 FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
   'survive ssh disconnect' >/dev/null
 sleep 1
+# Disconnect only this test's watcher and its children. A global pkill of
+# fleet-ssh-bridge could terminate unrelated user connections.
+pkill -P "$LIVE" 2>/dev/null || true
 kill "$LIVE" 2>/dev/null || true
-pkill -f "$BIN/fleet-ssh-bridge" 2>/dev/null || true
+wait "$LIVE" 2>/dev/null || true
 sleep 1
 kill -0 "$RUNNER" 2>/dev/null || { echo "FAIL: runner died with SSH"; exit 1; }
 for _ in $(seq 1 100); do

@@ -59,3 +59,8 @@ No existe migración automática. No se hacen cherry-picks de M0–M4, no se arr
 
 
 **Estado P4.4-H (22/11/2026): CERRADA EN LINUX sobre `4c6b0e3`.** Tras la auditoría del framework común se corrigieron falsos PASS en concurrencia y terminalidad, se exigió workspace explícito, dos clientes autenticados distintos, una única ejecución de matriz y timeouts con paginación. Los nuevos E2E deterministas se incorporan al CI en modalidad FakeDriver explícita; la matriz real de 56 celdas, las 12 direcciones de aislamiento y los smokes de los cuatro proveedores se repitieron sobre `dd9a2f4` y la revalidación posterior al hotfix fue reportada con 56 comprobaciones, 12/12 direcciones y CI `44992082537` PASS. Ver [`P4_4_RESULTS.md`](P4_4_RESULTS.md). P5 pendiente.
+
+
+## P5: local/remoto idénticos
+
+**Estado (22/11/2026): EN REVALIDACIÓN.** Bridge SSH sobre stdio, mismo wire Fleet, `fleetctl --host`, hosts configurables, paridad local/remota, reconexión segura y dos hosts aislados verificados en localhost. Falta la prueba entre dos máquinas Linux independientes. Ver [`P5_RESULTS.md`](P5_RESULTS.md).

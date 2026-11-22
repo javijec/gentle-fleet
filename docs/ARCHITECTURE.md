@@ -135,6 +135,10 @@ Los eventos y aprobaciones ampliados (`options`, `arguments`, controles, histori
 
 `fleet-conformance` valida los cuatro proveedores solo a través de la API pública, sin conocer sus protocolos. La composición sigue centralizada en `fleet-providers` y `SessionManager` no tiene ramas por proveedor. Ver `docs/P4_4_RESULTS.md`.
 
+## P5 — transporte SSH
+
+SSH transporta `Frame` sin cambiar la API: `fleetctl` selecciona `FleetReader`/`FleetWriter` local o SSH. El bridge remoto inyecta el token del host y nunca detiene `fleetd`/runners. No hay listener TCP público ni sincronización de bases. Ver `P5_DESIGN.md` y `P5_RESULTS.md`.
+
 ## Puertas de revisión arquitectónica
 
 No aceptar nueva funcionalidad si requiere que un cliente conozca internals del proveedor, que un driver escriba el catálogo Fleet o que la misma mutación tenga dos autoridades. Aceptar una refactorización solo si simplifica un límite demostrado por un test, no por anticipar riesgos imposibles de enumerar.

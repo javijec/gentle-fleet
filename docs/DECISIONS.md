@@ -89,6 +89,10 @@ Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_1_RES
 
 Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_2_RESULTS.md`](P4_2_RESULTS.md).
 
+## Decisiones P5 (22/11/2026)
+
+ADR resumido en `docs/P5_DESIGN.md`: bridge propio sobre SSH stdio, token remoto inyectado en el bridge, OpenSSH para identidad/autenticación, misma API local/remota, sin reenvío automático de operaciones inciertas y sin cambios de IDs públicos. No se modifica ninguna decisión D01–D12 ni P4_SPEC.
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

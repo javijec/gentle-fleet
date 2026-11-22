@@ -208,3 +208,15 @@ Detalle en [`P4_4_RESULTS.md`](P4_4_RESULTS.md).
 ### P4.4-H — Revalidación de conformidad
 
 El framework ya no permite declarar PASS sin workspace explícito, terminal `Completed` del turno correcto ni dos conexiones autenticadas para replay. Los scripts P4.4 no omiten pares por error ni ejecutan el modo real dos veces. El CI incorpora tres E2E FakeDriver explícitos; estos prueban contratos, no sustituyen smokes nativos. Para el cierre definitivo deben verificarse en el último commit la matriz de OpenCode/Codex/Pi/Gentle Shell, la ejecución opt-in real y la ausencia de P0/P1. Historial externo de Gentle Shell: UNSUPPORTED (bloqueado por identidad). Estado P4.4-H: **CERRADA EN LINUX** sobre `4c6b0e3` con 56 comprobaciones, 12/12 direcciones, seguridad PASS y CI `44992082537` success, según evidencia real reportada por el usuario. Permisos/perfiles de Gentle Shell e historial externo permanecen UNTESTED/UNSUPPORTED.
+
+
+### P5 — transporte SSH (22/11/2026)
+
+| Validación | Resultado |
+|---|---|
+| 125 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
+| 14 E2E P1–P3 + 5 P4.4 + 2 P5 (SSH localhost y dos hosts) | PASS |
+| Chat real remoto de los cuatro proveedores | PASS |
+| Dos máquinas Linux físicas | UNTESTED (sin segundo host) |
+
+Estado: **EN REVALIDACIÓN**; ver `docs/P5_RESULTS.md`.

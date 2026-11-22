@@ -171,13 +171,17 @@ fn sensitive_field_at(text: &str) -> Option<(usize, String)> {
             continue;
         }
 
-        // Authorization: Bearer abc and authorization=Bearer abc are a
-        // single sensitive value, not just the harmless word Bearer.
+        // Authorization: Bearer abc and Authorization: Basic base64 are
+        // both sensitive as a whole, not just the scheme name.
         let mut len = secret_value_len(value);
-        if starts_with_ci(value, "Bearer")
-            && value[6..].chars().next().is_some_and(char::is_whitespace)
-        {
-            len = 6;
+        if let Some(scheme) = ["Bearer", "Basic"].iter().find(|scheme| {
+            starts_with_ci(value, scheme)
+                && value[scheme.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+        }) {
+            len = scheme.len();
             while let Some(ch) = value[len..].chars().next() {
                 if !ch.is_whitespace() {
                     break;
@@ -225,7 +229,9 @@ fn redact_credentials(message: &str) -> String {
         "/Users/",
         "/home/",
         r"C:\Users\",
+        r"C:\\Users\\",
         r"\AppData\",
+        r"\\AppData\\",
         r"\.codex\",
         r"\.pi\",
         r"\.gentle-shell\",
@@ -626,6 +632,21 @@ mod tests {
             assert!(!safe.contains(secret), "leaked {secret} in {safe}");
         }
         assert_eq!(safe.matches("[credential redacted]").count(), 4);
+    }
+
+    #[test]
+    fn redaction_handles_basic_auth_and_json_escaped_windows_home() {
+        let original = r#"{"error":"C:\\Users\\fixture\\AppData\\Roaming\\auth.json","authorization":"Basic RkFLRVNFQ1JFVA=="} Authorization: Basic RkFLRUJBU0lD"#;
+        let safe = redact_provider_error(original);
+        for secret in [
+            "fixture",
+            "RkFLRVNFQ1JFVA==",
+            "RkFLRUJBU0lD",
+            "auth.json",
+        ] {
+            assert!(!safe.contains(secret), "leaked {secret} in {safe}");
+        }
+        assert!(safe.contains("[credential redacted]"));
     }
 
     #[test]

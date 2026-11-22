@@ -48,17 +48,17 @@ impl HostConfig {
         // inert characters so remote shell metacharacters cannot be evaluated.
         if self.destination.is_empty()
             || !self.destination.chars().all(|ch| {
-                ch.is_ascii_alphanumeric()
-                    || matches!(ch, '_' | '-' | '.' | '@' | ':' | '[' | ']')
+                ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@' | ':' | '[' | ']')
             })
         {
             return Err(SshError::InvalidArgument("invalid SSH destination"));
         }
         if self.bridge_path.is_empty()
             || !self.bridge_path.starts_with('/')
-            || !self.bridge_path.chars().all(|ch| {
-                ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '.' | '-')
-            })
+            || !self
+                .bridge_path
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '.' | '-'))
         {
             return Err(SshError::InvalidArgument("unsafe SSH bridge path"));
         }
@@ -411,8 +411,9 @@ pub fn rewrite_hello_for_remote(frame: &Frame) -> Result<Frame, SshError> {
             request_id: request_id.clone(),
             request: Request::Hello {
                 client_id: client_id.clone(),
-                token: expected_token()
-                    .map_err(|error| SshError::Protocol(format!("remote token unavailable: {error}")))?,
+                token: expected_token().map_err(|error| {
+                    SshError::Protocol(format!("remote token unavailable: {error}"))
+                })?,
             },
         }),
         _ => Ok(frame.clone()),

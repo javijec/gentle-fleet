@@ -95,6 +95,7 @@ dependencies = [
 name = "fleet-conformance"
 version = "0.1.0"
 dependencies = [
+ "fleet-agent",
  "fleet-domain",
  "fleet-protocol",
  "serde",

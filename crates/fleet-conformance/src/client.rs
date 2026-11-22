@@ -187,6 +187,41 @@ impl ApiClient {
         }
     }
 
+    /// Lee el siguiente Frame::Event de esta conexión. Los timeouts de lectura
+    /// ya están configurados en connect(); un plazo vencido es `None`, no error.
+    pub fn read_next_event(&mut self, timeout: Duration) -> Result<Option<(u64, Event)>, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            match read_frame(&mut self.reader) {
+                Ok(Some(Frame::Event {
+                    session_id,
+                    seq,
+                    event,
+                })) => {
+                    if session_id != event.session_id || seq != event.seq {
+                        return Err("live event has inconsistent session or sequence".into());
+                    }
+                    return Ok(Some((seq, event)));
+                }
+                Ok(Some(Frame::Notice { code, message, .. })) => {
+                    return Err(format!("live subscription notice {code}: {message}"));
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => return Err("fleetd closed live subscription".into()),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::TimedOut
+                        || error.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Ok(None)
+                }
+                Err(error) => return Err(format!("live subscription read failed: {error}")),
+            }
+        }
+    }
+
     /// La condición terminal debe pertenecer al turno exacto bajo prueba.
     /// La consulta no reescanea siempre solo los 256 primeros eventos.
     pub fn wait_for_terminal(

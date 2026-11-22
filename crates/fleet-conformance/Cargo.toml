@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 fleet-domain = { path = "../fleet-domain" }
+fleet-agent = { path = "../fleet-agent" }
 fleet-protocol = { path = "../fleet-protocol" }
 serde.workspace = true
 serde_json.workspace = true

@@ -29,18 +29,29 @@ pub enum Status {
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {
     pub provider: String,
+    pub provider_version: String,
     pub check: String,
     pub status: Status,
     pub detail: String,
+    /// Motivo explícito cuando el estado no es PASS; vacío en PASS.
+    pub justification: String,
 }
 
 impl CheckResult {
     fn new(provider: &str, check: &str, status: Status, detail: impl Into<String>) -> Self {
+        let detail = fleet_agent::redact_provider_error(&detail.into());
+        let justification = if status == Status::Pass {
+            String::new()
+        } else {
+            detail.clone()
+        };
         Self {
             provider: provider.into(),
+            provider_version: String::new(),
             check: check.into(),
             status,
-            detail: detail.into(),
+            detail,
+            justification,
         }
     }
 }
@@ -98,6 +109,127 @@ fn ok_or_fail(provider: &str, check: &str, result: Result<(), String>) -> CheckR
         Ok(()) => CheckResult::new(provider, check, Status::Pass, "assertions passed"),
         Err(error) => CheckResult::new(provider, check, Status::Fail, error),
     }
+}
+
+/// Comprobaciones obligatorias por proveedor. Una ejecución que no las
+/// contiene todas se considera incompleta y no puede terminar en éxito.
+pub const REQUIRED_CHECKS: [&str; 13] = [
+    "agent_registered",
+    "capability_contract",
+    "session_creation",
+    "session_lifecycle",
+    "timeline_integrity",
+    "control_discovery",
+    "control_invalid_rejected",
+    "no_autoapproval",
+    "approval_contract",
+    "native_discovery_readonly",
+    "stop_idempotence",
+    "two_client_replay",
+    "real_chat",
+];
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderReport {
+    pub provider: String,
+    pub version: String,
+    pub checks: Vec<CheckResult>,
+    pub passed: usize,
+    pub failed: usize,
+    pub untested: usize,
+    pub unsupported: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConformanceReport {
+    pub commit_sha: String,
+    pub branch: String,
+    pub platform: String,
+    pub executed_at_unix_ms: u128,
+    pub results: Vec<CheckResult>,
+    pub providers: Vec<ProviderReport>,
+    pub global_status: String,
+    pub executed_checks: usize,
+}
+
+fn git_field(args: &[&str]) -> String {
+    std::process::Command::new("git")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Construye un reporte trazable, sanitizado y con resumen por proveedor.
+pub fn build_report(results: Vec<CheckResult>, providers: &[String]) -> ConformanceReport {
+    let mut provider_reports = Vec::new();
+    for provider in providers {
+        let checks: Vec<CheckResult> = results
+            .iter()
+            .filter(|result| result.provider == *provider)
+            .cloned()
+            .collect();
+        let count = |status: Status| {
+            checks
+                .iter()
+                .filter(|result| result.status == status)
+                .count()
+        };
+        let version = checks
+            .iter()
+            .find(|result| !result.provider_version.is_empty())
+            .map(|result| result.provider_version.clone())
+            .unwrap_or_default();
+        provider_reports.push(ProviderReport {
+            provider: provider.clone(),
+            version,
+            passed: count(Status::Pass),
+            failed: count(Status::Fail),
+            untested: count(Status::Untested),
+            unsupported: count(Status::Unsupported),
+            skipped: count(Status::Skip),
+            checks,
+        });
+    }
+    let failed = provider_reports.iter().any(|report| report.failed > 0);
+    let incomplete = provider_reports.iter().any(|report| {
+        REQUIRED_CHECKS
+            .iter()
+            .any(|required| !report.checks.iter().any(|check| check.check == *required))
+    });
+    ConformanceReport {
+        commit_sha: git_field(&["rev-parse", "HEAD"]),
+        branch: git_field(&["rev-parse", "--abbrev-ref", "HEAD"]),
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        executed_at_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        global_status: if failed || incomplete {
+            "FAIL".into()
+        } else {
+            "PASS".into()
+        },
+        executed_checks: results.len(),
+        results: results.clone(),
+        providers: provider_reports,
+    }
+}
+
+/// Escribe el reporte JSON en un directorio configurable. Los detalles ya
+/// pasan por el saneador central antes de llegar aquí.
+pub fn write_report(
+    report: &ConformanceReport,
+    directory: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let path = directory.join(format!("conformance-{}.json", report.executed_at_unix_ms));
+    let json = serde_json::to_string_pretty(report).map_err(|error| error.to_string())?;
+    std::fs::write(&path, json).map_err(|error| error.to_string())?;
+    Ok(path)
 }
 
 /// Ejecución común sin excepciones ocultas por nombre de proveedor.
@@ -205,6 +337,13 @@ pub fn run_provider(provider: &str, options: &Options) -> Vec<CheckResult> {
         }
     };
 
+    results.push(CheckResult::new(
+        provider,
+        "session_creation",
+        Status::Pass,
+        format!("session {session_id} created in the explicit workspace"),
+    ));
+
     let lifecycle = (|| -> Result<(), String> {
         let sessions = match client.call(Request::ListSessions)? {
             Response::Sessions { sessions } => sessions,
@@ -231,18 +370,6 @@ pub fn run_provider(provider: &str, options: &Options) -> Vec<CheckResult> {
         Ok(())
     })();
     results.push(ok_or_fail(provider, "timeline_integrity", timeline));
-
-    let two_clients = (|| -> Result<(), String> {
-        let mut a = ApiClient::connect()?;
-        let mut b = ApiClient::connect()?;
-        let first = a.subscribe_snapshot(&session_id)?;
-        let second = b.subscribe_snapshot(&session_id)?;
-        if first.is_empty() || second.is_empty() || first != second {
-            return Err("independent client snapshots differ or are empty".into());
-        }
-        Ok(())
-    })();
-    results.push(ok_or_fail(provider, "two_client_replay", two_clients));
 
     let controls = match client.call(Request::ListControls {
         session_id: session_id.clone(),
@@ -378,6 +505,92 @@ pub fn run_provider(provider: &str, options: &Options) -> Vec<CheckResult> {
         },
     ));
 
+    let stop = (|| -> Result<(), String> {
+        match client.call(Request::StopSession {
+            session_id: session_id.clone(),
+        })? {
+            Response::Stopped { session_id: id } if id == session_id => {}
+            other => return Err(format!("StopSession mismatch: {other:?}")),
+        }
+        match client.call(Request::StopSession {
+            session_id: session_id.clone(),
+        }) {
+            Err(error) if error.starts_with("session_stopped:") => Ok(()),
+            other => Err(format!("repeated stop should fail explicitly: {other:?}")),
+        }
+    })();
+    results.push(ok_or_fail(provider, "stop_idempotence", stop));
+
+    let two_clients = (|| -> Result<(), String> {
+        let workspace = options
+            .workspace_id
+            .as_ref()
+            .ok_or("live subscription check requires an explicit workspace")?;
+        let live_session = match client.call(Request::CreateSession {
+            workspace_id: workspace.clone(),
+            provider_id: provider.into(),
+        })? {
+            Response::SessionCreated { session } => session.id,
+            other => return Err(format!("live session creation failed: {other:?}")),
+        };
+        let mut a = ApiClient::connect()?;
+        let mut b = ApiClient::connect()?;
+        let first = a.subscribe_snapshot(&live_session)?;
+        let second = b.subscribe_snapshot(&live_session)?;
+        if first.is_empty() || second.is_empty() || first != second {
+            return Err("independent client snapshots differ or are empty".into());
+        }
+        // Un evento nuevo real (sin modelo): el cierre explícito de sesión.
+        // Ambas conexiones deben recibir el MISMO evento con seq contiguo.
+        client.call(Request::StopSession {
+            session_id: live_session.clone(),
+        })?;
+        let expected_seq = first.len() as u64 + 1;
+        let read_until_stopped =
+            |client: &mut ApiClient| -> Result<Vec<(u64, fleet_domain::Event)>, String> {
+                let mut received = Vec::new();
+                for index in 0..5u64 {
+                    let event = client
+                        .read_next_event(Duration::from_secs(5))?
+                        .ok_or("client did not receive the live event")?;
+                    if event.0 != expected_seq + index || event.1.seq != expected_seq + index {
+                        return Err("live event sequence is not contiguous".into());
+                    }
+                    if event.1.session_id != live_session {
+                        return Err("live event belongs to another session".into());
+                    }
+                    let stopped = matches!(event.1.kind, EventKind::SessionStateChanged { state } if state == fleet_domain::SessionState::Stopped);
+                    received.push(event);
+                    if stopped {
+                        return Ok(received);
+                    }
+                }
+                Err("no terminal SessionStateChanged(Stopped) event received".into())
+            };
+        let events_a = read_until_stopped(&mut a)?;
+        let events_b = read_until_stopped(&mut b)?;
+        if events_a != events_b {
+            return Err("live events differ between independent clients".into());
+        }
+        // Reconexión de B mientras A sigue viva: la timeline persistida debe
+        // coincidir con la nueva suscripción y A debe seguir operativa.
+        drop(b);
+        let mut reconnected = ApiClient::connect()?;
+        let replay = reconnected.subscribe_snapshot(&live_session)?;
+        let persisted = client.timeline_all(&live_session)?;
+        if replay != persisted {
+            return Err("reconnected client replay differs from persisted timeline".into());
+        }
+        if a.read_next_event(Duration::from_millis(250))?.is_some() {
+            return Err("client A received an unexpected duplicate event".into());
+        }
+        if client.timeline_all(&live_session)? != persisted {
+            return Err("persisted timeline changed unexpectedly".into());
+        }
+        Ok(())
+    })();
+    results.push(ok_or_fail(provider, "two_client_replay", two_clients));
+
     if options.real {
         results.push(run_real_chat(
             &mut client,
@@ -394,21 +607,9 @@ pub fn run_provider(provider: &str, options: &Options) -> Vec<CheckResult> {
         ));
     }
 
-    let stop = (|| -> Result<(), String> {
-        match client.call(Request::StopSession {
-            session_id: session_id.clone(),
-        })? {
-            Response::Stopped { session_id: id } if id == session_id => {}
-            other => return Err(format!("StopSession mismatch: {other:?}")),
-        }
-        match client.call(Request::StopSession {
-            session_id: session_id.clone(),
-        }) {
-            Err(error) if error.starts_with("session_stopped:") => Ok(()),
-            other => Err(format!("repeated stop should fail explicitly: {other:?}")),
-        }
-    })();
-    results.push(ok_or_fail(provider, "stop_idempotence", stop));
+    for result in &mut results {
+        result.provider_version = descriptor.version.text.clone();
+    }
     results
 }
 

@@ -1,10 +1,11 @@
 //! Ejecutor de la suite común de conformidad.
 //!
 //! Uso: fleet-conformance [--providers p1,p2,...] [--real] [--json]
+//! El directorio del reporte JSON se configura con FLEET_CONFORMANCE_REPORT_DIR.
 
 use std::time::Duration;
 
-use fleet_conformance::{run_all, Options, Status, REAL_PROVIDERS};
+use fleet_conformance::{build_report, run_all, write_report, Options, Status, REAL_PROVIDERS};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -39,13 +40,28 @@ fn main() {
         workspace_id,
     };
     let results = run_all(&providers, &options);
+    let report = build_report(results, &providers);
+
+    if let Ok(directory) = std::env::var("FLEET_CONFORMANCE_REPORT_DIR") {
+        match write_report(&report, std::path::Path::new(&directory)) {
+            Ok(path) => eprintln!("conformance report: {}", path.display()),
+            Err(error) => {
+                eprintln!("ERROR: cannot write conformance report: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&results).unwrap());
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
     } else {
+        println!(
+            "commit={} branch={} platform={} status={}",
+            report.commit_sha, report.branch, report.platform, report.global_status
+        );
         const HEADER: &str = "PROVIDER       CHECK                        STATUS       DETAIL";
         println!("{HEADER}");
-        for result in &results {
+        for result in &report.results {
             println!(
                 "{:<14} {:<28} {:<12} {}",
                 result.provider,
@@ -54,23 +70,25 @@ fn main() {
                 result.detail
             );
         }
+        for provider in &report.providers {
+            println!(
+                "summary {} {}: PASS={} FAIL={} UNTESTED={} UNSUPPORTED={} SKIP={}",
+                provider.provider,
+                provider.version,
+                provider.passed,
+                provider.failed,
+                provider.untested,
+                provider.unsupported,
+                provider.skipped
+            );
+        }
     }
-    let unsafe_result = results.iter().any(|result| result.status == Status::Fail)
-        || providers.iter().any(|provider| {
-            !results.iter().any(|r| {
-                r.provider == *provider
-                    && r.check == "session_lifecycle"
-                    && r.status == Status::Pass
-            }) || !results.iter().any(|r| {
-                r.provider == *provider
-                    && r.check == "two_client_replay"
-                    && r.status == Status::Pass
-            }) || (real
-                && !results.iter().any(|r| {
-                    r.provider == *provider && r.check == "real_chat" && r.status == Status::Pass
-                }))
-        });
-    if unsafe_result {
+    if report.global_status != "PASS"
+        || report
+            .results
+            .iter()
+            .any(|result| result.status == Status::Fail)
+    {
         std::process::exit(1);
     }
 }

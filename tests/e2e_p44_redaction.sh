@@ -4,7 +4,14 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/debug"
-SECRET='sk-FAKE-E2E-SECRET-1234567890'
+# Several fake credentials in the SAME diagnostic catch skipped earlier spans,
+# mixed URL schemes and JSON values with no provider credentials involved.
+SECRET_FIRST='sk-FAKEFIRST-E2E-1234567890'
+SECRET_SECOND='FAKESECOND-E2E-1234567890'
+SECRET_HTTP='FAKEHTTPPASS-E2E-1234567890'
+SECRET_QUERY='FAKEURLQUERY-E2E-1234567890'
+SECRET_JSON='FAKEJSONVALUE-E2E-1234567890'
+SECRET="sk-FAKEFIRST-E2E-1234567890 api_key=FAKESECOND-E2E-1234567890 http://user:FAKEHTTPPASS-E2E-1234567890@localhost.test/?key=FAKEURLQUERY-E2E-1234567890 https://example.test/?x=1 {\"token\":\"FAKEJSONVALUE-E2E-1234567890\"}"
 RUNTIME="$(mktemp -d /tmp/gf-p44-redact-XXXXXX)"
 WORKSPACE="$(mktemp -d /tmp/gf-p44-redact-ws-XXXXXX)"
 cleanup() {
@@ -24,8 +31,11 @@ SES="$("$BIN/fleetctl" session create --workspace "$WS" --provider fake | cut -f
 sleep 1
 "$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/timeline.out"
 grep -q 'agent_error' "$RUNTIME/timeline.out" || { echo "FAIL: redacted error event missing"; exit 1; }
-if grep -q "$SECRET" "$RUNTIME/timeline.out" "$RUNTIME/prompt.out" "$RUNTIME/daemon.err" "$RUNTIME"/*.err 2>/dev/null; then
-  echo "FAIL: injected secret leaked into a public or diagnostic channel"; exit 1
-fi
-grep -q 'credential redacted' "$RUNTIME/timeline.out" || { echo "FAIL: no redaction marker in public event"; exit 1; }
+for value in "$SECRET_FIRST" "$SECRET_SECOND" "$SECRET_HTTP" "$SECRET_QUERY" "$SECRET_JSON" "http://" "https://"; do
+  if grep -Fq -- "$value" "$RUNTIME/timeline.out" "$RUNTIME/prompt.out" "$RUNTIME/daemon.err" "$RUNTIME"/*.err 2>/dev/null; then
+    echo "FAIL: injected secret or URL leaked into a public or diagnostic channel"; exit 1
+  fi
+done
+grep -q 'credential redacted' "$RUNTIME/timeline.out" || { echo "FAIL: no credential redaction marker in public event"; exit 1; }
+grep -q 'url redacted' "$RUNTIME/timeline.out" || { echo "FAIL: no URL redaction marker in public event"; exit 1; }
 echo "PASS: injected credential redacted on every public path"

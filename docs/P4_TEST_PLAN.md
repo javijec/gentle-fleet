@@ -197,3 +197,11 @@ CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487
 ## 9. Cierre P4.4
 
 Se ejecutaron 113 tests unitarios, 17 E2E deterministas, 22 smokes reales de proveedor y la suite común `fleet-conformance` en modo determinista y real (44 celdas, sin FAIL). Resultado y evidencia en `docs/P4_4_RESULTS.md`. No se ejecutaron pruebas de P5–P7.
+
+
+### P4.4-H — Regresiones obligatorias tras auditoría
+
+- Fixture CI con FakeDriver: `GF_E2E_FAKE_ONLY=1 tests/e2e_p44_conformity.sh`, `e2e_p44_concurrency.sh`, `e2e_p44_security.sh`. Es una señal determinista; no proclamar conformidad de cuatro ejecutables reales.
+- Suite real: workspace explícito, todos los pares sin omitir, una única ejecución JSON, turnos con ID/estado correcto, continuidad de una conversación luego de muerte del otro proveedor, y dos clientes autenticados con replay idéntico.
+- Errores `SendPrompt` en `--real` producen FAIL, salvo una clasificación tipada y explícita justificada; nunca buscar palabras en el texto del error.
+- Timeouts, cursores mayores a 256 eventos y redacción mediante credenciales ficticias tienen regresiones propias.

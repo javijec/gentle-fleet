@@ -1,7 +1,7 @@
 # P4.4 — Conformidad, estabilización y entrega multiproveedor
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026. **Plataforma:** Linux x86_64.
-**Estado:** **P4.4 — CERRADA EN LINUX.** P4.3 se ratifica sin reabrir: `7446111`, CI `44955496061` success; sus limitaciones se conservan.
+**Estado:** **P4.4-H — EN REVALIDACIÓN** tras auditoría independiente. P4.3 continúa cerrada (`7446111`); los resultados P4.4 anteriores corresponden al framework previo al endurecimiento y no validan automáticamente el código correctivo.
 
 ## 1. Versiones verificadas
 
@@ -46,7 +46,7 @@ Estado por celda con evidencia. `PASS` implica aserción ejecutada; `UNTESTED`/`
 | Interrupción | UNSUPPORTED — `cancel_turn=false` | PASS — `e2e_p4_codex_interrupt` | PASS — `e2e_p4_pi_interrupt` | PASS — `e2e_p4_gs_interrupt` |
 | Modelo | UNSUPPORTED — sin controles | PASS — `e2e_p4_codex_controls` | PASS — `e2e_p4_pi_controls` | PASS — smoke H de modelo nativo |
 | Esfuerzo | UNSUPPORTED | PASS — `e2e_p4_codex_controls` | PASS — `e2e_p4_pi_controls` | PASS — smoke H de esfuerzo nativo |
-| Historial | PASS — P2/P3 | PASS — `e2e_p4_codex_discovery` | PASS — `e2e_p4_pi_discovery` | PARCIAL/UNTESTED — ruta implementada, sin sesión enlazada |
+| Historial | PASS — P2/P3 | PASS — `e2e_p4_codex_discovery` | PASS — `e2e_p4_pi_discovery` | UNSUPPORTED: importación externa deshabilitada por falta de identidad nativa verificable |
 | Descubrimiento | PARCIAL — sin API nativa expuesta | PASS — 68 sesiones listadas en la auditoría | PARCIAL — archivos aislados | UNSUPPORTED — `sessions_unavailable` en modo efímero |
 | Recuperación P3 | PASS — `e2e_p3_*` | PASS — `e2e_p4_codex_survival` | PASS — `e2e_p4_pi_recovery` | PASS — `e2e_p4_gs_recovery` |
 | Reattach | PASS | PASS | PASS | PASS |
@@ -96,6 +96,22 @@ SQLite V4 sigue siendo el esquema actual; las migraciones V3→V4 y la compatibi
 
 ## 9. Estado final y siguientes etapas
 
-**P4.4 — CERRADA EN LINUX.** Los cuatro proveedores operan mediante la misma API pública, con framework de conformidad reutilizable, capacidades anunciadas coherentes con las verificadas, persistencia P3 intacta, replay sin duplicados, aislamiento entre proveedores y evidencia real opt-in para los cuatro. No se modificó `main`, no se creó PR y no se comenzó P5.
+**P4.4-H — EN REVALIDACIÓN.** Los resultados reales anteriores no sustituyen repetir la matriz de cuatro proveedores sobre los cambios de P4.4-H. El CI ejecuta fixtures FakeDriver para las pruebas P4.4 nuevas, y los cuatro proveedores requieren smokes locales explícitos. No se modifica `main` ni se comienza P5.
 
 Para P5 queda el transporte remoto/SSH conservando el mismo wire; para P6, la interfaz gráfica; para P7, la validación funcional de Windows/macOS y la hardened final del producto.
+
+
+## 10. P4.4-H — Correcciones de auditoría
+
+Se cerraron ventanas de falso PASS del framework:
+
+- **Aislamiento:** los seis pares de proveedores son obligatorios, sin `continue` sobre errores de sesión ni éxito con cero casos. Se comprueba supervivencia del runner contrario y se exige turno real completado en modo opt-in o en el fixture FakeDriver.
+- **Clientes independientes:** el test anterior enviaba dos `SubscribeTimeline` sobre la misma conexión. El nuevo `two_client_replay` abre dos conexiones autenticadas separadas, compara frames y verifica orden, identidad y `seq` de los eventos entregados.
+- **Identidad del turno:** `real_chat` exige `TurnStarted`, exactamente un `UserMessage`, un solo `TurnCompleted{status:Completed}` del `turn_id` correcto, texto comprobable y operaciones idempotentes. Ya no convierte errores por coincidencia de palabras `model` o `unsupported` en UNTESTED.
+- **Workspace seguro:** `fleet-conformance` exige `--workspace` con ID registrado explícitamente. No selecciona el primer directorio personal del daemon. El script de conformidad crea uno temporal propio.
+- **Un solo reporte:** el wrapper invoca el framework una vez en modo JSON, valida todas las celdas requeridas y genera resumen desde esa ejecución. No duplica prompts ni consume tokens dos veces.
+- **RPC acotado:** lectura con timeout y timeline por cursor, con verificación de secuencias e identidad de sesión. El lector ya no reconsulta siempre solo los 256 primeros eventos.
+- **Seguridad:** regresión Rust con credenciales ficticias que inyecta claves, Bearer, rutas de autenticación e IDs nativos en diagnósticos, comprobando la redacción. La inspección E2E de API mantiene un alcance separado; no equivale a prueba exhaustiva de todos los secretos posibles.
+- **CI:** se agregan `e2e_p44_conformity.sh`, `e2e_p44_concurrency.sh` y `e2e_p44_security.sh` con `GF_E2E_FAKE_ONLY=1`, etiquetados explícitamente como fixtures. No se usan como evidencia de ejecución real de los cuatro proveedores.
+
+**Pendiente de cierre:** confirmar CI final, repetir `tests/e2e_p44_{conformity,concurrency,security}.sh` sin `GF_E2E_FAKE_ONLY` en Linux con las cuatro herramientas instaladas, activar `GF_E2E_REAL=1` para chat y continuidad tras fallos, guardar el reporte JSON por versión y repetir los smokes específicos afectados. No declarar resultados que no se hayan ejecutado.

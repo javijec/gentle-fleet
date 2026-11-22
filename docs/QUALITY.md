@@ -203,3 +203,8 @@ P4.3-H se considera **CERRADA EN LINUX con limitaciones explícitas**. Estos res
 | Permisos interactivos/perfiles Gentle Shell | UNTESTED documentado |
 
 Detalle en [`P4_4_RESULTS.md`](P4_4_RESULTS.md).
+
+
+### P4.4-H — Revalidación de conformidad
+
+El framework ya no permite declarar PASS sin workspace explícito, terminal `Completed` del turno correcto ni dos conexiones autenticadas para replay. Los scripts P4.4 no omiten pares por error ni ejecutan el modo real dos veces. El CI incorpora tres E2E FakeDriver explícitos; estos prueban contratos, no sustituyen smokes nativos. Para el cierre definitivo deben verificarse en el último commit la matriz de OpenCode/Codex/Pi/Gentle Shell, la ejecución opt-in real y la ausencia de P0/P1. Historial externo de Gentle Shell: UNSUPPORTED (bloqueado por identidad). Estado P4.4-H: **EN REVALIDACIÓN**.

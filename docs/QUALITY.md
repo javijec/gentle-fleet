@@ -217,6 +217,9 @@ El framework ya no permite declarar PASS sin workspace explícito, terminal `Com
 | 125 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
 | 14 E2E P1–P3 + 5 P4.4 + 2 P5 (SSH localhost y dos hosts) | PASS |
 | Chat real remoto de los cuatro proveedores | PASS |
-| Dos máquinas Linux físicas | UNTESTED (sin segundo host) |
+| Dos máquinas Linux físicas | UNTESTED (sin segundo host; ya no bloquea el criterio P5) |
+| Dos máquinas físicas Windows 11 → Linux, CLI remota | PASS manual (ssh BatchMode, handshake, creación de workspace/sesión, cuatro agentes y replay por cursor) |
+| Interrupción SSH forzada desde Windows durante el turno | NO CONFIRMADA; CI Linux con sshd efímero cubre corte de SSH |
+| Daemon/runner Windows nativos, macOS y aprobación interactiva remota desde Windows | UNTESTED; fuera del alcance del cierre de P5 |
 
-Estado: **EN REVALIDACIÓN**; ver `docs/P5_RESULTS.md`.
+Estado: **CERRADA con alcance acotado a servidor Linux + cliente Windows/Linux**; ver `docs/P5_RESULTS.md` §6–7 y CI [#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228).

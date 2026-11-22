@@ -7,7 +7,7 @@
 3. **Process tests**: arrancar fleetd, runner y un fake agent como procesos separados; matar clientes, daemon, runner y agente en puntos sincronizados.
 4. **Provider fixtures**: mensajes reales anonimizados de Pi, Codex, OpenCode con versión del binario; contratos por capacidades.
 5. **Smoke real**: opt-in para los tres agentes, bajo HOME o perfil aislado cuando posible. No guardar credenciales; documentar si se probó en modo autenticado.
-6. **Platform matrix**: Linux x86_64 es la plataforma de referencia hasta P6. Windows y macOS se validan funcionalmente en P7; hasta entonces no se declara compatibilidad. Se conservan las comprobaciones de compilación cruzada disponibles.
+6. **Platform matrix**: Linux x86_64 es la plataforma de referencia hasta P6. El **cliente Windows 11** por OpenSSH hacia un servidor Linux se validó manualmente en P5; la compatibilidad **nativa completa** de Windows (daemon, runner, procesos y permisos) y macOS permanece en P7. No extender el PASS de cliente a plataforma servidor. Se conservan las comprobaciones de compilación cruzada disponibles.
 
 ## CI desde el primer commit de implementación
 

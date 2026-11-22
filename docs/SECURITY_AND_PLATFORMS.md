@@ -15,7 +15,7 @@ Las solicitudes de herramienta y approvals del agente mantienen una segunda fron
 
 ## Acceso remoto
 
-Primera implementación: **SSH estándar** hacia un daemon Fleet existente en el host remoto. El cliente usa SSH de la máquina, agente de claves y host-key verification; un bridge `fleetctl serve-stdio` en el host traduce los frames autenticados al socket local. No implementar autenticación propia sobre TCP en P5 ni exponer 0.0.0.0.
+Primera implementación: **SSH estándar** hacia un daemon Fleet existente en el host remoto. El cliente usa SSH de la máquina, agente de claves y host-key verification; el binario `fleet-ssh-bridge` en el host remoto traduce los frames autenticados al socket local de `fleetd`, reescribiendo el `Hello` con el token del host remoto. No implementar autenticación propia sobre TCP en P5 ni exponer 0.0.0.0.
 
 Cada host posee su DB, directorios y sus procesos. La UI puede agregar vistas multi-host pero no sincroniza el estado internamente. Los IDs de sesión se interpretan como (host_id,session_id) para evitar colisiones. No se migran sesiones vivas entre hosts en v2 MVP.
 
@@ -41,7 +41,7 @@ Un AgentDriver puede informar permisos de ejecución, filesystem, red, selecció
 | SSH remoto | OpenSSH | OpenSSH client de Windows |
 | Crash tests | SIGKILL y restart | TerminateProcess y restart |
 
-No afirmar paridad Windows sin ejecutar el smoke de procesos nativos. macOS queda fuera de release inicial aunque la capa Unix debe facilitar incorporarlo.
+El **cliente** Windows `fleetctl.exe` fue probado con OpenSSH en P5 contra Linux, lo que verifica la interoperabilidad de ese cliente pero **no** la ejecución de `fleetd`/runners nativos en Windows. No afirmar paridad de procesos Windows sin ejecutar los smokes nativos de P7. macOS queda fuera de release inicial aunque la capa Unix debe facilitar incorporarlo.
 
 ## No objetivos de seguridad inicial
 

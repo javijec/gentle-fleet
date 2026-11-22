@@ -638,12 +638,7 @@ mod tests {
     fn redaction_handles_basic_auth_and_json_escaped_windows_home() {
         let original = r#"{"error":"C:\\Users\\fixture\\AppData\\Roaming\\auth.json","authorization":"Basic RkFLRVNFQ1JFVA=="} Authorization: Basic RkFLRUJBU0lD"#;
         let safe = redact_provider_error(original);
-        for secret in [
-            "fixture",
-            "RkFLRVNFQ1JFVA==",
-            "RkFLRUJBU0lD",
-            "auth.json",
-        ] {
+        for secret in ["fixture", "RkFLRVNFQ1JFVA==", "RkFLRUJBU0lD", "auth.json"] {
             assert!(!safe.contains(secret), "leaked {secret} in {safe}");
         }
         assert!(safe.contains("[credential redacted]"));

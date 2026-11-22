@@ -66,7 +66,13 @@ for _ in $(seq 1 100); do
 done
 "$BIN/fleetctl" session list | awk -F '\t' -v id="$SID" '$1==id && ($4=="Running" || $4=="Recovering") {found=1} END{exit !found}'
 
-"$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 >"$RUNTIME/timeline"
+# El runner puede seguir emitiendo el terminal mientras el daemon reanuda el
+# ingesta; se espera con plazo acotado en vez de asumir que ya está persistido.
+for _ in $(seq 1 150); do
+  "$BIN/fleetctl" timeline "$SID" --since 0 --limit 100 >"$RUNTIME/timeline"
+  grep -q 'turn_completed.Completed' "$RUNTIME/timeline" && break
+  sleep 0.1
+done
 for expected in 'delta.Hello' 'delta.from fake' 'tool_completed' 'turn_completed.Completed'; do
   grep -q "$expected" "$RUNTIME/timeline" || { echo "FAIL: missing $expected in replay"; exit 1; }
 done

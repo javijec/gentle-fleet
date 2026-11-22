@@ -204,6 +204,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-ssh"
+version = "0.1.0"
+dependencies = [
+ "fleet-domain",
+ "fleet-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fleet-store-sqlite"
 version = "0.1.0"
 dependencies = [
@@ -218,6 +228,8 @@ version = "0.1.0"
 dependencies = [
  "fleet-domain",
  "fleet-protocol",
+ "fleet-ssh",
+ "serde_json",
  "uuid",
 ]
 

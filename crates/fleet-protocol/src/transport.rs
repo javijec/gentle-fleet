@@ -44,6 +44,16 @@ pub enum LocalStream {
 }
 
 impl LocalStream {
+    /// Cierre de medio canal para soportar half-close en el bridge SSH.
+    pub fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.shutdown(how),
+            #[cfg(windows)]
+            LocalStream::Tcp(stream) => stream.shutdown(how),
+        }
+    }
+
     pub fn try_clone(&self) -> io::Result<Self> {
         match self {
             #[cfg(unix)]

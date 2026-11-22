@@ -11,4 +11,6 @@ path = "src/main.rs"
 [dependencies]
 fleet-domain = { path = "../fleet-domain" }
 fleet-protocol = { path = "../fleet-protocol" }
+fleet-ssh = { path = "../fleet-ssh" }
+serde_json.workspace = true
 uuid.workspace = true

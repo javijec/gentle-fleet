@@ -1,32 +1,63 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
 use std::io::{BufReader, BufWriter};
+use std::sync::Mutex;
 
 use fleet_domain::EventKind;
-use fleet_protocol::transport::{connect, expected_token, LocalStream};
+use fleet_protocol::transport::{connect, expected_token};
 use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
+use fleet_ssh::{
+    find_host, load_hosts, save_hosts, FleetReader, FleetWriter, HostConfig, SshStream,
+};
+
+static SELECTED_HOST: Mutex<Option<String>> = Mutex::new(None);
+
+fn selected_host() -> Option<String> {
+    SELECTED_HOST.lock().expect("host lock poisoned").clone()
+}
 
 struct Client {
-    reader: BufReader<LocalStream>,
-    writer: BufWriter<LocalStream>,
+    reader: BufReader<FleetReader>,
+    writer: BufWriter<FleetWriter>,
     next_id: u64,
+    remote: bool,
 }
 
 impl Client {
-    fn connect() -> Result<Self, String> {
-        let stream =
-            connect().map_err(|e| format!("cannot connect to fleetd (is it running?): {e}"))?;
+    fn connect(host: Option<&str>) -> Result<Self, String> {
+        let (reader_stream, writer_stream, remote) = match host {
+            None => {
+                let local = connect()
+                    .map_err(|e| format!("cannot connect to local fleetd (is it running?): {e}"))?;
+                let reader = local
+                    .try_clone()
+                    .map_err(|e| format!("cannot clone local stream: {e}"))?;
+                (FleetReader::Local(reader), FleetWriter::Local(local), false)
+            }
+            Some(alias) => {
+                let config = find_host(alias).map_err(|error| error.to_string())?;
+                let ssh = SshStream::connect(&config).map_err(|error| error.to_string())?;
+                let (reader, writer) = ssh.split().map_err(|error| error.to_string())?;
+                (reader, writer, true)
+            }
+        };
         Ok(Self {
-            reader: BufReader::new(stream.try_clone().map_err(|e| e.to_string())?),
-            writer: BufWriter::new(stream),
+            reader: BufReader::new(reader_stream),
+            writer: BufWriter::new(writer_stream),
             next_id: 0,
+            remote,
         })
     }
 
-    fn hello() -> Request {
+    fn hello(&self) -> Request {
         Request::Hello {
             client_id: "fleetctl".into(),
-            token: expected_token().ok().flatten(),
+            // El token local nunca viaja por SSH: el bridge lo inyecta en el host remoto.
+            token: if self.remote {
+                None
+            } else {
+                expected_token().ok().flatten()
+            },
         }
     }
 
@@ -45,9 +76,17 @@ impl Client {
     }
 
     fn read_frame(&mut self) -> Result<Frame, String> {
-        read_frame(&mut self.reader)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "fleetd closed the connection".into())
+        match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
+            Some(frame) => Ok(frame),
+            None => {
+                let diagnostics = self.writer.get_ref().ssh_diagnostics();
+                if diagnostics.is_empty() {
+                    Err("fleetd closed the connection".into())
+                } else {
+                    Err(format!("SSH transport closed: {}", diagnostics.join(" | ")))
+                }
+            }
+        }
     }
 
     fn call(&mut self, request: Request) -> Result<Response, String> {
@@ -78,10 +117,26 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let all_args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args = all_args.clone();
+    if args.first().map(String::as_str) == Some("--host") {
+        let alias = args
+            .get(1)
+            .ok_or_else(|| "--host requires an alias".to_string())?
+            .clone();
+        // Los comandos de gestión de hosts no necesitan conexión.
+        if args.get(2).map(String::as_str) != Some("host") {
+            find_host(&alias).map_err(|error| error.to_string())?;
+        }
+        *SELECTED_HOST.lock().expect("host lock poisoned") = Some(alias);
+        args = args[2..].to_vec();
+    }
     let Some(command) = args.first() else {
         return Err(usage());
     };
+    if command == "host" {
+        return host_command(&args[1..]);
+    }
     match command.as_str() {
         "workspace" => workspace(&args[1..]),
         "session" => session(&args[1..]),
@@ -99,8 +154,8 @@ fn run() -> Result<(), String> {
         "approval" => approval(&args[1..]),
         "answer" => answer(&args[1..]),
         "agents" => {
-            let mut client = Client::connect()?;
-            client.call(Client::hello())?;
+            let mut client = Client::connect(selected_host().as_deref())?;
+            client.call(client.hello())?;
             match client.call(Request::ListAgents)? {
                 Response::Agents { agents } => {
                     for agent in agents {
@@ -122,14 +177,120 @@ fn run() -> Result<(), String> {
     }
 }
 
+fn host_command(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            for host in load_hosts().map_err(|error| error.to_string())? {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    host.alias,
+                    host.destination,
+                    host.bridge_path,
+                    host.last_status.unwrap_or_else(|| "unknown".into())
+                );
+            }
+            Ok(())
+        }
+        Some("show") => {
+            let alias = args.get(1).ok_or_else(|| "host show <alias>".to_string())?;
+            let host = find_host(alias).map_err(|error| error.to_string())?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&host).map_err(|e| e.to_string())?
+            );
+            Ok(())
+        }
+        Some("add") => {
+            let alias = args
+                .get(1)
+                .ok_or_else(|| "host add <alias> <destination>".to_string())?
+                .clone();
+            let destination = args
+                .get(2)
+                .ok_or_else(|| "host add <alias> <destination>".to_string())?
+                .clone();
+            let mut bridge = None;
+            let mut port = None;
+            let mut identity = None;
+            let mut index = 3;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--bridge" => {
+                        bridge = Some(args.get(index + 1).ok_or("missing bridge path")?.clone());
+                        index += 2;
+                    }
+                    "--port" => {
+                        port = Some(
+                            args.get(index + 1)
+                                .ok_or("missing port")?
+                                .parse::<u16>()
+                                .map_err(|error| format!("invalid port: {error}"))?,
+                        );
+                        index += 2;
+                    }
+                    "--identity" => {
+                        identity = Some(args.get(index + 1).ok_or("missing identity")?.clone());
+                        index += 2;
+                    }
+                    other => return Err(format!("unknown host option: {other}")),
+                }
+            }
+            let mut hosts = load_hosts().map_err(|error| error.to_string())?;
+            if hosts.iter().any(|host| host.alias == alias) {
+                return Err(format!("host `{alias}` already exists"));
+            }
+            hosts.push(HostConfig {
+                alias: alias.clone(),
+                destination,
+                bridge_path: bridge.unwrap_or_else(|| "/usr/local/bin/fleet-ssh-bridge".into()),
+                port,
+                identity_file: identity,
+                expected_host_key: None,
+                last_status: None,
+                protocol_version: None,
+            });
+            save_hosts(&hosts).map_err(|error| error.to_string())?;
+            println!("added\t{alias}");
+            Ok(())
+        }
+        Some("remove") => {
+            let alias = args
+                .get(1)
+                .ok_or_else(|| "host remove <alias>".to_string())?;
+            let hosts: Vec<HostConfig> = load_hosts()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|host| &host.alias != alias)
+                .collect();
+            save_hosts(&hosts).map_err(|error| error.to_string())?;
+            println!("removed\t{alias}");
+            Ok(())
+        }
+        Some("check") => {
+            let alias = args
+                .get(1)
+                .ok_or_else(|| "host check <alias>".to_string())?;
+            let mut client = Client::connect(Some(alias))?;
+            match client.call(client.hello())? {
+                Response::Hello { wire, .. } => {
+                    println!("connected\t{alias}\t{wire}");
+                    Ok(())
+                }
+                other => Err(format!("unexpected Hello response: {other:?}")),
+            }
+        }
+        _ => Err("usage: fleetctl host add|list|show|remove|check ...".into()),
+    }
+}
+
 fn usage() -> String {
     "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents"
         .into()
 }
 
 fn workspace(args: &[String]) -> Result<(), String> {
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match args.first().map(String::as_str) {
         Some("add") => {
             let path = args.get(1).ok_or_else(usage)?;
@@ -155,8 +316,8 @@ fn workspace(args: &[String]) -> Result<(), String> {
 }
 
 fn session(args: &[String]) -> Result<(), String> {
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match args.first().map(String::as_str) {
         Some("create") => {
             let workspace = flag(args, "--workspace").ok_or_else(usage)?;
@@ -197,8 +358,8 @@ fn session(args: &[String]) -> Result<(), String> {
 
 fn native_sessions(args: &[String]) -> Result<(), String> {
     let provider_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::ListNativeSessions { provider_id })? {
         Response::NativeSessions { sessions } => {
             for session in sessions {
@@ -226,8 +387,8 @@ fn import_history(args: &[String]) -> Result<(), String> {
     let operation_key = args.get(3).cloned().unwrap_or_else(|| {
         std::env::var("FLEET_OPERATION_KEY").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
     });
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::ImportNativeHistory {
         session_id,
         provider_id,
@@ -244,8 +405,8 @@ fn import_history(args: &[String]) -> Result<(), String> {
 
 fn controls(args: &[String]) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::ListControls { session_id })? {
         Response::Controls { controls } => {
             for control in controls {
@@ -268,8 +429,8 @@ fn set_control(args: &[String]) -> Result<(), String> {
     let name = args.get(1).ok_or_else(usage)?.clone();
     let value = args.get(2).ok_or_else(usage)?.clone();
     let scope = args.get(3).cloned().unwrap_or_else(|| "turn".into());
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::SetControl {
         session_id,
         name,
@@ -292,8 +453,8 @@ fn set_control(args: &[String]) -> Result<(), String> {
 fn interrupt(args: &[String]) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let turn_id = args.get(1).ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::InterruptTurn {
         session_id,
         turn_id,
@@ -319,8 +480,8 @@ fn prompt(args: &[String]) -> Result<(), String> {
         .ok()
         .filter(|key| !key.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::SendPrompt {
         session_id,
         text,
@@ -340,8 +501,8 @@ fn prompt(args: &[String]) -> Result<(), String> {
 
 fn stop(args: &[String]) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::StopSession { session_id })? {
         Response::Stopped { session_id } => {
             println!("stopped\t{session_id}");
@@ -363,8 +524,8 @@ fn watch(args: &[String]) -> Result<(), String> {
         .map(|value| value.parse::<usize>())
         .transpose()
         .map_err(|e| format!("invalid --count: {e}"))?;
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     let request_id = client.send(Request::SubscribeTimeline {
         session_id: session_id.clone(),
         since_seq: since,
@@ -465,8 +626,8 @@ fn timeline(args: &[String]) -> Result<(), String> {
         .transpose()
         .map_err(|e| format!("invalid --limit: {e}"))?
         .unwrap_or(256);
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::ReadTimeline {
         session_id,
         since_seq: since,
@@ -489,8 +650,8 @@ fn timeline(args: &[String]) -> Result<(), String> {
 
 fn operation(args: &[String]) -> Result<(), String> {
     let key = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::GetOperation { operation_key: key })? {
         Response::Operation { operation } => {
             println!(
@@ -509,8 +670,8 @@ fn operation(args: &[String]) -> Result<(), String> {
 
 fn approvals(args: &[String]) -> Result<(), String> {
     let session_id = flag(args, "--session");
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::ListApprovals { session_id })? {
         Response::Approvals { approvals } => {
             for approval in approvals {
@@ -531,8 +692,8 @@ fn approvals(args: &[String]) -> Result<(), String> {
 
 fn approval(args: &[String]) -> Result<(), String> {
     let approval_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     match client.call(Request::GetApproval { approval_id })? {
         Response::Approval { approval } => {
             println!(
@@ -556,8 +717,8 @@ fn answer(args: &[String]) -> Result<(), String> {
         .ok()
         .filter(|key| !key.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mut client = Client::connect()?;
-    client.call(Client::hello())?;
+    let mut client = Client::connect(selected_host().as_deref())?;
+    client.call(client.hello())?;
     // Argumentos tipados opcionales: name=value[,value] ...
     let arguments = args[2..]
         .iter()

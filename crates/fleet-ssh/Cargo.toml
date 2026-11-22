@@ -1,0 +1,15 @@
+[package]
+name = "fleet-ssh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fleet-ssh-bridge"
+path = "src/bridge.rs"
+
+[dependencies]
+fleet-domain = { path = "../fleet-domain" }
+fleet-protocol = { path = "../fleet-protocol" }
+serde.workspace = true
+serde_json.workspace = true

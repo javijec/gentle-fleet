@@ -52,34 +52,34 @@ fn is_value_delimiter(ch: char) -> bool {
         )
 }
 
-fn find_ci(haystack: &str, needle: &str, from: usize) -> Option<usize> {
-    haystack
-        .get(from..)?
-        .to_ascii_lowercase()
-        .find(&needle.to_ascii_lowercase())
-        .map(|offset| from + offset)
-}
-
 fn starts_with_ci(text: &str, marker: &str) -> bool {
     text.get(..marker.len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
 }
 
 fn redact_urls(message: &str) -> String {
+    // Process URLs in encounter order. A later HTTPS address must never
+    // cause an earlier HTTP address (including credentials) to be copied.
     let mut output = String::with_capacity(message.len());
     let mut rest = message;
-    while let Some(index) = find_ci(rest, "https://", 0).or_else(|| find_ci(rest, "http://", 0)) {
-        output.push_str(&rest[..index]);
-        output.push_str("[url redacted]");
-        let after = &rest[index..];
-        let end = after
-            .char_indices()
-            .find(|(_, ch)| is_value_delimiter(*ch))
-            .map(|(offset, _)| offset)
-            .unwrap_or(after.len());
-        rest = &after[end..];
+    while !rest.is_empty() {
+        if starts_with_ci(rest, "https://") || starts_with_ci(rest, "http://") {
+            // Query parameters belong to the URL and must be redacted too.
+            // Do not end at '?' or '&' as the credential value may follow.
+            let end = rest
+                .find(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(ch, '"' | '\'' | ',' | ';' | ')' | ']' | '}' | '<' | '>')
+                })
+                .unwrap_or(rest.len());
+            output.push_str("[url redacted]");
+            rest = &rest[end..];
+        } else {
+            let ch = rest.chars().next().expect("non-empty URL input");
+            output.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
     }
-    output.push_str(rest);
     output
 }
 
@@ -104,132 +104,146 @@ fn redact_native_ids(message: &str) -> String {
     redacted
 }
 
-/// Redacta tokens y rutas de credenciales preservando la clave diagnóstica
-/// (`api_key=[credential redacted]`, `Authorization: [credential redacted]`).
-fn redact_credentials(message: &str) -> String {
-    const MARKER: &str = "[credential redacted]";
-    const KEY_MARKERS: [&str; 8] = [
-        "api_key=",
-        "api-key=",
-        "token=",
-        "password=",
-        "secret=",
-        "client_secret=",
-        "client-secret=",
-        "authorization=",
-    ];
-    const TOKEN_PREFIXES: [&str; 9] = [
-        "sk-",
-        "sk-proj-",
-        "ghp_",
-        "gho_",
-        "ghu_",
-        "github_pat_",
-        "xoxb-",
-        "AIza",
-        "ya29.",
-    ];
-    const PATH_MARKERS: [&str; 16] = [
-        "auth.json",
-        "service.json",
-        "permission-mode.json",
-        "/.codex/",
-        "/.pi/",
-        "/.gentle-shell/",
-        "/.config/opencode/",
-        "/Users/",
-        "/home/",
-        r"C:\Users\",
-        r"\AppData\",
-        r"\.codex\",
-        r"\.pi\",
-        r"\.gentle-shell\",
-        "/root/",
-        "/private/var/",
-    ];
-
-    fn span_end(value: &str, quoted: bool) -> usize {
-        let rest = if quoted && !value.is_empty() {
-            &value[1..]
-        } else {
-            value
-        };
-        let len = rest.find(is_value_delimiter).unwrap_or(rest.len());
-        len + usize::from(quoted && !value.is_empty())
-    }
-
-    let mut output = String::with_capacity(message.len());
-    let mut index = 0usize;
-    while index < message.len() {
-        let rest = &message[index..];
-        let mut matched: Option<(usize, usize, String)> = None;
-
-        // Authorization:Bearer <token> (sin espacio tras los dos puntos).
-        if starts_with_ci(rest, "bearer") {
-            let offset = 0usize;
-            let after = &rest["bearer".len()..];
-            let value_start = after
-                .find(|ch: char| !(ch.is_whitespace() || ch == ':' || ch == '='))
-                .unwrap_or(after.len());
-            let value = &after[value_start..];
-            let value_end = value.find(is_value_delimiter).unwrap_or(value.len());
-            matched = Some((
-                offset,
-                offset + "bearer".len() + value_start + value_end,
-                MARKER.into(),
-            ));
+/// Number of bytes belonging to a secret value. Quoted values consume
+/// escaped quotes and embedded whitespace; unquoted values end at a delimiter.
+fn secret_value_len(value: &str) -> usize {
+    let quote = match value.chars().next() {
+        Some(ch @ ('"' | '\'')) => ch,
+        _ => return value.find(is_value_delimiter).unwrap_or(value.len()),
+    };
+    let mut escaped = false;
+    for (offset, ch) in value.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return offset + ch.len_utf8();
         }
+    }
+    value.len()
+}
 
-        for marker in KEY_MARKERS {
-            if let Some(offset) = find_ci(rest, marker, 0) {
-                if matched
-                    .as_ref()
-                    .is_some_and(|(start, _, _)| *start <= offset)
-                {
-                    continue;
-                }
-                let after = &rest[offset + marker.len()..];
-                let quoted = after.starts_with('"') || after.starts_with('\'');
-                let end = offset + marker.len() + span_end(after, quoted);
-                let replacement = format!("{marker}{MARKER}");
-                matched = Some((offset, end, replacement));
+/// Detect a sensitive field only at the current cursor position. Looking
+/// ahead for later fields used to bypass earlier bare tokens and paths.
+fn sensitive_field_at(text: &str) -> Option<(usize, String)> {
+    const FIELDS: &[&str] = &[
+        "api_key", "api-key", "access_token", "refresh_token",
+        "client_secret", "client-secret", "authorization", "password",
+        "secret_key", "private_key", "token", "secret",
+    ];
+    for field in FIELDS {
+        if !starts_with_ci(text, field) {
+            continue;
+        }
+        let mut offset = field.len();
+        // In JSON, the key's closing quote precedes the assignment colon.
+        if matches!(text[offset..].chars().next(), Some('"' | '\'')) {
+            offset += 1;
+        }
+        while let Some(ch) = text[offset..].chars().next() {
+            if !ch.is_whitespace() {
                 break;
             }
+            offset += ch.len_utf8();
         }
-        if matched.is_none() {
-            for prefix in TOKEN_PREFIXES {
-                if starts_with_ci(rest, prefix) {
-                    let offset = 0usize;
-                    let after = rest;
-                    let end = after.find(is_value_delimiter).unwrap_or(after.len());
-                    matched = Some((offset, offset + end, MARKER.into()));
-                    break;
-                }
-            }
+        if !matches!(text[offset..].chars().next(), Some(':' | '=')) {
+            continue;
         }
-        if matched.is_none() {
-            for marker in PATH_MARKERS {
-                if starts_with_ci(rest, marker) {
-                    let offset = 0usize;
-                    let after = rest;
-                    let end = after.find(is_value_delimiter).unwrap_or(after.len());
-                    matched = Some((offset, offset + end, MARKER.into()));
-                    break;
-                }
+        offset += 1;
+        while let Some(ch) = text[offset..].chars().next() {
+            if !ch.is_whitespace() {
+                break;
             }
+            offset += ch.len_utf8();
+        }
+        let value = &text[offset..];
+        if value.is_empty() {
+            continue;
         }
 
-        if let Some((start, end, replacement)) = matched {
-            output.push_str(&rest[..start]);
-            output.push_str(&replacement);
-            index += end;
-        } else {
-            let ch = rest.chars().next().expect("non-empty rest");
-            output.push(ch);
-            index += ch.len_utf8();
+        // Authorization: Bearer abc and authorization=Bearer abc are a
+        // single sensitive value, not just the harmless word Bearer.
+        let mut len = secret_value_len(value);
+        if starts_with_ci(value, "Bearer")
+            && value[6..].chars().next().is_some_and(char::is_whitespace)
+        {
+            len = 6;
+            while let Some(ch) = value[len..].chars().next() {
+                if !ch.is_whitespace() {
+                    break;
+                }
+                len += ch.len_utf8();
+            }
+            len += secret_value_len(&value[len..]);
         }
+        if len == 0 {
+            continue;
+        }
+        let replacement = if let Some(quote @ ('"' | '\'')) = value.chars().next() {
+            format!("{}{}[credential redacted]{}", &text[..offset], quote, quote)
+        } else {
+            format!("{}[credential redacted]", &text[..offset])
+        };
+        return Some((offset + len, replacement));
     }
-    output
+    None
+}
+
+/// Walk from left to right without copying over an earlier secret when a
+/// later assignment, bearer token or credential path is also present.
+fn redact_credentials(message: &str) -> String {
+    const MARKER: &str = "[credential redacted]";
+    const TOKEN_PREFIXES: &[&str] = &[
+        "sk-", "sk-proj-", "ghp_", "gho_", "ghu_", "github_pat_",
+        "xoxb-", "AIza", "ya29.",
+    ];
+    const PATH_MARKERS: &[&str] = &[
+        "auth.json", "service.json", "permission-mode.json",
+        "/.codex/", "/.pi/", "/.gentle-shell/", "/.config/opencode/",
+        "/Users/", "/home/", r"C:\Users\", r"\AppData\",
+        r"\.codex\", r"\.pi\", r"\.gentle-shell\", "/root/", "/private/var/",
+    ];
+
+    let mut safe = String::with_capacity(message.len());
+    let mut rest = message;
+    while !rest.is_empty() {
+        if let Some((len, replacement)) = sensitive_field_at(rest) {
+            safe.push_str(&replacement);
+            rest = &rest[len..];
+            continue;
+        }
+        if TOKEN_PREFIXES.iter().any(|prefix| starts_with_ci(rest, prefix))
+            || PATH_MARKERS.iter().any(|path| starts_with_ci(rest, path))
+        {
+            let len = rest.find(is_value_delimiter).unwrap_or(rest.len());
+            safe.push_str(MARKER);
+            rest = &rest[len..];
+            continue;
+        }
+        if starts_with_ci(rest, "Bearer")
+            && rest[6..].chars().next().is_some_and(char::is_whitespace)
+        {
+            let mut len = 6;
+            while let Some(ch) = rest[len..].chars().next() {
+                if !ch.is_whitespace() {
+                    break;
+                }
+                len += ch.len_utf8();
+            }
+            let value_len = secret_value_len(&rest[len..]);
+            if value_len > 0 {
+                safe.push_str("Bearer ");
+                safe.push_str(MARKER);
+                rest = &rest[len + value_len..];
+                continue;
+            }
+        }
+        let ch = rest.chars().next().expect("non-empty credential input");
+        safe.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    safe
 }
 
 impl std::fmt::Display for AgentError {
@@ -532,6 +546,50 @@ mod tests {
                     || safe.contains("ses_<id>")
             );
         }
+    }
+
+    #[test]
+    fn redaction_never_skips_earlier_secret_when_later_key_is_present() {
+        let original = "sk-FAKEFIRSTTOKEN123456 api_key=FAKESECONDVALUE123456 \
+            /home/fixture/.codex/auth.json token=\"FAKETHIRDVALUE with spaces\"";
+        let safe = redact_provider_error(original);
+        for secret in [
+            "sk-FAKEFIRSTTOKEN123456",
+            "FAKESECONDVALUE123456",
+            "/home/fixture",
+            "FAKETHIRDVALUE",
+        ] {
+            assert!(!safe.contains(secret), "leaked {secret} in {safe}");
+        }
+        assert_eq!(safe.matches("[credential redacted]").count(), 4);
+    }
+
+    #[test]
+    fn redaction_handles_multiple_http_https_urls_in_source_order() {
+        let original = "GET http://alice:FAKEPASS@local.test/?user=private&secret=FAKEQUERYVALUE \
+            then https://other.test/?api_key=FAKEOTHERQUERY";
+        let safe = redact_provider_error(original);
+        for secret in [
+            "http://", "https://", "FAKEPASS", "private",
+            "FAKEQUERYVALUE", "FAKEOTHERQUERY",
+        ] {
+            assert!(!safe.contains(secret), "leaked {secret} in {safe}");
+        }
+        assert_eq!(safe.matches("[url redacted]").count(), 2);
+    }
+
+    #[test]
+    fn redaction_handles_json_colon_values_and_bearer_credentials() {
+        let original = r#"{"api_key":"FAKEJSONSECRET123","token": "FAKESECONDJSONVALUE", \
+"authorization": "Bearer FAKETHIRDTOKEN"} Authorization:Bearer FAKEFOURTHTOKEN"#;
+        let safe = redact_provider_error(original);
+        for secret in [
+            "FAKEJSONSECRET123", "FAKESECONDJSONVALUE", "FAKETHIRDTOKEN",
+            "FAKEFOURTHTOKEN",
+        ] {
+            assert!(!safe.contains(secret), "leaked {secret} in {safe}");
+        }
+        assert_eq!(safe.matches("[credential redacted]").count(), 4);
     }
 
     #[test]

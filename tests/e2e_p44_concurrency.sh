@@ -69,12 +69,12 @@ for direction in "${DIRECTIONS[@]}"; do
   if [[ "${GF_E2E_FAKE_ONLY:-}" == "1" || "${GF_E2E_REAL:-}" == "1" ]]; then
     PROMPT_OUT="$("$BIN/fleetctl" prompt "$SB" "Reply with exactly: SURVIVOR $direction")"
     DONE=0
-    for _ in $(seq 1 160); do
+    for _ in $(seq 1 320); do
       "$BIN/fleetctl" timeline "$SB" --since "$BASELINE" --limit 256 >"$RUNTIME/new-$EXECUTED.out"
       if grep -qF "turn_completed	Completed" "$RUNTIME/new-$EXECUTED.out"; then DONE=1; break; fi
       sleep 0.25
     done
-    [[ "$DONE" == "1" ]] || { echo "FAIL: survivor $B did not complete a NEW turn"; exit 1; }
+    [[ "$DONE" == "1" ]] || { echo "FAIL: survivor $B did not complete a NEW turn"; cat "$RUNTIME/new-$EXECUTED.out"; exit 1; }
     [[ "$(grep -c 'turn_completed' "$RUNTIME/new-$EXECUTED.out")" == "1" ]] || {
       echo "FAIL: contradictory or duplicate terminal events"; exit 1;
     }

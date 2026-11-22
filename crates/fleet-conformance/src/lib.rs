@@ -592,12 +592,7 @@ pub fn run_provider(provider: &str, options: &Options) -> Vec<CheckResult> {
     results.push(ok_or_fail(provider, "two_client_replay", two_clients));
 
     if options.real {
-        results.push(run_real_chat(
-            &mut client,
-            provider,
-            &session_id,
-            options.timeout,
-        ));
+        results.push(run_real_chat(&mut client, provider, options));
     } else {
         results.push(CheckResult::new(
             provider,
@@ -690,17 +685,38 @@ fn verify_real_chat_events(
     Ok(())
 }
 
-fn run_real_chat(
-    client: &mut ApiClient,
-    provider: &str,
-    session_id: &str,
-    timeout: Duration,
-) -> CheckResult {
+fn run_real_chat(client: &mut ApiClient, provider: &str, options: &Options) -> CheckResult {
     use fleet_protocol::Request;
+    let workspace = match options.workspace_id.as_ref() {
+        Some(workspace) => workspace.clone(),
+        None => {
+            return CheckResult::new(
+                provider,
+                "real_chat",
+                Status::Fail,
+                "explicit workspace required",
+            )
+        }
+    };
+    let session_id = match client.call(Request::CreateSession {
+        workspace_id: workspace,
+        provider_id: provider.into(),
+    }) {
+        Ok(Response::SessionCreated { session }) => session.id,
+        other => {
+            return CheckResult::new(
+                provider,
+                "real_chat",
+                Status::Fail,
+                format!("real session creation failed: {other:?}"),
+            )
+        }
+    };
+    let timeout = options.timeout;
     let token = format!("CONFORMITY {provider} OK");
     let operation_key = format!("conformance-{provider}-{}-{session_id}", std::process::id());
     let prompt = client.call(Request::SendPrompt {
-        session_id: session_id.into(),
+        session_id: session_id.clone(),
         text: format!("Reply with exactly: {token}"),
         operation_key: operation_key.clone(),
     });
@@ -722,7 +738,7 @@ fn run_real_chat(
         }
     };
     let duplicate = client.call(Request::SendPrompt {
-        session_id: session_id.into(),
+        session_id: session_id.clone(),
         text: format!("Reply with exactly: {token}"),
         operation_key: operation_key.clone(),
     });
@@ -730,7 +746,7 @@ fn run_real_chat(
         &duplicate, Ok(Response::PromptAccepted { turn_id: id, .. }) if id == &turn_id
     );
     let conflict = client.call(Request::SendPrompt {
-        session_id: session_id.into(),
+        session_id: session_id.clone(),
         text: "different payload".into(),
         operation_key,
     });
@@ -740,7 +756,7 @@ fn run_real_chat(
             || error.starts_with("conflict:")
     );
     let outcome = client
-        .wait_for_terminal(session_id, &turn_id, timeout)
+        .wait_for_terminal(&session_id, &turn_id, timeout)
         .and_then(|events| {
             verify_real_chat_events(&events, &turn_id, &token, idempotent, conflict_ok)
         });

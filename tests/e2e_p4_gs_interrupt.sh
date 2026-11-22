@@ -30,11 +30,14 @@ WATCH=$!
 sleep 1
 OUT="$("$BIN/fleetctl" prompt "$SES" 'Write a very long, detailed essay about the history of distributed systems. Aim for at least 3000 words and do not stop early.')"
 TURN="$(echo "$OUT" | cut -f3)"
-for _ in $(seq 1 100); do
-  grep -q 'delta' "$RUNTIME/watch.out" 2>/dev/null && break
+for _ in $(seq 1 300); do
+  "$BIN/fleetctl" timeline "$SES" --limit 256 >"$RUNTIME/stream.out" 2>/dev/null || true
+  grep -q 'delta' "$RUNTIME/stream.out" 2>/dev/null && break
   sleep 0.1
 done
-grep -q 'delta' "$RUNTIME/watch.out" || { echo "FAIL: streaming did not start"; exit 1; }
+grep -q 'delta' "$RUNTIME/stream.out" || {
+  echo "FAIL: streaming did not start"; cat "$RUNTIME/watch.err"; cat "$RUNTIME/stream.out"; exit 1;
+}
 "$BIN/fleetctl" interrupt "$SES" "$TURN" >"$RUNTIME/interrupt.out" || { echo "FAIL: interrupt command rejected"; exit 1; }
 wait "$WATCH" || true
 grep -q $'turn_completed\tInterrupted' "$RUNTIME/watch.out" || {

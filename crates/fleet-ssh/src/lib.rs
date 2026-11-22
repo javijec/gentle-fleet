@@ -287,7 +287,13 @@ impl SshStream {
             .arg("-o")
             .arg("StrictHostKeyChecking=yes")
             .arg("-o")
-            .arg("ExitOnForwardFailure=yes");
+            .arg("ExitOnForwardFailure=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
+            .arg("-o")
+            .arg("ServerAliveInterval=15")
+            .arg("-o")
+            .arg("ServerAliveCountMax=2");
         if let Some(port) = host.port {
             command.arg("-p").arg(port.to_string());
         }

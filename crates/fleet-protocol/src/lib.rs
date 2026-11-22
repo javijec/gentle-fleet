@@ -9,6 +9,9 @@ use fleet_domain::{Event, OperationId, ProviderId, SessionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 pub const WIRE: &str = "fleet-v1-p2";
+/// Hard limit for one serialized Fleet JSONL frame (including newline).
+/// Shared by the daemon, CLI and SSH bridge to avoid unbounded read_line().
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub mod runner;
 pub mod transport;
 
@@ -216,19 +219,35 @@ pub enum Frame {
 pub fn write_frame<W: Write>(writer: &mut W, frame: &Frame) -> io::Result<()> {
     let line =
         serde_json::to_string(frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if line.len() + 1 > MAX_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Fleet frame exceeds maximum size",
+        ));
+    }
     writer.write_all(line.as_bytes())?;
     writer.write_all(b"\n")?;
     writer.flush()
 }
 
 pub fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Frame>> {
-    let mut line = String::new();
-    let read = reader.read_line(&mut line)?;
+    // A read limit protects all transports, including a malicious SSH peer.
+    // JSONL requires a newline; a truncated frame must never be accepted.
+    let mut line = Vec::new();
+    let read = (&mut *reader)
+        .take((MAX_FRAME_BYTES + 1) as u64)
+        .read_until(b'\n', &mut line)?;
     if read == 0 {
         return Ok(None);
     }
+    if read > MAX_FRAME_BYTES || line.last() != Some(&b'\n') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Fleet frame exceeds limit or is incomplete",
+        ));
+    }
     let frame =
-        serde_json::from_str(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        serde_json::from_slice(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(Some(frame))
 }
 
@@ -296,6 +315,21 @@ mod tests {
         assert!(session.model.is_none());
         assert!(session.effort.is_none());
         assert!(!session.externally_active);
+    }
+
+    #[test]
+    fn rejects_unterminated_and_oversized_frames_without_unbounded_allocation() {
+        let mut incomplete = io::BufReader::new(br#"{"kind":"request"}"#.as_slice());
+        assert_eq!(
+            read_frame(&mut incomplete).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let oversized = vec![b'x'; MAX_FRAME_BYTES + 10];
+        let mut reader = io::BufReader::new(oversized.as_slice());
+        assert_eq!(
+            read_frame(&mut reader).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]

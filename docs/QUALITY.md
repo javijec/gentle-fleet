@@ -196,10 +196,10 @@ P4.3-H se considera **CERRADA EN LINUX con limitaciones explícitas**. Estos res
 
 | Validación | Resultado |
 |---|---|
-| 113 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
-| 17 E2E deterministas (14 P1–P3 + 3 P4.4) | PASS |
+| 118 tests unitarios, fmt/check/clippy/test/build, `git diff --check` | PASS |
+| 19 E2E deterministas (14 P1–P3 + 5 P4.4) | PASS |
 | 8 Codex + 8 Pi + 6 Gentle Shell smokes + conformidad real | PASS |
-| 6 pares de proveedores aislados y auditoría de secretos | PASS |
+| 12 direcciones de aislamiento, redacción, aprobaciones y auditoría de secretos | PASS |
 | Permisos interactivos/perfiles Gentle Shell | UNTESTED documentado |
 
 Detalle en [`P4_4_RESULTS.md`](P4_4_RESULTS.md).
@@ -207,4 +207,4 @@ Detalle en [`P4_4_RESULTS.md`](P4_4_RESULTS.md).
 
 ### P4.4-H — Revalidación de conformidad
 
-El framework ya no permite declarar PASS sin workspace explícito, terminal `Completed` del turno correcto ni dos conexiones autenticadas para replay. Los scripts P4.4 no omiten pares por error ni ejecutan el modo real dos veces. El CI incorpora tres E2E FakeDriver explícitos; estos prueban contratos, no sustituyen smokes nativos. Para el cierre definitivo deben verificarse en el último commit la matriz de OpenCode/Codex/Pi/Gentle Shell, la ejecución opt-in real y la ausencia de P0/P1. Historial externo de Gentle Shell: UNSUPPORTED (bloqueado por identidad). Estado P4.4-H: **EN REVALIDACIÓN**.
+El framework ya no permite declarar PASS sin workspace explícito, terminal `Completed` del turno correcto ni dos conexiones autenticadas para replay. Los scripts P4.4 no omiten pares por error ni ejecutan el modo real dos veces. El CI incorpora tres E2E FakeDriver explícitos; estos prueban contratos, no sustituyen smokes nativos. Para el cierre definitivo deben verificarse en el último commit la matriz de OpenCode/Codex/Pi/Gentle Shell, la ejecución opt-in real y la ausencia de P0/P1. Historial externo de Gentle Shell: UNSUPPORTED (bloqueado por identidad). Estado P4.4-H: **CERRADA EN LINUX** sobre `dd9a2f4`, con 56 celdas de conformidad reales y 12 direcciones verificadas.

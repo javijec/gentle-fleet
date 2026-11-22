@@ -53,3 +53,7 @@ jobs:
         run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_concurrency.sh
       - name: e2e P4.4 privacidad y tokens FakeDriver
         run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_security.sh
+      - name: e2e P4.4 redaccion de credenciales inyectadas
+        run: tests/e2e_p44_redaction.sh
+      - name: e2e P4.4 aprobaciones sin autoaprobacion
+        run: tests/e2e_p44_approvals.sh

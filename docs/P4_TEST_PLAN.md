@@ -196,7 +196,7 @@ CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487
 
 ## 9. Cierre P4.4
 
-Se ejecutaron 113 tests unitarios, 17 E2E deterministas, 22 smokes reales de proveedor y la suite común `fleet-conformance` en modo determinista y real (44 celdas, sin FAIL). Resultado y evidencia en `docs/P4_4_RESULTS.md`. No se ejecutaron pruebas de P5–P7.
+Se ejecutaron 118 tests unitarios, 19 E2E deterministas, 22 smokes reales de proveedor y la suite común `fleet-conformance` en modo determinista y real (56 celdas = 14 × 4, sin FAIL), con 12 direcciones de aislamiento y reportes JSON trazables. Resultado y evidencia en `docs/P4_4_RESULTS.md`. No se ejecutaron pruebas de P5–P7.
 
 
 ### P4.4-H — Regresiones obligatorias tras auditoría

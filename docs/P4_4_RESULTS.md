@@ -1,7 +1,7 @@
 # P4.4 — Conformidad, estabilización y entrega multiproveedor
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026. **Plataforma:** Linux x86_64.
-**Estado:** **P4.4-H — EN REVALIDACIÓN** tras auditoría independiente. P4.3 continúa cerrada (`7446111`); los resultados P4.4 anteriores corresponden al framework previo al endurecimiento y no validan automáticamente el código correctivo.
+**Estado:** **P4.4-H — CERRADA EN LINUX** sobre el commit `dd9a2f4`. P4.3 continúa cerrada (`7446111`). La matriz real de los cuatro proveedores, las 12 direcciones de aislamiento, la auditoría de seguridad, el replay a dos clientes y las regresiones se repitieron sobre el código final.
 
 ## 1. Versiones verificadas
 
@@ -31,7 +31,7 @@ Commit final de documentación: ver sección 9.
 
 Comprobaciones comunes: `agent_registered`, `capability_contract`, `session_lifecycle`, `timeline_integrity`, `two_subscribers`, `control_discovery`, `control_invalid_rejected`, `approval_contract`, `native_discovery_readonly`, `no_autoapproval` y `real_chat` (opt-in). En modo real, `real_chat` adicionalmente comprueba idempotencia: repetir `operation_key` con el mismo payload devuelve el mismo `turn_id` y produce un solo `UserMessage`; cambiar el payload con la misma clave devuelve `Conflict`.
 
-Ejecutores: `tests/e2e_p44_conformity.sh` (determinista y opt-in real), `tests/e2e_p44_concurrency.sh` (seis pares de proveedores) y `tests/e2e_p44_security.sh` (secretos, IDs nativos y permisos de token).
+Ejecutores: `tests/e2e_p44_conformity.sh` (determinista y opt-in real), `tests/e2e_p44_concurrency.sh` (12 direcciones), `tests/e2e_p44_security.sh`, `tests/e2e_p44_redaction.sh` y `tests/e2e_p44_approvals.sh`.
 
 ## 4. Matriz final de conformidad
 
@@ -51,19 +51,19 @@ Estado por celda con evidencia. `PASS` implica aserción ejecutada; `UNTESTED`/`
 | Recuperación P3 | PASS — `e2e_p3_*` | PASS — `e2e_p4_codex_survival` | PASS — `e2e_p4_pi_recovery` | PASS — `e2e_p4_gs_recovery` |
 | Reattach | PASS | PASS | PASS | PASS |
 | Replay | PASS — sin duplicados | PASS — sin duplicados | PASS — sin duplicados | PASS — sin duplicados |
-| Concurrencia | PASS — seis pares deterministas | PASS — seis pares + smokes reales | PASS — seis pares + smokes reales | PASS — seis pares + smoke real con Codex |
+| Concurrencia | PASS — 12 direcciones deterministas | PASS — 12 direcciones + smokes reales | PASS — 12 direcciones + smokes reales | PASS — 12 direcciones + smoke real con Codex |
 | Aislamiento | PASS — matar su runner no afecta a los demás | PASS | PASS | PASS |
 | Stop seguro | PASS — `session_lifecycle` común | PASS | PASS | PASS |
 
-La salida completa con versión, check, estado y detalle está en el JSON producido por `fleet-conformance --json` (44 celdas en modo real).
+La salida completa con versión, check, estado y detalle está en el JSON producido por `fleet-conformance --json` (56 celdas: 14 comprobaciones × 4 proveedores, deterministas y reales).
 
 ## 5. Pruebas ejecutadas sobre el código final
 
-- **113 tests unitarios** (`cargo test --workspace --locked`).
+- **118 tests unitarios** (`cargo test --workspace --locked`).
 - `cargo fmt --all -- --check`, `cargo check --workspace --all-targets --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --locked`, `git diff --check`: **PASS**.
-- **17 E2E deterministas**: 14 de P1–P3 + 3 nuevos de P4.4 → **PASS**.
+- **19 E2E deterministas**: 14 de P1–P3 + 5 nuevos de P4.4 (conformidad, 12 direcciones, seguridad, redacción y aprobaciones) → **PASS**.
 - **8 smokes Codex**, **8 smokes Pi**, **6 smokes Gentle Shell** + `e2e_p44_conformity` real → **PASS**.
-- Conformidad común: 40 celdas deterministas y 44 con `--real`, sin `FAIL`. Los estados no-PASS son `UNSUPPORTED`/`UNTESTED`/`SKIP` justificados.
+- Conformidad común: **56 celdas** (14 × 4) en modo determinista y real, sin `FAIL`. Cada celda no-PASS incluye justificación explícita en el JSON.
 
 ## 6. Hallazgos y correcciones
 
@@ -96,7 +96,7 @@ SQLite V4 sigue siendo el esquema actual; las migraciones V3→V4 y la compatibi
 
 ## 9. Estado final y siguientes etapas
 
-**P4.4-H — EN REVALIDACIÓN.** Los resultados reales anteriores no sustituyen repetir la matriz de cuatro proveedores sobre los cambios de P4.4-H. El CI ejecuta fixtures FakeDriver para las pruebas P4.4 nuevas, y los cuatro proveedores requieren smokes locales explícitos. No se modifica `main` ni se comienza P5.
+**P4.4-H — CERRADA EN LINUX.** Sobre `dd9a2f4` pasaron: 118 tests unitarios, 19 E2E deterministas, 22 smokes reales de proveedor, la matriz real de 56 celdas, las 12 direcciones de aislamiento, la auditoría de secretos, el replay a dos clientes y la aprobación determinista. Los reportes JSON incluyen SHA, rama, plataforma, fecha, versión por proveedor, estado y justificación; se escriben en `FLEET_CONFORMANCE_REPORT_DIR`. No se modifica `main` ni se comienza P5.
 
 Para P5 queda el transporte remoto/SSH conservando el mismo wire; para P6, la interfaz gráfica; para P7, la validación funcional de Windows/macOS y la hardened final del producto.
 
@@ -105,7 +105,7 @@ Para P5 queda el transporte remoto/SSH conservando el mismo wire; para P6, la in
 
 Se cerraron ventanas de falso PASS del framework:
 
-- **Aislamiento:** los seis pares de proveedores son obligatorios, sin `continue` sobre errores de sesión ni éxito con cero casos. Se comprueba supervivencia del runner contrario y se exige turno real completado en modo opt-in o en el fixture FakeDriver.
+- **Aislamiento:** las 12 direcciones son obligatorias, sin `continue` sobre errores de sesión ni éxito con cero casos. Se comprueba terminación real del runner víctima, supervivencia del contrario, estado consistente, timeline contigua, un único terminal nuevo y turno completado en modo opt-in o fixture FakeDriver.
 - **Clientes independientes:** el test anterior enviaba dos `SubscribeTimeline` sobre la misma conexión. El nuevo `two_client_replay` abre dos conexiones autenticadas separadas, compara frames y verifica orden, identidad y `seq` de los eventos entregados.
 - **Identidad del turno:** `real_chat` exige `TurnStarted`, exactamente un `UserMessage`, un solo `TurnCompleted{status:Completed}` del `turn_id` correcto, texto comprobable y operaciones idempotentes. Ya no convierte errores por coincidencia de palabras `model` o `unsupported` en UNTESTED.
 - **Workspace seguro:** `fleet-conformance` exige `--workspace` con ID registrado explícitamente. No selecciona el primer directorio personal del daemon. El script de conformidad crea uno temporal propio.
@@ -116,4 +116,4 @@ Se cerraron ventanas de falso PASS del framework:
 
 **CI correctivo completado:** commit `b5bab0` — [GitHub Actions `44964910718`](https://github.com/javijec/gentle-fleet/actions/runs/44964910718) PASS. Incluye formato, Clippy, tests Rust (redacción de credenciales ficticias), compilación, regresiones P1–P3 y los tres nuevos E2E P4.4 con `GF_E2E_FAKE_ONLY=1`. La prueba de seguridad comprueba todos los tokens de runner mientras cada runner está activo y falla si no encuentra el token esperado.
 
-**Pendiente para cerrar P4.4-H:** repetir `tests/e2e_p44_{conformity,concurrency,security}.sh` sin `GF_E2E_FAKE_ONLY` en Linux con las cuatro herramientas instaladas, activar `GF_E2E_REAL=1` para verificar chat y continuidad tras fallos, conservar el reporte JSON por versión y repetir los smokes específicos afectados. Estas pruebas reales no se ejecutaron en GitHub Actions; no deben confundirse con las fixtures FakeDriver.
+**Cierre de la revalidación real:** se ejecutaron `GF_E2E_REAL=1 GF_KEEP=1 tests/e2e_p44_conformity.sh` (56 celdas PASS con reporte persistido), `GF_E2E_REAL=1 tests/e2e_p44_concurrency.sh` (12/12 direcciones con turno nuevo completado) y `tests/e2e_p44_security.sh`, además de los 22 smokes de proveedor. GitHub Actions ejecuta únicamente fixtures FakeDriver explícitos; no sustituyen esta evidencia real local.

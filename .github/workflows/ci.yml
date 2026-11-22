@@ -57,3 +57,17 @@ jobs:
         run: tests/e2e_p44_redaction.sh
       - name: e2e P4.4 aprobaciones sin autoaprobacion
         run: tests/e2e_p44_approvals.sh
+      - name: e2e P5 transporte SSH local
+        run: |
+          if command -v sshd >/dev/null 2>&1; then
+            tests/e2e_p51_ssh.sh
+          else
+            echo "SKIP: sshd not installed in CI image"
+          fi
+      - name: e2e P5 dos hosts SSH aislados
+        run: |
+          if command -v sshd >/dev/null 2>&1; then
+            tests/e2e_p52_two_hosts.sh
+          else
+            echo "SKIP: sshd not installed in CI image"
+          fi

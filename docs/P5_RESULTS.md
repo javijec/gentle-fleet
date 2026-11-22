@@ -41,7 +41,7 @@ OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0, Gentle Shell 4.8.0 (Pi embebido 1.5.2) 
 
 ## 5. Unitarias, regresiones y CI
 
-- **125 tests unitarios**, `cargo fmt/check/clippy -D warnings/build` y `git diff --check`: PASS.
+- **Suite de tests unitarios**, `cargo fmt/check/clippy -D warnings/build` y `git diff --check`: PASS.
 - 14 E2E deterministas P1–P3 y 5 P4.4: PASS tras la corrección de `e2e_p44_concurrency.sh`.
 - `e2e_p51_ssh.sh` y `e2e_p52_two_hosts.sh`: PASS.
 - CI incorpora ambos scripts P5 con guard `command -v sshd` (SKIP explícito si no hay sshd). Sin modelos de pago.
@@ -63,4 +63,6 @@ Se identificaron riesgos en validación de rutas/comando SSH remoto, recuperabil
 
 Cambios: allowlist de argumentos del bridge seguro frente a shell remoto; campo `expected_host_key` no implementado rechazado en lugar de ignorado; journal cliente 0600 con `fleetctl pending` y reconciliación explícita con `operation <key>`; límite JSONL de 8 MiB; manejo de half-close/errores; recolección del proceso SSH; clasificación SSH basada en errores reales; test con cursor capturado después del primer terminal.
 
-**Estado:** EN REVALIDACIÓN. La ejecución CI anterior `45074936294` corresponde al código anterior a P5-H y no certifica estos cambios. Registrar aquí la URL y SHA del CI final una vez verificado. La matriz opt-in de proveedores reales y el recorrido entre dos máquinas Linux independientes siguen siendo evidencias distintas de los E2E deterministas con FakeDriver.
+**Estado:** EN REVALIDACIÓN. La ejecución CI anterior `45074936294` corresponde al código anterior a P5-H y no certifica estos cambios. El código de P5-H fue validado en el commit `37397a41ecacc8c94d2bbd154cb253d5a5646d1a`: [GitHub Actions #45076529611](https://github.com/javijec/gentle-fleet/actions/runs/45076529611) **PASS**, con fmt, Clippy `-D warnings`, tests Rust, build, regresiones P1–P4.4 y las dos E2E SSH reales sobre localhost (sshd efímero y dos instancias aisladas). La matriz opt-in de proveedores reales y el recorrido entre dos máquinas Linux independientes siguen siendo evidencias distintas de los E2E deterministas con FakeDriver.
+
+**Alcance del cierre:** las correcciones de P5-H pasan CI en Linux x86_64. Esto no demuestra comunicación entre dos máquinas Linux independientes: ese recorrido permanece `UNTESTED`, por lo que el estado de P5 sigue siendo `EN REVALIDACIÓN` y no se comienza P6. Los tests de proveedores reales deben distinguirse de FakeDriver en CI.

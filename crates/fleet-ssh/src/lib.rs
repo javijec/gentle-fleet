@@ -318,14 +318,22 @@ impl SshStream {
             let log = diagnostics.clone();
             std::thread::spawn(move || {
                 let mut reader = io::BufReader::new(stderr);
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                let mut chunk = Vec::with_capacity(4096);
+                loop {
+                    chunk.clear();
+                    // Even a malicious SSH process may emit a never-ending
+                    // stderr line; bound both each read and the 16-entry log.
+                    let read = io::Read::take(&mut reader, 4096)
+                        .read_until(b'\n', &mut chunk)
+                        .unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
                     let mut entries = log.lock().expect("ssh diagnostics poisoned");
                     if entries.len() == 16 {
                         entries.pop_front();
                     }
-                    entries.push_back(line.trim().to_string());
-                    line.clear();
+                    entries.push_back(String::from_utf8_lossy(&chunk).trim().to_string());
                 }
             });
         }

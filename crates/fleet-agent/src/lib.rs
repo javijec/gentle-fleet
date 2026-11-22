@@ -75,7 +75,42 @@ pub fn redact_provider_error(message: &str) -> String {
         result.push_str(rest);
         redacted = result;
     }
-    redacted
+    // Los diagnósticos del proveedor pueden incluir tokens y rutas de
+    // credenciales aunque no contengan una URL ni un ID nativo.
+    let mut safe = String::with_capacity(redacted.len());
+    let mut token = String::new();
+    let mut after_bearer = false;
+    let flush = |safe: &mut String, token: &mut String, after_bearer: &mut bool| {
+        if token.is_empty() {
+            return;
+        }
+        let raw = token.trim_matches(|ch: char| matches!(ch, '"' | '\'' | ',' | ':' | ';'));
+        let credential_file = raw.contains("auth.json")
+            || raw.contains("service.json")
+            || raw.contains("/.codex/")
+            || raw.contains("/.config/opencode/");
+        let credential_token = raw.starts_with("sk-") && raw.len() >= 15
+            || raw.starts_with("ghp_") && raw.len() >= 16
+            || raw.starts_with("github_pat_")
+            || raw.starts_with("sk-proj-");
+        if *after_bearer || credential_token || credential_file {
+            safe.push_str("[credential redacted]");
+        } else {
+            safe.push_str(token);
+        }
+        *after_bearer = raw.eq_ignore_ascii_case("bearer");
+        token.clear();
+    };
+    for ch in redacted.chars() {
+        if ch.is_whitespace() {
+            flush(&mut safe, &mut token, &mut after_bearer);
+            safe.push(ch);
+        } else {
+            token.push(ch);
+        }
+    }
+    flush(&mut safe, &mut token, &mut after_bearer);
+    safe
 }
 
 impl std::fmt::Display for AgentError {
@@ -305,6 +340,27 @@ mod tests {
         assert!(!redacted.contains("per_secret"));
         assert!(!redacted.contains("http://"));
         assert!(redacted.contains("[url redacted]"));
+    }
+
+    #[test]
+    fn provider_error_redaction_filters_injected_native_ids_keys_and_credential_paths() {
+        // Fixtures falsos: no incorporar secretos de sesiones personales.
+        let message = "provider failed: ses_deadbeef0011223344 \
+            sk-CONFORMANCEFAKETOKEN123 Bearer ABCDEFGHIJKLMNOPQ \
+            /home/fixture/.codex/auth.json /home/fixture/.config/opencode/service.json";
+        let safe = redact_provider_error(message);
+        for secret in [
+            "deadbeef0011223344",
+            "sk-CONFORMANCEFAKETOKEN123",
+            "ABCDEFGHIJKLMNOPQ",
+            "auth.json",
+            "service.json",
+            "/home/fixture",
+        ] {
+            assert!(!safe.contains(secret), "leaked fixture: {secret}");
+        }
+        assert!(safe.contains("[credential redacted]"));
+        assert!(safe.contains("ses_<id>"));
     }
 
     #[test]

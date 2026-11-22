@@ -9,7 +9,6 @@ USER_NAME="$(whoami)"
 PIDS=()
 cleanup() {
   for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
-  pkill -f "$BIN/fleet-ssh-bridge" 2>/dev/null || true
   [[ -n "${GF_KEEP:-}" ]] || rm -rf "$BASE"
 }
 trap cleanup EXIT
@@ -54,6 +53,7 @@ start_host a "$PORT_A"
 start_host b "$PORT_B"
 
 export FLEET_SSH_CONFIG="$BASE/hosts.json"
+export FLEET_OPERATION_JOURNAL="$BASE/operations.jsonl"
 "$BIN/fleetctl" host add hosta "$USER_NAME@127.0.0.1" --bridge "$BIN/fleet-ssh-bridge" \
   --port "$PORT_A" --identity "$BASE/a/client_key" >/dev/null
 "$BIN/fleetctl" host add hostb "$USER_NAME@127.0.0.1" --bridge "$BIN/fleet-ssh-bridge" \

@@ -31,34 +31,60 @@ impl AgentError {
     }
 }
 
-/// Quita URLs y IDs nativos de mensajes que van a convertirse en eventos
-/// públicos. Los mensajes de reqwest incluyen la URL completa, que contiene
-/// `ses_*`, `per_*` y otros identificadores opacos del proveedor.
+/// Sanitiza mensajes que van a convertirse en eventos públicos.
+///
+/// Se aplica en todos los puntos donde un error, aviso o diagnóstico nativo
+/// puede llegar a la API: URLs con credenciales en query, tokens con
+/// prefijo, cabeceras `Authorization`, asignaciones `api_key=...`, rutas de
+/// credenciales de los cuatro proveedores en Linux/Windows/macOS y IDs
+/// nativos opacos. La información no sensible se conserva.
 pub fn redact_provider_error(message: &str) -> String {
+    let without_urls = redact_urls(message);
+    let without_ids = redact_native_ids(&without_urls);
+    redact_credentials(&without_ids)
+}
+
+fn is_value_delimiter(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '"' | '\'' | ',' | ';' | ')' | ']' | '}' | '&' | '?' | '\n' | '\r'
+        )
+}
+
+fn find_ci(haystack: &str, needle: &str, from: usize) -> Option<usize> {
+    haystack
+        .get(from..)?
+        .to_ascii_lowercase()
+        .find(&needle.to_ascii_lowercase())
+        .map(|offset| from + offset)
+}
+
+fn starts_with_ci(text: &str, marker: &str) -> bool {
+    text.get(..marker.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
+}
+
+fn redact_urls(message: &str) -> String {
     let mut output = String::with_capacity(message.len());
-    let mut chars = message.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch.is_ascii_whitespace() {
-            output.push(ch);
-            continue;
-        }
-        let token_start = output.len();
-        output.push(ch);
-        while let Some(&next) = chars.peek() {
-            if next.is_ascii_whitespace() {
-                break;
-            }
-            output.push(next);
-            chars.next();
-        }
-        let token = &output[token_start..];
-        if token.starts_with("http://") || token.starts_with("https://") {
-            let replacement = "[url redacted]";
-            output.truncate(token_start);
-            output.push_str(replacement);
-        }
+    let mut rest = message;
+    while let Some(index) = find_ci(rest, "https://", 0).or_else(|| find_ci(rest, "http://", 0)) {
+        output.push_str(&rest[..index]);
+        output.push_str("[url redacted]");
+        let after = &rest[index..];
+        let end = after
+            .char_indices()
+            .find(|(_, ch)| is_value_delimiter(*ch))
+            .map(|(offset, _)| offset)
+            .unwrap_or(after.len());
+        rest = &after[end..];
     }
-    let mut redacted = output;
+    output.push_str(rest);
+    output
+}
+
+fn redact_native_ids(message: &str) -> String {
+    let mut redacted = message.to_string();
     for prefix in ["ses_", "msg_", "per_", "call_", "exec_", "evt_", "sh_"] {
         let mut result = String::with_capacity(redacted.len());
         let mut rest = redacted.as_str();
@@ -75,42 +101,135 @@ pub fn redact_provider_error(message: &str) -> String {
         result.push_str(rest);
         redacted = result;
     }
-    // Los diagnósticos del proveedor pueden incluir tokens y rutas de
-    // credenciales aunque no contengan una URL ni un ID nativo.
-    let mut safe = String::with_capacity(redacted.len());
-    let mut token = String::new();
-    let mut after_bearer = false;
-    let flush = |safe: &mut String, token: &mut String, after_bearer: &mut bool| {
-        if token.is_empty() {
-            return;
-        }
-        let raw = token.trim_matches(|ch: char| matches!(ch, '"' | '\'' | ',' | ':' | ';'));
-        let credential_file = raw.contains("auth.json")
-            || raw.contains("service.json")
-            || raw.contains("/.codex/")
-            || raw.contains("/.config/opencode/");
-        let credential_token = raw.starts_with("sk-") && raw.len() >= 15
-            || raw.starts_with("ghp_") && raw.len() >= 16
-            || raw.starts_with("github_pat_")
-            || raw.starts_with("sk-proj-");
-        if *after_bearer || credential_token || credential_file {
-            safe.push_str("[credential redacted]");
+    redacted
+}
+
+/// Redacta tokens y rutas de credenciales preservando la clave diagnóstica
+/// (`api_key=[credential redacted]`, `Authorization: [credential redacted]`).
+fn redact_credentials(message: &str) -> String {
+    const MARKER: &str = "[credential redacted]";
+    const KEY_MARKERS: [&str; 8] = [
+        "api_key=",
+        "api-key=",
+        "token=",
+        "password=",
+        "secret=",
+        "client_secret=",
+        "client-secret=",
+        "authorization=",
+    ];
+    const TOKEN_PREFIXES: [&str; 9] = [
+        "sk-",
+        "sk-proj-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "github_pat_",
+        "xoxb-",
+        "AIza",
+        "ya29.",
+    ];
+    const PATH_MARKERS: [&str; 16] = [
+        "auth.json",
+        "service.json",
+        "permission-mode.json",
+        "/.codex/",
+        "/.pi/",
+        "/.gentle-shell/",
+        "/.config/opencode/",
+        "/Users/",
+        "/home/",
+        r"C:\Users\",
+        r"\AppData\",
+        r"\.codex\",
+        r"\.pi\",
+        r"\.gentle-shell\",
+        "/root/",
+        "/private/var/",
+    ];
+
+    fn span_end(value: &str, quoted: bool) -> usize {
+        let rest = if quoted && !value.is_empty() {
+            &value[1..]
         } else {
-            safe.push_str(token);
+            value
+        };
+        let len = rest.find(is_value_delimiter).unwrap_or(rest.len());
+        len + usize::from(quoted && !value.is_empty())
+    }
+
+    let mut output = String::with_capacity(message.len());
+    let mut index = 0usize;
+    while index < message.len() {
+        let rest = &message[index..];
+        let mut matched: Option<(usize, usize, String)> = None;
+
+        // Authorization:Bearer <token> (sin espacio tras los dos puntos).
+        if starts_with_ci(rest, "bearer") {
+            let offset = 0usize;
+            let after = &rest["bearer".len()..];
+            let value_start = after
+                .find(|ch: char| !(ch.is_whitespace() || ch == ':' || ch == '='))
+                .unwrap_or(after.len());
+            let value = &after[value_start..];
+            let value_end = value.find(is_value_delimiter).unwrap_or(value.len());
+            matched = Some((
+                offset,
+                offset + "bearer".len() + value_start + value_end,
+                MARKER.into(),
+            ));
         }
-        *after_bearer = raw.eq_ignore_ascii_case("bearer");
-        token.clear();
-    };
-    for ch in redacted.chars() {
-        if ch.is_whitespace() {
-            flush(&mut safe, &mut token, &mut after_bearer);
-            safe.push(ch);
+
+        for marker in KEY_MARKERS {
+            if let Some(offset) = find_ci(rest, marker, 0) {
+                if matched
+                    .as_ref()
+                    .is_some_and(|(start, _, _)| *start <= offset)
+                {
+                    continue;
+                }
+                let after = &rest[offset + marker.len()..];
+                let quoted = after.starts_with('"') || after.starts_with('\'');
+                let end = offset + marker.len() + span_end(after, quoted);
+                let replacement = format!("{marker}{MARKER}");
+                matched = Some((offset, end, replacement));
+                break;
+            }
+        }
+        if matched.is_none() {
+            for prefix in TOKEN_PREFIXES {
+                if starts_with_ci(rest, prefix) {
+                    let offset = 0usize;
+                    let after = rest;
+                    let end = after.find(is_value_delimiter).unwrap_or(after.len());
+                    matched = Some((offset, offset + end, MARKER.into()));
+                    break;
+                }
+            }
+        }
+        if matched.is_none() {
+            for marker in PATH_MARKERS {
+                if starts_with_ci(rest, marker) {
+                    let offset = 0usize;
+                    let after = rest;
+                    let end = after.find(is_value_delimiter).unwrap_or(after.len());
+                    matched = Some((offset, offset + end, MARKER.into()));
+                    break;
+                }
+            }
+        }
+
+        if let Some((start, end, replacement)) = matched {
+            output.push_str(&rest[..start]);
+            output.push_str(&replacement);
+            index += end;
         } else {
-            token.push(ch);
+            let ch = rest.chars().next().expect("non-empty rest");
+            output.push(ch);
+            index += ch.len_utf8();
         }
     }
-    flush(&mut safe, &mut token, &mut after_bearer);
-    safe
+    output
 }
 
 impl std::fmt::Display for AgentError {
@@ -361,6 +480,64 @@ mod tests {
         }
         assert!(safe.contains("[credential redacted]"));
         assert!(safe.contains("ses_<id>"));
+    }
+
+    #[test]
+    fn redaction_covers_inline_keys_headers_urls_paths_and_json() {
+        // Todas las credenciales son ficticias y se generan solo para el test.
+        let cases = [
+            "request failed api_key=sk-FAKEKEY1234567890ABCDEF",
+            "request failed api-key: sk-proj-FAKEKEY1234567890",
+            "Authorization:Bearer FAKEBEARERTOKEN1234567890",
+            "Authorization: Bearer FAKEBEARERTOKEN1234567890",
+            "token='ghp_FAKEGITHUBTOKEN1234567890' rejected",
+            "(github_pat_FAKEGITHUBPAT1234567890) rejected",
+            "GET https://example.test/api?api_key=sk-FAKEQUERYKEY12345 failed",
+            "cannot read /home/fixture/.codex/auth.json",
+            "cannot read /Users/fixture/.pi/agent/auth.json",
+            "cannot read C:\\Users\\fixture\\.gentle-shell\\agent\\auth.json",
+            "cannot read /root/.config/opencode/service.json",
+            "{\"error\":\"auth failed\",\"api_key\":\"sk-FAKEJSONKEY1234567890\"}",
+            "line one ses_deadbeef0011223344\nline two token=sk-FAKEKEY1234567890ABCDEF",
+        ];
+        let secrets = [
+            "sk-FAKEKEY1234567890ABCDEF",
+            "sk-proj-FAKEKEY1234567890",
+            "FAKEBEARERTOKEN1234567890",
+            "ghp_FAKEGITHUBTOKEN1234567890",
+            "github_pat_FAKEGITHUBPAT1234567890",
+            "sk-FAKEQUERYKEY12345",
+            "auth.json",
+            "service.json",
+            "/home/fixture",
+            "/Users/fixture",
+            r"C:\Users\fixture",
+            "/root/.config/opencode",
+            "deadbeef0011223344",
+            "sk-FAKEJSONKEY1234567890",
+        ];
+        for message in cases {
+            let safe = redact_provider_error(message);
+            for secret in secrets {
+                if message.contains(secret) {
+                    assert!(
+                        !safe.contains(secret),
+                        "leaked `{secret}` from `{message}` -> `{safe}`"
+                    );
+                }
+            }
+            assert!(
+                safe.contains("[credential redacted]")
+                    || safe.contains("[url redacted]")
+                    || safe.contains("ses_<id>")
+            );
+        }
+    }
+
+    #[test]
+    fn redaction_preserves_non_sensitive_diagnostics() {
+        let safe = redact_provider_error("permission rejected after 3 retries (exit=17)");
+        assert_eq!(safe, "permission rejected after 3 retries (exit=17)");
     }
 
     #[test]

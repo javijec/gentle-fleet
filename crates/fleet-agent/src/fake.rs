@@ -115,9 +115,17 @@ impl AgentDriver for FakeDriver {
             std::thread::sleep(Duration::from_secs(60));
         }
         if self.config.fail_send {
+            // El valor es una credencial FICTICIA inyectada por el E2E de
+            // redacción; nunca se escribe en logs ni se devuelve sin sanitizar.
+            let injected = std::env::var("FLEET_FAKE_ERROR_SECRET").unwrap_or_default();
+            let message = if injected.is_empty() {
+                "injected fake send failure".to_string()
+            } else {
+                format!("injected fake send failure api_key={injected}")
+            };
             return Err(AgentError {
                 code: "driver_send_failed".into(),
-                message: "injected fake send failure".into(),
+                message,
             });
         }
         self.turns += 1;

@@ -128,9 +128,18 @@ fn secret_value_len(value: &str) -> usize {
 /// ahead for later fields used to bypass earlier bare tokens and paths.
 fn sensitive_field_at(text: &str) -> Option<(usize, String)> {
     const FIELDS: &[&str] = &[
-        "api_key", "api-key", "access_token", "refresh_token",
-        "client_secret", "client-secret", "authorization", "password",
-        "secret_key", "private_key", "token", "secret",
+        "api_key",
+        "api-key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "client-secret",
+        "authorization",
+        "password",
+        "secret_key",
+        "private_key",
+        "token",
+        "secret",
     ];
     for field in FIELDS {
         if !starts_with_ci(text, field) {
@@ -195,14 +204,33 @@ fn sensitive_field_at(text: &str) -> Option<(usize, String)> {
 fn redact_credentials(message: &str) -> String {
     const MARKER: &str = "[credential redacted]";
     const TOKEN_PREFIXES: &[&str] = &[
-        "sk-", "sk-proj-", "ghp_", "gho_", "ghu_", "github_pat_",
-        "xoxb-", "AIza", "ya29.",
+        "sk-",
+        "sk-proj-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "github_pat_",
+        "xoxb-",
+        "AIza",
+        "ya29.",
     ];
     const PATH_MARKERS: &[&str] = &[
-        "auth.json", "service.json", "permission-mode.json",
-        "/.codex/", "/.pi/", "/.gentle-shell/", "/.config/opencode/",
-        "/Users/", "/home/", r"C:\Users\", r"\AppData\",
-        r"\.codex\", r"\.pi\", r"\.gentle-shell\", "/root/", "/private/var/",
+        "auth.json",
+        "service.json",
+        "permission-mode.json",
+        "/.codex/",
+        "/.pi/",
+        "/.gentle-shell/",
+        "/.config/opencode/",
+        "/Users/",
+        "/home/",
+        r"C:\Users\",
+        r"\AppData\",
+        r"\.codex\",
+        r"\.pi\",
+        r"\.gentle-shell\",
+        "/root/",
+        "/private/var/",
     ];
 
     let mut safe = String::with_capacity(message.len());
@@ -213,7 +241,9 @@ fn redact_credentials(message: &str) -> String {
             rest = &rest[len..];
             continue;
         }
-        if TOKEN_PREFIXES.iter().any(|prefix| starts_with_ci(rest, prefix))
+        if TOKEN_PREFIXES
+            .iter()
+            .any(|prefix| starts_with_ci(rest, prefix))
             || PATH_MARKERS.iter().any(|path| starts_with_ci(rest, path))
         {
             let len = rest.find(is_value_delimiter).unwrap_or(rest.len());
@@ -570,8 +600,12 @@ mod tests {
             then https://other.test/?api_key=FAKEOTHERQUERY";
         let safe = redact_provider_error(original);
         for secret in [
-            "http://", "https://", "FAKEPASS", "private",
-            "FAKEQUERYVALUE", "FAKEOTHERQUERY",
+            "http://",
+            "https://",
+            "FAKEPASS",
+            "private",
+            "FAKEQUERYVALUE",
+            "FAKEOTHERQUERY",
         ] {
             assert!(!safe.contains(secret), "leaked {secret} in {safe}");
         }
@@ -584,7 +618,9 @@ mod tests {
 "authorization": "Bearer FAKETHIRDTOKEN"} Authorization:Bearer FAKEFOURTHTOKEN"#;
         let safe = redact_provider_error(original);
         for secret in [
-            "FAKEJSONSECRET123", "FAKESECONDJSONVALUE", "FAKETHIRDTOKEN",
+            "FAKEJSONSECRET123",
+            "FAKESECONDJSONVALUE",
+            "FAKETHIRDTOKEN",
             "FAKEFOURTHTOKEN",
         ] {
             assert!(!safe.contains(secret), "leaked {secret} in {safe}");

@@ -79,8 +79,19 @@ impl Client {
         match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
             Some(frame) => Ok(frame),
             None => {
+                let code = self.writer.get_mut().ssh_exit_code();
                 let diagnostics = self.writer.get_ref().ssh_diagnostics();
-                if diagnostics.is_empty() {
+                let classified = match code {
+                    Some(5) => {
+                        Some("HostKeyRejected: SSH host key verification failed".to_string())
+                    }
+                    Some(6) => Some("AuthFailed or host unreachable".to_string()),
+                    Some(127) => Some("BridgeMissing: remote bridge not found".to_string()),
+                    _ => None,
+                };
+                if let Some(message) = classified {
+                    Err(message)
+                } else if diagnostics.is_empty() {
                     Err("fleetd closed the connection".into())
                 } else {
                     Err(format!("SSH transport closed: {}", diagnostics.join(" | ")))

@@ -153,6 +153,13 @@ pub enum FleetWriter {
 }
 
 impl FleetWriter {
+    pub fn ssh_exit_code(&mut self) -> Option<i32> {
+        match self {
+            FleetWriter::Ssh(writer) => writer.exit_code(),
+            FleetWriter::Local(_) => None,
+        }
+    }
+
     pub fn ssh_diagnostics(&self) -> Vec<String> {
         match self {
             FleetWriter::Ssh(writer) => writer.diagnostics(),
@@ -180,12 +187,21 @@ impl Write for FleetWriter {
 pub struct SshWriter {
     // Se conserva el proceso SSH mientras exista el escritor; al cerrar stdin
     // el bridge termina por EOF, sin afectar a fleetd ni a los runners.
-    _child: Child,
+    child: Child,
     stdin: Option<ChildStdin>,
     diagnostics: std::sync::Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
 impl SshWriter {
+    /// Código de salida del proceso SSH para clasificar fallos de transporte.
+    pub fn exit_code(&mut self) -> Option<i32> {
+        self.child
+            .try_wait()
+            .ok()
+            .flatten()
+            .and_then(|status| status.code())
+    }
+
     /// Últimas líneas de stderr de SSH/bridge, para errores explícitos.
     pub fn diagnostics(&self) -> Vec<String> {
         self.diagnostics
@@ -286,7 +302,7 @@ impl SshStream {
     pub fn split(mut self) -> Result<(FleetReader, FleetWriter), SshError> {
         let stdout = self.stdout.take().ok_or(SshError::SshUnavailable)?;
         let writer = SshWriter {
-            _child: self.child,
+            child: self.child,
             stdin: self.stdin.take(),
             diagnostics: self.diagnostics.clone(),
         };

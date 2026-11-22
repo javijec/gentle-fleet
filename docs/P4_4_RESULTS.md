@@ -1,7 +1,7 @@
 # P4.4 — Conformidad, estabilización y entrega multiproveedor
 
 **Rama:** `feature/p4-multi-provider`. **Fecha:** 22/11/2026. **Plataforma:** Linux x86_64.
-**Estado:** **P4.4-H — CERRADA EN LINUX** sobre el commit `dd9a2f4`. P4.3 continúa cerrada (`7446111`). La matriz real de los cuatro proveedores, las 12 direcciones de aislamiento, la auditoría de seguridad, el replay a dos clientes y las regresiones se repitieron sobre el código final.
+**Estado actual:** **P4.4-H — EN REVALIDACIÓN** tras un hotfix de redacción de secretos en código de producción. El cierre previo correspondió al commit `dd9a2f4`, donde se reportaron la matriz real de cuatro proveedores, las 12 direcciones, el replay a dos clientes y las regresiones. Ese resultado no equivale a reejecutar la matriz real sobre el HEAD posterior. P4.3 continúa cerrada (`7446111`).
 
 ## 1. Versiones verificadas
 
@@ -57,7 +57,7 @@ Estado por celda con evidencia. `PASS` implica aserción ejecutada; `UNTESTED`/`
 
 La salida completa con versión, check, estado y detalle está en el JSON producido por `fleet-conformance --json` (56 celdas: 14 comprobaciones × 4 proveedores, deterministas y reales).
 
-## 5. Pruebas ejecutadas sobre el código final
+## 5. Evidencia histórica de pruebas ejecutadas sobre `dd9a2f4` (antes del hotfix)
 
 - **118 tests unitarios** (`cargo test --workspace --locked`).
 - `cargo fmt --all -- --check`, `cargo check --workspace --all-targets --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --locked`, `git diff --check`: **PASS**.
@@ -96,7 +96,7 @@ SQLite V4 sigue siendo el esquema actual; las migraciones V3→V4 y la compatibi
 
 ## 9. Estado final y siguientes etapas
 
-**P4.4-H — CERRADA EN LINUX.** Sobre `dd9a2f4` pasaron: 118 tests unitarios, 19 E2E deterministas, 22 smokes reales de proveedor, la matriz real de 56 celdas, las 12 direcciones de aislamiento, la auditoría de secretos, el replay a dos clientes y la aprobación determinista. Los reportes JSON incluyen SHA, rama, plataforma, fecha, versión por proveedor, estado y justificación; se escriben en `FLEET_CONFORMANCE_REPORT_DIR`. No se modifica `main` ni se comienza P5.
+**P4.4-H — EN REVALIDACIÓN EN EL HEAD ACTUAL.** En el cierre anterior, sobre `dd9a2f4`, pasaron: 118 tests unitarios, 19 E2E deterministas, 22 smokes reales de proveedor, la matriz real de 56 celdas, las 12 direcciones de aislamiento, la auditoría de secretos, el replay a dos clientes y la aprobación determinista. Los reportes JSON incluyen SHA, rama, plataforma, fecha, versión por proveedor, estado y justificación; se escriben en `FLEET_CONFORMANCE_REPORT_DIR`. No se modifica `main` ni se comienza P5.
 
 Para P5 queda el transporte remoto/SSH conservando el mismo wire; para P6, la interfaz gráfica; para P7, la validación funcional de Windows/macOS y la hardened final del producto.
 
@@ -116,4 +116,11 @@ Se cerraron ventanas de falso PASS del framework:
 
 **CI correctivo completado:** commit `b5bab0` — [GitHub Actions `44964910718`](https://github.com/javijec/gentle-fleet/actions/runs/44964910718) PASS. Incluye formato, Clippy, tests Rust (redacción de credenciales ficticias), compilación, regresiones P1–P3 y los tres nuevos E2E P4.4 con `GF_E2E_FAKE_ONLY=1`. La prueba de seguridad comprueba todos los tokens de runner mientras cada runner está activo y falla si no encuentra el token esperado.
 
-**Cierre de la revalidación real:** se ejecutaron `GF_E2E_REAL=1 GF_KEEP=1 tests/e2e_p44_conformity.sh` (56 celdas PASS con reporte persistido), `GF_E2E_REAL=1 tests/e2e_p44_concurrency.sh` (12/12 direcciones con turno nuevo completado) y `tests/e2e_p44_security.sh`, además de los 22 smokes de proveedor. GitHub Actions ejecuta únicamente fixtures FakeDriver explícitos; no sustituyen esta evidencia real local.
+**Evidencia real anterior al hotfix:** se ejecutaron `GF_E2E_REAL=1 GF_KEEP=1 tests/e2e_p44_conformity.sh` (56 celdas evaluadas, sin `FAIL`, con estados `UNTESTED`/`UNSUPPORTED` justificados y reporte persistido), `GF_E2E_REAL=1 tests/e2e_p44_concurrency.sh` (12/12 direcciones con turno nuevo completado) y `tests/e2e_p44_security.sh`, además de los 22 smokes de proveedor. GitHub Actions ejecuta únicamente fixtures FakeDriver explícitos; no sustituyen esta evidencia real local.
+
+
+## 11. P4.4-H — Hotfix de sanitización posterior al cierre histórico
+
+Se detectaron y corrigieron dos fallas por inspección estática: una clave sensible encontrada más adelante en el mensaje podía omitir un secreto anterior, y una URL HTTPS posterior podía hacer que una URL HTTP previa quedara sin redacción. El sanitizador ahora recorre los mensajes de izquierda a derecha y consume valores JSON entre comillas, claves con `:` o `=`, tokens Bearer y URLs completas con parámetros de consulta. Se añadieron pruebas unitarias de múltiples secretos/URLs y una inyección E2E FakeDriver compuesta con credenciales ficticias.
+
+**Regla de evidencia:** los smokes reales y la matriz de cuatro proveedores reportados sobre `dd9a2f4` son históricos y **no certifican automáticamente los cambios de producción posteriores**. GitHub Actions prueba contratos y regresiones deterministas con FakeDriver; la matriz real debe repetirse en Linux sobre el HEAD final antes de recuperar `CERRADA EN LINUX`. Para ello ejecutar `GF_E2E_REAL=1 GF_KEEP=1 bash tests/e2e_p44_conformity.sh`, `GF_E2E_REAL=1 bash tests/e2e_p44_concurrency.sh` y `bash tests/e2e_p44_security.sh`, más los smokes pertinentes. Conservar el JSON sanitizado y el SHA. No se modifica `main` ni se inicia P5 mientras falte esta evidencia.

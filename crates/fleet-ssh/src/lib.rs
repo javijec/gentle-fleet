@@ -210,11 +210,16 @@ pub struct SshWriter {
 impl SshWriter {
     /// Código de salida del proceso SSH para clasificar fallos de transporte.
     pub fn exit_code(&mut self) -> Option<i32> {
-        self.child
-            .try_wait()
-            .ok()
-            .flatten()
-            .and_then(|status| status.code())
+        // stdout can reach EOF just before OpenSSH exits; give it a bounded
+        // opportunity to publish its real exit status and stderr diagnostics.
+        for _ in 0..20 {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return status.code(),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return None,
+            }
+        }
+        None
     }
 
     /// Últimas líneas de stderr de SSH/bridge, para errores explícitos.
@@ -225,6 +230,18 @@ impl SshWriter {
             .iter()
             .cloned()
             .collect()
+    }
+}
+
+impl Drop for SshWriter {
+    fn drop(&mut self) {
+        // Reap the local SSH child; only the bridge connection is terminated.
+        // fleetd and remote fleet-runner remain independent of this process.
+        self.stdin.take();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -344,7 +361,8 @@ pub fn run_bridge() -> Result<(), String> {
     // Input runs independently so Fleet can keep streaming while the client
     // is idle. The output side runs on the main thread and can exit if the
     // daemon closes without waiting forever on a blocked SSH stdin.
-    let to_daemon = std::thread::spawn(move || -> io::Result<()> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _to_daemon = std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut input = io::BufReader::new(stdin.lock());
         let result = (|| -> io::Result<()> {
@@ -366,7 +384,7 @@ pub fn run_bridge() -> Result<(), String> {
             std::net::Shutdown::Write
         };
         let _ = reader.shutdown(how);
-        result
+        let _ = sender.send(result);
     });
     let output_result = (|| -> io::Result<()> {
         let stdout = io::stdout();
@@ -382,19 +400,10 @@ pub fn run_bridge() -> Result<(), String> {
         }
     })();
     let _ = stream.shutdown(std::net::Shutdown::Both);
-    // If SSH stdout or fleetd closes first, stdin may still be blocked in
-    // read_frame(). Do not wait forever on that thread; process exit ends it.
-    // If it already completed, propagate its error instead of swallowing it.
-    let input_result = if to_daemon.is_finished() {
-        Some(
-            to_daemon
-                .join()
-                .map_err(|_| "SSH bridge input pump panicked".to_string())?,
-        )
-    } else {
-        None
-    };
-    if let Some(Err(error)) = input_result {
+    // EOF on stdout can precede an input-thread exit by a few microseconds.
+    // Wait a bounded interval for its result, but never block forever on
+    // SSH stdin if fleetd disappeared while the client remains connected.
+    if let Ok(Err(error)) = receiver.recv_timeout(std::time::Duration::from_millis(100)) {
         return Err(format!("bridge input failed: {error}"));
     }
     output_result.map_err(|error| format!("bridge output failed: {error}"))

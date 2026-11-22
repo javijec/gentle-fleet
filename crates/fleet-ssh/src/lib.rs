@@ -43,17 +43,32 @@ impl HostConfig {
         {
             return Err(SshError::InvalidArgument("invalid host alias"));
         }
+        // OpenSSH invokes the remote command through the destination user's
+        // shell. Command::arg() protects the LOCAL shell only. Accept strictly
+        // inert characters so remote shell metacharacters cannot be evaluated.
         if self.destination.is_empty()
-            || self.destination.contains(char::is_whitespace)
-            || self.destination.starts_with('-')
+            || !self.destination.chars().all(|ch| {
+                ch.is_ascii_alphanumeric()
+                    || matches!(ch, '_' | '-' | '.' | '@' | ':' | '[' | ']')
+            })
         {
             return Err(SshError::InvalidArgument("invalid SSH destination"));
         }
         if self.bridge_path.is_empty()
             || !self.bridge_path.starts_with('/')
-            || self.bridge_path.contains(char::is_whitespace)
+            || !self.bridge_path.chars().all(|ch| {
+                ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '.' | '-')
+            })
         {
-            return Err(SshError::InvalidArgument("bridge path must be absolute"));
+            return Err(SshError::InvalidArgument("unsafe SSH bridge path"));
+        }
+        // This field was previously accepted but not verified. Until
+        // fingerprint pinning is implemented, fail closed rather than give
+        // callers a false assurance of additional host-key enforcement.
+        if self.expected_host_key.is_some() {
+            return Err(SshError::InvalidArgument(
+                "expected_host_key pinning is not implemented; use OpenSSH known_hosts",
+            ));
         }
         if let Some(identity) = &self.identity_file {
             if identity.contains(char::is_whitespace) || identity.starts_with('-') {
@@ -425,8 +440,28 @@ mod tests {
         bad.bridge_path = "relative/path".into();
         assert_eq!(
             bad.validate(),
-            Err(SshError::InvalidArgument("bridge path must be absolute"))
+            Err(SshError::InvalidArgument("unsafe SSH bridge path"))
         );
+        for unsafe_path in [
+            "/usr/bin/bridge;touch/tmp/attacker",
+            "/usr/bin/bridge$(id)",
+            "/usr/bin/bridge`id`",
+            "/usr/bin/bridge|cat",
+            "/usr/bin/bridge>file",
+            "/usr/bin/bridge\\\\test",
+            "/usr/bin/bridge'quote",
+        ] {
+            let mut candidate = bad.clone();
+            candidate.bridge_path = unsafe_path.into();
+            assert!(candidate.validate().is_err(), "accepted {unsafe_path}");
+        }
+        let mut unsafe_host = bad.clone();
+        unsafe_host.bridge_path = "/usr/bin/bridge".into();
+        unsafe_host.destination = "example.com;id".into();
+        assert!(unsafe_host.validate().is_err());
+        unsafe_host.destination = "user@host".into();
+        unsafe_host.expected_host_key = Some("unverified-fingerprint".into());
+        assert!(unsafe_host.validate().is_err());
     }
 
     #[test]

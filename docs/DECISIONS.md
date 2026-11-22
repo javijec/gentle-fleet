@@ -93,6 +93,19 @@ Ninguna de las 18 decisiones de `P4_SPEC.md` se modificó. Detalle en [`P4_2_RES
 
 ADR resumido en `docs/P5_DESIGN.md`: bridge propio sobre SSH stdio, token remoto inyectado en el bridge, OpenSSH para identidad/autenticación, misma API local/remota, sin reenvío automático de operaciones inciertas y sin cambios de IDs públicos. No se modifica ninguna decisión D01–D12 ni P4_SPEC.
 
+## Decisión P5-C — cierre cross-platform de SSH (22/11/2026)
+
+| Aspecto | Decisión aceptada |
+|---|---|
+| Alcance de aceptación P5 | **CLI Windows 11/Linux → bridge, fleetd y runners Linux x86_64**, mediante el mismo wire de Fleet por OpenSSH y sin TCP público |
+| Cambio de criterio físico | Sustituir la comprobación de «dos Linux físicos» por dos máquinas reales **Windows 11 y Linux**, ya que el cliente nativo Windows por SSH materializa la paridad de transporte que P5 buscaba probar |
+| Evidencia | CI Linux x86_64 [#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228) PASS con E2E de SSH local, dos instancias aisladas y corte/replay; manual Windows→Linux con FakeDriver, OpenCode, Codex, Pi y Gentle Shell, eventos persistidos y recuperación por `--since` |
+| Límites explícitos | Windows **solo cliente**, no daemon/runner nativo; dos Linux físicos, macOS, aprobaciones interactivas remotas desde Windows y confirmación precisa del Ctrl+C manual **UNTESTED**. Las capacidades del proveedor no se deducen del éxito del transporte |
+| Seguridad y lifecycle | Mantener host-key OpenSSH, journal de `operation_key`, fail-closed sin pinning no implementado y **sin reenvío automático** de efectos de resultado incierto |
+| Siguientes etapas | P6 SDK/GPUI/backoff y P7 soporte nativo Windows/macOS y operacional; no iniciar P6 ni fusionar P5 en `main` como parte de este cierre |
+
+Esta decisión cambia **solo el criterio de cierre de P5**, sin modificar D01–D12 ni los contratos de proveedores. Resultados y caveats completos en [`P5_RESULTS.md`](P5_RESULTS.md).
+
 ## Deudas de arquitectura aceptadas temporalmente
 
 - Primer release no aísla procesos del mismo usuario.

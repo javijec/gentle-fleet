@@ -18,11 +18,17 @@ for _ in $(seq 1 50); do [[ -f "$RUNTIME/fleetd.addr" ]] && break; sleep 0.1; do
 WS="$("$BIN/fleetctl" workspace add "$WORKSPACE" | cut -f1)"
 
 : >"$RUNTIME/public.txt"
-for provider in opencode codex pi gentle-shell; do
+PROVIDERS=(opencode codex pi gentle-shell)
+if [[ "${GF_E2E_FAKE_ONLY:-}" == "1" ]]; then PROVIDERS=(fake); fi
+for provider in "${PROVIDERS[@]}"; do
   SES="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$provider" | cut -f1)"
   "$BIN/fleetctl" timeline "$SES" --limit 200 >>"$RUNTIME/public.txt"
-  "$BIN/fleetctl" approvals --session "$SES" >>"$RUNTIME/public.txt" 2>/dev/null || true
-  "$BIN/fleetctl" native-sessions "$provider" >>"$RUNTIME/public.txt" 2>/dev/null || true
+  "$BIN/fleetctl" approvals --session "$SES" >>"$RUNTIME/public.txt"
+  if [[ "$provider" != "fake" ]]; then
+    if ! "$BIN/fleetctl" native-sessions "$provider" >>"$RUNTIME/public.txt" 2>"$RUNTIME/native.err"; then
+      grep -Eq 'unsupported_capability|sessions_unavailable' "$RUNTIME/native.err" || { echo "FAIL: native discovery error"; cat "$RUNTIME/native.err"; exit 1; }
+    fi
+  fi
   "$BIN/fleetctl" stop "$SES" >/dev/null
 done
 "$BIN/fleetctl" agents >>"$RUNTIME/public.txt"
@@ -38,4 +44,4 @@ if [[ -n "$TOKEN_FILE" ]]; then
   MODE="$(stat -c '%a' "$TOKEN_FILE")"
   [[ "$MODE" == "600" ]] || { echo "FAIL: runner token has permissive mode $MODE"; exit 1; }
 fi
-echo "PASS: no secrets or native IDs in public API output; token permissions safe"
+echo "PASS: no secrets or native IDs in public API output; token permissions safe (redaction fixtures: cargo test)"

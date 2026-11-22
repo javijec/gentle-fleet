@@ -25,20 +25,40 @@ PAIRS=(
   "codex:gentle-shell"
   "pi:gentle-shell"
 )
+if [[ "${GF_E2E_FAKE_ONLY:-}" == "1" ]]; then
+  PAIRS=("fake:fake")
+fi
+EXPECTED="${#PAIRS[@]}"
+EXECUTED=0
 for pair in "${PAIRS[@]}"; do
   A="${pair%%:*}"; B="${pair##*:}"
-  SA="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$A" | cut -f1)" || continue
-  SB="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$B" | cut -f1)" || continue
+  SA="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$A" | cut -f1)" || { echo "FAIL: cannot create $A in $pair"; exit 1; }
+  SB="$("$BIN/fleetctl" session create --workspace "$WS" --provider "$B" | cut -f1)" || { echo "FAIL: cannot create $B in $pair"; exit 1; }
   [[ -n "$SA" && -n "$SB" ]] || { echo "FAIL: no sessions for $pair"; exit 1; }
-  RA="$(pgrep -f "fleet-runner --runner-id runner-$SA" | head -1)"
-  RB="$(pgrep -f "fleet-runner --runner-id runner-$SB" | head -1)"
-  [[ -n "$RA" && -n "$RB" ]] || { echo "FAIL: missing runners for $pair"; exit 1; }
+  RA="$(pgrep -f "fleet-runner --runner-id runner-$SA " | head -1 || :)"
+  RB="$(pgrep -f "fleet-runner --runner-id runner-$SB " | head -1 || :)"
+  [[ -n "$RA" && -n "$RB" && "$RA" != "$RB" ]] || { echo "FAIL: missing or identical runners for $pair"; exit 1; }
   kill -9 "$RA"
   sleep 1
   kill -0 "$RB" 2>/dev/null || { echo "FAIL: $B runner died after $A failure"; exit 1; }
   "$BIN/fleetctl" session list >"$RUNTIME/sessions-$A-$B.out"
-  grep -q "$SB" "$RUNTIME/sessions-$A-$B.out" || { echo "FAIL: $B session vanished"; exit 1; }
-  "$BIN/fleetctl" stop "$SB" >/dev/null 2>&1 || true
-  echo "PASS: isolation $A -> $B"
+  awk -F '\t' -v sid="$SB" '$1 == sid && $4 == "Running" {ok=1} END {exit !ok}' "$RUNTIME/sessions-$A-$B.out" || { echo "FAIL: $B session not running"; exit 1; }
+  "$BIN/fleetctl" timeline "$SB" --limit 256 >"$RUNTIME/timeline-$A-$B.out"
+  grep -q "session_created" "$RUNTIME/timeline-$A-$B.out" || { echo "FAIL: survivor timeline unreadable"; exit 1; }
+  # Confirmar una conversación nueva en FakeDriver (CI) y en modo real opt-in.
+  if [[ "${GF_E2E_FAKE_ONLY:-}" == "1" || "${GF_E2E_REAL:-}" == "1" ]]; then
+    "$BIN/fleetctl" prompt "$SB" "Reply with exactly: SURVIVOR $pair" >/dev/null
+    DONE=0
+    for _ in $(seq 1 120); do
+      "$BIN/fleetctl" timeline "$SB" --limit 256 >"$RUNTIME/timeline-$A-$B.out"
+      if grep -Eqi 'turn_completed.*Completed' "$RUNTIME/timeline-$A-$B.out"; then DONE=1; break; fi
+      sleep 0.25
+    done
+    [[ "$DONE" == "1" ]] || { echo "FAIL: survivor $B could not complete next turn"; exit 1; }
+  fi
+  "$BIN/fleetctl" stop "$SB" >/dev/null
+  EXECUTED=$((EXECUTED + 1))
+  echo "PASS: isolation $A -> $B ($EXECUTED/$EXPECTED)"
 done
-echo "PASS: all provider pairs isolated"
+[[ "$EXECUTED" -eq "$EXPECTED" && "$EXPECTED" -gt 0 ]] || { echo "FAIL: only $EXECUTED/$EXPECTED pairs executed"; exit 1; }
+echo "PASS: all $EXPECTED mandatory pairs isolated"

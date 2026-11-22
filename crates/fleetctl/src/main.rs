@@ -204,22 +204,30 @@ impl Client {
                     || lower.contains("remote host identification has changed")
                     || lower.contains("no matching host key")
                 {
-                    Err(format!("HostKeyRejected: {context}"))
+                    Err("HostKeyRejected: SSH server identity verification failed".into())
                 } else if lower.contains("permission denied (publickey")
                     || lower.contains("permission denied (")
                 {
-                    Err(format!("AuthFailed: {context}"))
+                    Err("AuthFailed: SSH authentication rejected".into())
                 } else if lower.contains("fleetd unavailable") {
-                    Err(format!("DaemonDown: {context}"))
+                    Err("DaemonDown: remote fleetd is unavailable".into())
                 } else if code == Some(127)
                     || lower.contains("fleet-ssh-bridge: not found")
                     || lower.contains("fleet-ssh-bridge: no such file")
                 {
-                    Err(format!("BridgeMissing: {context}"))
-                } else if code == Some(255) {
-                    Err(format!("SSHDisconnected: {context}"))
+                    Err("BridgeMissing: remote bridge executable not found".into())
+                } else if lower.contains("connection refused") {
+                    Err("SSHUnreachable: connection refused".into())
+                } else if lower.contains("connection timed out")
+                    || lower.contains("operation timed out")
+                {
+                    Err("SSHTimeout: connection timed out".into())
+                } else if lower.contains("could not resolve hostname") {
+                    Err("SSHUnreachable: name resolution failed".into())
                 } else {
-                    Err(format!("SSH transport closed (status {code:?}): {context}"))
+                    // stderr may contain local paths, account names or even
+                    // unexpected secrets; classify it without echoing it.
+                    Err(format!("SSHDisconnected: SSH exited with status {code:?}"))
                 }
             }
         }

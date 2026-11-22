@@ -56,3 +56,11 @@ OpenCode 2.3.2, Codex 0.171.0, Pi 1.6.0, Gentle Shell 4.8.0 (Pi embebido 1.5.2) 
 ## 7. Criterio de cierre
 
 Faltan las dos máquinas Linux independientes para cumplir el criterio 14. Mientras tanto P5 permanece **EN REVALIDACIÓN**; la implementación es funcional y la experiencia local/remota es equivalente en el entorno probado. P6 no se inicia.
+
+## 8. P5-H — Auditoría y correcciones posteriores
+
+Se identificaron riesgos en validación de rutas/comando SSH remoto, recuperabilidad de la `operation_key` cuando se pierde el ACK, falsos PASS del terminal de un turno anterior, framing JSONL sin límite y cierre/diagnóstico de procesos bridge/SSH. Se implementaron correcciones y regresiones en la rama `feature/p5-ssh-transport` sin alterar `main`.
+
+Cambios: allowlist de argumentos del bridge seguro frente a shell remoto; campo `expected_host_key` no implementado rechazado en lugar de ignorado; journal cliente 0600 con `fleetctl pending` y reconciliación explícita con `operation <key>`; límite JSONL de 8 MiB; manejo de half-close/errores; recolección del proceso SSH; clasificación SSH basada en errores reales; test con cursor capturado después del primer terminal.
+
+**Estado:** EN REVALIDACIÓN. La ejecución CI anterior `45074936294` corresponde al código anterior a P5-H y no certifica estos cambios. Registrar aquí la URL y SHA del CI final una vez verificado. La matriz opt-in de proveedores reales y el recorrido entre dos máquinas Linux independientes siguen siendo evidencias distintas de los E2E deterministas con FakeDriver.

@@ -234,8 +234,7 @@ pub fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Frame>> {
     // A read limit protects all transports, including a malicious SSH peer.
     // JSONL requires a newline; a truncated frame must never be accepted.
     let mut line = Vec::new();
-    let read = io::Read::take(reader, (MAX_FRAME_BYTES + 1) as u64)
-        .read_until(b'\n', &mut line)?;
+    let read = io::Read::take(reader, (MAX_FRAME_BYTES + 1) as u64).read_until(b'\n', &mut line)?;
     if read == 0 {
         return Ok(None);
     }

@@ -83,8 +83,8 @@ diff -u "$RUNTIME/t1.out" "$RUNTIME/t2.out" || { echo "FAIL: two remote clients 
 #    cliente reconectado recupera la timeline sin duplicar el prompt.
 RUNNER="$(pgrep -f "fleet-runner --runner-id runner-$SES" | head -1)"
 [[ -n "$RUNNER" ]] || { echo "FAIL: no runner"; exit 1; }
-# Cursor is captured AFTER the first terminal. Never match that earlier
-# terminal when asserting the new turn survives SSH disconnection.
+# Capture the cursor after the FIRST terminal. A previous completion is
+# not evidence that the later turn survived SSH disconnection.
 "$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/before-second.out"
 BASELINE="$(tail -1 "$RUNTIME/before-second.out" | cut -f1)"
 [[ "$BASELINE" =~ ^[0-9]+$ ]] || { echo "FAIL: invalid baseline cursor"; exit 1; }
@@ -100,294 +100,16 @@ sleep 1
 kill -0 "$RUNNER" 2>/dev/null || { echo "FAIL: runner died with SSH"; exit 1; }
 for _ in $(seq 1 100); do
   "$BIN/fleetctl" timeline "$SES" --since "$BASELINE" --limit 200 >"$RUNTIME/after.out"
-  if grep -q 
-
-# 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
-FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
-  'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --since "$BASELINE" --limit 200 >"$RUNTIME/after-retry.out"
-[[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
-  echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
-}
-
-# 5. Identidad de host rechazada.
-cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
-: >"$RUNTIME/known_hosts"
-if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
-  echo "FAIL: untrusted SSH host accepted"; exit 1
-fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
-cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
-
-# 6. Bridge ausente.
-"$BIN/fleetctl" host add broken "$USER_NAME@127.0.0.1" --bridge /nonexistent/fleet-ssh-bridge \
-  --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
-if "$BIN/fleetctl" --host broken agents >"$RUNTIME/bridge.out" 2>&1; then
-  echo "FAIL: missing bridge accepted"; exit 1
-fi
-grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
-
-if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
-  for provider in opencode codex pi gentle-shell; do
-    REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
-    timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
-      >"$RUNTIME/chat-$provider.out" 2>"$RUNTIME/chat-$provider.err" &
-    RW=$!
-    sleep 1
-    if ! "$BIN/fleetctl" --host test prompt "$REAL_SES" "Reply with exactly: P5 $provider OK" \
-      >"$RUNTIME/prompt-$provider.out" 2>"$RUNTIME/prompt-$provider.err"; then
-      kill "$RW" 2>/dev/null || true
-      if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
-        echo "UNTESTED: $provider has no configured model"
-        continue
-      fi
-      echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
-    fi
-    wait "$RW"
-    grep -q $'turn_completed\tCompleted' "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote turn did not complete"; exit 1;
-    }
-    grep -qi "P5 $provider OK" "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote text missing"; exit 1;
-    }
-    "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
-    echo "PASS: real remote chat $provider"
-  done
-fi
-
-echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"
-turn_completed\tCompleted' "$RUNTIME/after.out" &&
-     grep -q 
-
-# 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
-FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
-  'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/after-retry.out"
-[[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
-  echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
-}
-
-# 5. Identidad de host rechazada.
-cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
-: >"$RUNTIME/known_hosts"
-if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
-  echo "FAIL: untrusted SSH host accepted"; exit 1
-fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
-cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
-
-# 6. Bridge ausente.
-"$BIN/fleetctl" host add broken "$USER_NAME@127.0.0.1" --bridge /nonexistent/fleet-ssh-bridge \
-  --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
-if "$BIN/fleetctl" --host broken agents >"$RUNTIME/bridge.out" 2>&1; then
-  echo "FAIL: missing bridge accepted"; exit 1
-fi
-grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
-
-if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
-  for provider in opencode codex pi gentle-shell; do
-    REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
-    timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
-      >"$RUNTIME/chat-$provider.out" 2>"$RUNTIME/chat-$provider.err" &
-    RW=$!
-    sleep 1
-    if ! "$BIN/fleetctl" --host test prompt "$REAL_SES" "Reply with exactly: P5 $provider OK" \
-      >"$RUNTIME/prompt-$provider.out" 2>"$RUNTIME/prompt-$provider.err"; then
-      kill "$RW" 2>/dev/null || true
-      if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
-        echo "UNTESTED: $provider has no configured model"
-        continue
-      fi
-      echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
-    fi
-    wait "$RW"
-    grep -q $'turn_completed\tCompleted' "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote turn did not complete"; exit 1;
-    }
-    grep -qi "P5 $provider OK" "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote text missing"; exit 1;
-    }
-    "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
-    echo "PASS: real remote chat $provider"
-  done
-fi
-
-echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"
-user\tsurvive ssh disconnect' "$RUNTIME/after.out"; then break; fi
+  if grep -q $'turn_completed\tCompleted' "$RUNTIME/after.out" &&
+     grep -q $'user\tsurvive ssh disconnect' "$RUNTIME/after.out"; then
+    break
+  fi
   sleep 0.2
 done
-[[ "$(grep -c 
-
-# 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
-FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
-  'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/after-retry.out"
-[[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
-  echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
-}
-
-# 5. Identidad de host rechazada.
-cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
-: >"$RUNTIME/known_hosts"
-if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
-  echo "FAIL: untrusted SSH host accepted"; exit 1
-fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
-cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
-
-# 6. Bridge ausente.
-"$BIN/fleetctl" host add broken "$USER_NAME@127.0.0.1" --bridge /nonexistent/fleet-ssh-bridge \
-  --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
-if "$BIN/fleetctl" --host broken agents >"$RUNTIME/bridge.out" 2>&1; then
-  echo "FAIL: missing bridge accepted"; exit 1
-fi
-grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
-
-if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
-  for provider in opencode codex pi gentle-shell; do
-    REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
-    timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
-      >"$RUNTIME/chat-$provider.out" 2>"$RUNTIME/chat-$provider.err" &
-    RW=$!
-    sleep 1
-    if ! "$BIN/fleetctl" --host test prompt "$REAL_SES" "Reply with exactly: P5 $provider OK" \
-      >"$RUNTIME/prompt-$provider.out" 2>"$RUNTIME/prompt-$provider.err"; then
-      kill "$RW" 2>/dev/null || true
-      if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
-        echo "UNTESTED: $provider has no configured model"
-        continue
-      fi
-      echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
-    fi
-    wait "$RW"
-    grep -q $'turn_completed\tCompleted' "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote turn did not complete"; exit 1;
-    }
-    grep -qi "P5 $provider OK" "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote text missing"; exit 1;
-    }
-    "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
-    echo "PASS: real remote chat $provider"
-  done
-fi
-
-echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"
-turn_completed\tCompleted' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new turn must have exactly one Completed terminal"; exit 1; }
-[[ "$(grep -c 
-
-# 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
-FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
-  'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/after-retry.out"
-[[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
-  echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
-}
-
-# 5. Identidad de host rechazada.
-cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
-: >"$RUNTIME/known_hosts"
-if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
-  echo "FAIL: untrusted SSH host accepted"; exit 1
-fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
-cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
-
-# 6. Bridge ausente.
-"$BIN/fleetctl" host add broken "$USER_NAME@127.0.0.1" --bridge /nonexistent/fleet-ssh-bridge \
-  --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
-if "$BIN/fleetctl" --host broken agents >"$RUNTIME/bridge.out" 2>&1; then
-  echo "FAIL: missing bridge accepted"; exit 1
-fi
-grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
-
-if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
-  for provider in opencode codex pi gentle-shell; do
-    REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
-    timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
-      >"$RUNTIME/chat-$provider.out" 2>"$RUNTIME/chat-$provider.err" &
-    RW=$!
-    sleep 1
-    if ! "$BIN/fleetctl" --host test prompt "$REAL_SES" "Reply with exactly: P5 $provider OK" \
-      >"$RUNTIME/prompt-$provider.out" 2>"$RUNTIME/prompt-$provider.err"; then
-      kill "$RW" 2>/dev/null || true
-      if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
-        echo "UNTESTED: $provider has no configured model"
-        continue
-      fi
-      echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
-    fi
-    wait "$RW"
-    grep -q $'turn_completed\tCompleted' "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote turn did not complete"; exit 1;
-    }
-    grep -qi "P5 $provider OK" "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote text missing"; exit 1;
-    }
-    "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
-    echo "PASS: real remote chat $provider"
-  done
-fi
-
-echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"
-turn_started' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new turn started incorrectly"; exit 1; }
-[[ "$(grep -c 
-
-# 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
-FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
-  'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/after-retry.out"
-[[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
-  echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
-}
-
-# 5. Identidad de host rechazada.
-cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
-: >"$RUNTIME/known_hosts"
-if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
-  echo "FAIL: untrusted SSH host accepted"; exit 1
-fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
-cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
-
-# 6. Bridge ausente.
-"$BIN/fleetctl" host add broken "$USER_NAME@127.0.0.1" --bridge /nonexistent/fleet-ssh-bridge \
-  --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
-if "$BIN/fleetctl" --host broken agents >"$RUNTIME/bridge.out" 2>&1; then
-  echo "FAIL: missing bridge accepted"; exit 1
-fi
-grep -qi 'bridge\|closed\|No such file' "$RUNTIME/bridge.out" || { echo "FAIL: bridge error not explicit"; cat "$RUNTIME/bridge.out"; exit 1; }
-
-if [[ "${GF_E2E_REAL:-}" == "1" ]]; then
-  for provider in opencode codex pi gentle-shell; do
-    REAL_SES="$("$BIN/fleetctl" --host test session create --workspace "$WS" --provider "$provider" | cut -f1)"
-    timeout 180 "$BIN/fleetctl" --host test watch "$REAL_SES" --until-turn-end \
-      >"$RUNTIME/chat-$provider.out" 2>"$RUNTIME/chat-$provider.err" &
-    RW=$!
-    sleep 1
-    if ! "$BIN/fleetctl" --host test prompt "$REAL_SES" "Reply with exactly: P5 $provider OK" \
-      >"$RUNTIME/prompt-$provider.out" 2>"$RUNTIME/prompt-$provider.err"; then
-      kill "$RW" 2>/dev/null || true
-      if grep -Eqi 'model|unsupported' "$RUNTIME/prompt-$provider.err"; then
-        echo "UNTESTED: $provider has no configured model"
-        continue
-      fi
-      echo "FAIL: $provider remote prompt failed"; cat "$RUNTIME/prompt-$provider.err"; exit 1
-    fi
-    wait "$RW"
-    grep -q $'turn_completed\tCompleted' "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote turn did not complete"; exit 1;
-    }
-    grep -qi "P5 $provider OK" "$RUNTIME/chat-$provider.out" || {
-      echo "FAIL: $provider remote text missing"; exit 1;
-    }
-    "$BIN/fleetctl" --host test stop "$REAL_SES" >/dev/null
-    echo "PASS: real remote chat $provider"
-  done
-fi
-
-echo "PASS: SSH transport parity, streaming, two clients, disconnect survival, replay and security errors"
-user\tsurvive ssh disconnect' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new prompt missing or duplicated"; exit 1; }
-! grep -Eq 'turn_uncertain|turn_completed[[:space:]]+(Failed|Interrupted)' "$RUNTIME/after.out" || { echo "FAIL: terminal contradicted"; exit 1; }
+[[ "$(grep -c $'turn_completed\tCompleted' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new turn must have exactly one Completed terminal"; exit 1; }
+[[ "$(grep -c 'turn_started' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new turn started incorrectly"; exit 1; }
+[[ "$(grep -c $'user\tsurvive ssh disconnect' "$RUNTIME/after.out")" == "1" ]] || { echo "FAIL: new prompt missing or duplicated"; exit 1; }
+! grep -Eq 'turn_uncertain|turn_completed[[:space:]]+(Failed|Interrupted)' "$RUNTIME/after.out" || { echo "FAIL: contradictory terminal"; exit 1; }
 "$BIN/fleetctl" --host test operation "p51-survive-key" >"$RUNTIME/reconciled-operation.out" || { echo "FAIL: operation not recoverable after SSH loss"; exit 1; }
 "$BIN/fleetctl" --host test timeline "$SES" --since "$BASELINE" --limit 200 >"$RUNTIME/replay.out"
 diff -u "$RUNTIME/after.out" "$RUNTIME/replay.out" || { echo "FAIL: remote replay differs"; exit 1; }
@@ -395,7 +117,7 @@ diff -u "$RUNTIME/after.out" "$RUNTIME/replay.out" || { echo "FAIL: remote repla
 # 4b. Un reenvío explícito con la MISMA operation_key no duplica el prompt.
 FLEET_OPERATION_KEY="p51-survive-key" "$BIN/fleetctl" --host test prompt "$SES" \
   'survive ssh disconnect' >"$RUNTIME/retry.out"
-"$BIN/fleetctl" timeline "$SES" --limit 200 >"$RUNTIME/after-retry.out"
+"$BIN/fleetctl" timeline "$SES" --since "$BASELINE" --limit 200 >"$RUNTIME/after-retry.out"
 [[ "$(grep -c 'user.survive ssh disconnect' "$RUNTIME/after-retry.out")" == "1" ]] || {
   echo "FAIL: prompt duplicated after explicit retry with same operation_key"; exit 1;
 }

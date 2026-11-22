@@ -14,7 +14,7 @@ Una persona usa la misma Fleet API en local o en otra máquina mediante SSH. No 
 | P5-D4 | `fleetctl` usa `FleetReader`/`FleetWriter`;local y remoto comparten correlación, eventos, errores y timeouts. |
 | P5-D5 | El alias local es configuración de cliente; la identidad autoritativa del host es la clave SSH verificada en `known_hosts`. |
 | P5-D6 | Una desconexión SSH cierra solo el bridge; `fleetd`, runners y proveedores continúan. |
-| P5-D7 | Un prompt ambiguo no se reenvía automáticamente: se recomienda al usuario repetir con el mismo `operation_key` tras reconectar. |
+| P5-D7 | Toda operación remota con `operation_key` se registra duraderamente en el cliente **antes** del envío (`fleetctl pending`); un ACK perdido se reconcilia mediante `fleetctl --host alias operation <key>`. Ningún efecto se reenvía automáticamente. |
 | P5-D8 | `session_id` no cambia: el contexto del host se mantiene en la conexión/alias elegido explícitamente con `--host`. |
 
 ## 2. Topología
@@ -56,3 +56,13 @@ Sin `StrictHostKeyChecking=no`, sin contraseñas, sin shell interpolation, sin e
 ## 7. Fuera de alcance
 
 PTY, VFS remoto, sincronización de archivos, GPUI, plugins, colaboración multiusuario y compatibilidad Windows/macOS (P7).
+
+## 8. Endurecimiento P5-H
+
+- `HostConfig` rechaza caracteres de shell en destino y ruta del bridge. `Command::arg` evita un shell local, pero OpenSSH usa shell remoto para ejecutar el comando; por eso el bridge admite solamente ruta absoluta con caracteres inertes. Un pin `expected_host_key` configurado pero no implementado se rechaza explícitamente (fail-closed); la confianza en hosts sigue dependiendo de OpenSSH `known_hosts`.
+- Los frames JSONL comparten un límite de 8 MiB con validación de newline, también en el bridge SSH. Frames incompletos o demasiado grandes producen error, no asignación ilimitada de memoria.
+- `fleetctl` mantiene un journal privado (0600, directorio 0700 por defecto) en `~/.local/state/gentle-fleet/operations.jsonl`, configurable por `XDG_STATE_HOME` o `FLEET_OPERATION_JOURNAL`. Para operaciones remotas `prompt`, `answer` e `import-history` registra alias, objetivo, clave y marca de tiempo sin almacenar el texto del prompt. `fleetctl [--host alias] pending` permite recuperar las claves; errores de escritura impiden enviar el efecto.
+- El bridge propaga fallos de lectura/escritura, limita la espera del hilo de entrada al cerrar el stream, y el cliente termina/recolecta procesos SSH locales sobrantes sin afectar al daemon ni runners. Los errores de SSH se clasifican por stderr/estado estándar (OpenSSH usa 255 para muchas fallas), no por códigos inventados 5/6; el handshake rechaza un wire incompatible.
+- En la prueba de pérdida de conexión se captura un cursor posterior al primer turno: el segundo turno debe incluir su propio `UserMessage`, `TurnStarted` y un solo `TurnCompleted(Completed)` después de dicho cursor. No se permite un PASS reutilizando el terminal del primer turno.
+
+La reconexión de CLI sigue siendo explícita/manual; la reconexión automática con backoff del SDK queda para P6.

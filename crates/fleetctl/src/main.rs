@@ -1,6 +1,8 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
-use std::io::{BufReader, BufWriter};
+use std::fs::{self, OpenOptions};
+use std::io::{BufReader, BufWriter, Write};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use fleet_domain::EventKind;
@@ -14,6 +16,101 @@ static SELECTED_HOST: Mutex<Option<String>> = Mutex::new(None);
 
 fn selected_host() -> Option<String> {
     SELECTED_HOST.lock().expect("host lock poisoned").clone()
+}
+
+/// Keep an operation key durably on the CLIENT before sending any remote
+/// effect. SSH can fail after the daemon accepts a request but before its ACK.
+fn operation_journal_path() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("FLEET_OPERATION_JOURNAL") {
+        return Ok(PathBuf::from(path));
+    }
+    let root = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .ok_or("HOME or XDG_STATE_HOME required for durable remote operations")?;
+    Ok(root.join("gentle-fleet/operations.jsonl"))
+}
+
+fn persist_remote_operation(kind: &str, target: &str, key: &str) -> Result<(), String> {
+    let Some(host) = selected_host() else {
+        return Ok(());
+    };
+    let path = operation_journal_path()?;
+    let parent = path.parent().ok_or("operation journal needs a parent directory")?;
+    fs::create_dir_all(parent).map_err(|e| format!("cannot create operation journal: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Restrict our own Fleet state directory; do not chmod an arbitrary
+        // override directory such as /tmp.
+        if std::env::var_os("FLEET_OPERATION_JOURNAL").is_none() {
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("cannot protect operation journal directory: {e}"))?;
+        }
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("operation journal is not a regular file".into());
+        }
+    }
+    let record = serde_json::json!({
+        "host": host,
+        "kind": kind,
+        "target": target,
+        "operation_key": key,
+        "created_at_unix_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis(),
+    });
+    let encoded = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&path)
+        .map_err(|e| format!("cannot open operation journal: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if file.metadata().map_err(|e| e.to_string())?.permissions().mode() & 0o077 != 0 {
+            return Err("operation journal permissions are too permissive".into());
+        }
+    }
+    file.write_all(&encoded)
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_data())
+        .map_err(|e| format!("cannot durably record remote operation: {e}"))?;
+    eprintln!("remote operation_key={key} host={host} (journal={})", path.display());
+    Ok(())
+}
+
+fn show_pending() -> Result<(), String> {
+    let path = operation_journal_path()?;
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("cannot read operation journal: {e}")),
+    };
+    for line in content.lines() {
+        let record: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| format!("invalid operation journal: {e}"))?;
+        let host = record["host"].as_str().unwrap_or("");
+        if selected_host().as_deref().is_some_and(|selected| selected != host) {
+            continue;
+        }
+        println!(
+            "{}\t{}\t{}\t{}",
+            host,
+            record["kind"].as_str().unwrap_or(""),
+            record["target"].as_str().unwrap_or(""),
+            record["operation_key"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
 }
 
 struct Client {
@@ -147,6 +244,9 @@ fn run() -> Result<(), String> {
     };
     if command == "host" {
         return host_command(&args[1..]);
+    }
+    if command == "pending" {
+        return show_pending();
     }
     match command.as_str() {
         "workspace" => workspace(&args[1..]),
@@ -295,7 +395,7 @@ fn host_command(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents\n  fleetctl [--host alias] pending  # list durable remote operation keys"
         .into()
 }
 
@@ -400,6 +500,7 @@ fn import_history(args: &[String]) -> Result<(), String> {
     });
     let mut client = Client::connect(selected_host().as_deref())?;
     client.call(client.hello())?;
+    persist_remote_operation("import_history", &session_id, &operation_key)?;
     match client.call(Request::ImportNativeHistory {
         session_id,
         provider_id,
@@ -493,6 +594,7 @@ fn prompt(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut client = Client::connect(selected_host().as_deref())?;
     client.call(client.hello())?;
+    persist_remote_operation("prompt", &session_id, &operation_key)?;
     match client.call(Request::SendPrompt {
         session_id,
         text,
@@ -739,6 +841,7 @@ fn answer(args: &[String]) -> Result<(), String> {
             values: values.split(',').map(str::to_string).collect(),
         })
         .collect();
+    persist_remote_operation("answer", &approval_id, &operation_key)?;
     match client.call(Request::AnswerApproval {
         approval_id,
         decision,

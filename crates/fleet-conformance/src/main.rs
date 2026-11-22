@@ -23,7 +23,9 @@ fn main() {
                 .collect()
         });
 
-    let workspace_id = args.iter().position(|arg| arg == "--workspace")
+    let workspace_id = args
+        .iter()
+        .position(|arg| arg == "--workspace")
         .and_then(|index| args.get(index + 1))
         .filter(|id| !id.starts_with('-') && !id.is_empty())
         .cloned();
@@ -55,12 +57,18 @@ fn main() {
     }
     let unsafe_result = results.iter().any(|result| result.status == Status::Fail)
         || providers.iter().any(|provider| {
-            !results.iter().any(|r| r.provider == *provider
-                && r.check == "session_lifecycle" && r.status == Status::Pass)
-                || !results.iter().any(|r| r.provider == *provider
-                    && r.check == "two_client_replay" && r.status == Status::Pass)
-                || (real && !results.iter().any(|r| r.provider == *provider
-                    && r.check == "real_chat" && r.status == Status::Pass))
+            !results.iter().any(|r| {
+                r.provider == *provider
+                    && r.check == "session_lifecycle"
+                    && r.status == Status::Pass
+            }) || !results.iter().any(|r| {
+                r.provider == *provider
+                    && r.check == "two_client_replay"
+                    && r.status == Status::Pass
+            }) || (real
+                && !results.iter().any(|r| {
+                    r.provider == *provider && r.check == "real_chat" && r.status == Status::Pass
+                }))
         });
     if unsafe_result {
         std::process::exit(1);

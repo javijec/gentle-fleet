@@ -15,13 +15,21 @@ fn set_timeout(stream: &LocalStream, timeout: Duration) -> Result<(), String> {
     match stream {
         #[cfg(unix)]
         LocalStream::Unix(inner) => {
-            inner.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-            inner.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+            inner
+                .set_read_timeout(Some(timeout))
+                .map_err(|e| e.to_string())?;
+            inner
+                .set_write_timeout(Some(timeout))
+                .map_err(|e| e.to_string())?;
         }
         #[cfg(windows)]
         LocalStream::Tcp(inner) => {
-            inner.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-            inner.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+            inner
+                .set_read_timeout(Some(timeout))
+                .map_err(|e| e.to_string())?;
+            inner
+                .set_write_timeout(Some(timeout))
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -73,7 +81,10 @@ impl ApiClient {
                 return Err(format!("RPC timeout waiting for {request_id}"));
             }
             match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
-                Some(Frame::Response { request_id: id, result }) if id == request_id => {
+                Some(Frame::Response {
+                    request_id: id,
+                    result,
+                }) if id == request_id => {
                     return result.map_err(|e| format!("{}: {}", e.code, e.message));
                 }
                 Some(Frame::Event { .. }) | Some(Frame::Notice { .. }) => {}
@@ -141,7 +152,11 @@ impl ApiClient {
                 return Err("timed out waiting for subscribe ACK".into());
             }
             match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
-                Some(Frame::Event { session_id: sid, seq, event }) => {
+                Some(Frame::Event {
+                    session_id: sid,
+                    seq,
+                    event,
+                }) => {
                     if sid != session_id || event.session_id != session_id || seq != event.seq {
                         return Err("subscribe replay returned an unrelated event".into());
                     }
@@ -156,7 +171,10 @@ impl ApiClient {
                 Some(Frame::Response { request_id, result }) if request_id == id => {
                     match result.map_err(|e| format!("{}: {}", e.code, e.message))? {
                         Response::Subscribed { latest_seq, .. }
-                            if latest_seq == backlog.len() as u64 => return Ok(backlog),
+                            if latest_seq == backlog.len() as u64 =>
+                        {
+                            return Ok(backlog)
+                        }
                         other => return Err(format!("subscribe ACK/backlog mismatch: {other:?}")),
                     }
                 }

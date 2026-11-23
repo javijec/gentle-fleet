@@ -66,7 +66,12 @@ try {
         if (-not $bridge.WaitForExit(15000)) {
             $bridge.Kill()
             [void]$bridge.WaitForExit(5000)
-            throw 'SSH bridge remained blocked after stdin EOF'
+            $partial = $outTask.GetAwaiter().GetResult()
+            $diagnostics = $errTask.GetAwaiter().GetResult()
+            $responseIds = @($partial -split "\r?\n" | Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object {
+                try { ($_ | ConvertFrom-Json).request_id } catch { '<invalid JSONL>' }
+            }) -join ','
+            throw "SSH bridge did not exit after EOF (response IDs: $responseIds; diagnostics: $diagnostics)"
         }
         $output = $outTask.GetAwaiter().GetResult()
         $errors = $errTask.GetAwaiter().GetResult()

@@ -268,7 +268,9 @@ impl Listener {
 }
 
 struct Shared {
-    file: File,
+    // None after abortive shutdown. In-flight I/O retains its own Arc<File>
+    // until CancelIoEx releases it; other clones cannot keep it open.
+    file: Mutex<Option<Arc<File>>>,
     read_lock: Mutex<()>,
     write_lock: Mutex<()>,
     read_eof: AtomicBool,
@@ -281,7 +283,7 @@ pub struct Stream(Arc<Shared>);
 impl Stream {
     fn new(file: File) -> Self {
         Self(Arc::new(Shared {
-            file,
+            file: Mutex::new(Some(Arc::new(file))),
             read_lock: Mutex::new(()),
             write_lock: Mutex::new(()),
             read_eof: AtomicBool::new(false),
@@ -292,6 +294,16 @@ impl Stream {
 
     pub fn try_clone(&self) -> io::Result<Self> {
         Ok(Self(self.0.clone()))
+    }
+
+    fn file(&self) -> io::Result<Arc<File>> {
+        self.0
+            .file
+            .lock()
+            .expect("Fleet pipe handle poisoned")
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "Fleet pipe disconnected"))
     }
 
     pub fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
@@ -305,15 +317,18 @@ impl Stream {
                 if !self.0.write_eof.swap(true, Ordering::AcqRel) {
                     // Raw NUL is impossible inside a valid JSONL frame and is
                     // consumed only inside this transport implementation.
-                    let mut file = &self.0.file;
-                    file.write_all(&[0])?;
-                    file.flush()?;
+                    let file = self.file()?;
+                    let mut borrowed = file.as_ref();
+                    borrowed.write_all(&[0])?;
+                    borrowed.flush()?;
                 }
             }
             std::net::Shutdown::Read => {
                 self.0.read_eof.store(true, Ordering::Release);
-                unsafe {
-                    CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
+                if let Ok(file) = self.file() {
+                    unsafe {
+                        CancelIoEx(file.as_raw_handle(), ptr::null());
+                    }
                 }
             }
             std::net::Shutdown::Both => {
@@ -323,11 +338,20 @@ impl Stream {
                 self.0.stopped.store(true, Ordering::Release);
                 self.0.read_eof.store(true, Ordering::Release);
                 self.0.write_eof.store(true, Ordering::Release);
-                // Interrupt pending synchronous I/O on the shared handle.
-                // The peer sees a physical disconnect when the final
-                // Stream clone drops its underlying handle.
-                unsafe {
-                    CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
+                // Sever the shared ownership for every Stream clone, even
+                // when a FleetClient retains its reader and writer objects.
+                // In-flight reads/writes own a temporary Arc and release it
+                // as soon as Win32 cancellation completes.
+                let file = self
+                    .0
+                    .file
+                    .lock()
+                    .expect("Fleet pipe handle poisoned")
+                    .take();
+                if let Some(file) = file {
+                    unsafe {
+                        CancelIoEx(file.as_raw_handle(), ptr::null());
+                    }
                 }
             }
         }
@@ -344,8 +368,9 @@ impl Read for Stream {
         if self.0.read_eof.load(Ordering::Acquire) {
             return Ok(0);
         }
-        let mut file = &self.0.file;
-        match file.read(out) {
+        let file = self.file()?;
+        let mut borrowed = file.as_ref();
+        match borrowed.read(out) {
             Ok(n) => {
                 if let Some(pos) = out[..n].iter().position(|b| *b == 0) {
                     self.0.read_eof.store(true, Ordering::Release);
@@ -389,12 +414,14 @@ impl Write for Stream {
                 "raw NUL is reserved for Fleet pipe EOF",
             ));
         }
-        let mut file = &self.0.file;
-        file.write(bytes)
+        let file = self.file()?;
+        let mut borrowed = file.as_ref();
+        borrowed.write(bytes)
     }
     fn flush(&mut self) -> io::Result<()> {
-        let mut file = &self.0.file;
-        file.flush()
+        let file = self.file()?;
+        let mut borrowed = file.as_ref();
+        borrowed.flush()
     }
 }
 

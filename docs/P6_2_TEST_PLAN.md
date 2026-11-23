@@ -42,10 +42,10 @@ del backend debe seguir ejecutándose sin un display server.
 Registrar el resultado con sesión de pantalla/servidor gráfico y evidencia
 observada. La existencia de `DISPLAY` por sí sola no constituye un smoke.
 
-Intento de este corte: GPUI creó una ventana X11 identificable y el proceso
-permaneció vivo sin panic, pero la captura de la sesión salió negra. Las
-utilidades Wayland disponibles tampoco respondieron. Se registra únicamente la
-creación de ventana; no el renderizado ni las interacciones como comprobados.
+Intento de este corte: Hyprland reportó la ventana GPUI mapeada, visible y con
+input habilitado. `grim` creó una imagen, pero todos sus píxeles son transparentes;
+por eso no se pudo inspeccionar el contenido renderizado. No se verificaron las
+interacciones manualmente y ambas cosas siguen pendientes.
 
 ## Dependencias Linux para CI
 

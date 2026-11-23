@@ -20,14 +20,14 @@ inicia procesos de agentes.
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |
 | `cargo test --workspace --locked` | PASS: 138 tests pasaron; 1 test opt-in ignorado |
 | `cargo build --workspace --locked` | PASS |
-| Smoke Linux | Parcial: ventana X11 identificable (`WM_CLASS=dev.gentle-fleet.desktop`, PID y mínimo 760×520); el proceso siguió vivo y el log no mostró panic. La captura salió negra y las herramientas de captura/interacción Wayland no respondieron. Renderizado e interacciones no verificados; criterio pendiente |
-| CI remota | Workflow actualizado, aún sin ejecución/resultado de Actions |
-| E2E shell de backend | No ejecutados en este corte; las pruebas unitarias del workspace pasaron |
+| Smoke Linux | Parcial: Hyprland reportó la ventana GPUI `mapped=true`, `visible=true`, `acceptsInput=true`, tamaño 1180×780, clase `dev.gentle-fleet.desktop` y PID. `grim` creó una captura RGBA totalmente transparente (todos los píxeles `(0,0,0,0)`), así que no se pudo comprobar el contenido renderizado. No se completó interacción; criterio pendiente |
+| CI remota | PASS: [run 45092111850](https://github.com/javijec/gentle-fleet/actions/runs/45092111850), ambos jobs `check` y `desktop-gpui-linux` exitosos |
+| E2E shell de backend | PASS en CI: suite FakeDriver, concurrencia, backpressure, permisos, persistencia, approvals, supervivencia runner, identidad, replay, P4.4, SSH y P6.1 |
 | Windows/macOS | No validados |
 
 El primer build expuso un problema en la dependencia transitiva
 `gpui_http_client 0.2.2` (`zed-async-tar` → `xattr`); el parche local mínimo
 descrito en el diseño permitió completar las validaciones Rust. No se modificó
-la lógica del backend Fleet ni se relajaron reglas de Clippy. P6.2-A no se
-considera cerrada hasta validar renderizado e interacciones en una sesión gráfica
-utilizable y obtener CI verde.
+la lógica del backend Fleet ni se relajaron reglas de Clippy. CI está verde, pero
+P6.2-A no se considera cerrada hasta verificar el contenido y las interacciones
+en una sesión gráfica utilizable.

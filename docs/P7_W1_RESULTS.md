@@ -52,3 +52,27 @@ El [CI posterior de W1-A](https://github.com/javijec/gentle-fleet/actions/runs/4
 pasó, pero una repetición exitosa no explica ni corrige ese fallo; investigar
 el bloqueo de SQLite y su posible concurrencia como parte de W1-C, sin
 deshabilitar el test.
+
+## W1-B — implementación candidata y estado de validación
+
+Tras el fixture rojo inicial se publicó una implementación Windows del IPC
+con `windows-sys`: named pipes con DACL protegida para SID propietario,
+validación de identidad de proceso cliente/servidor, protección de la primera
+instancia, prohibición de conexiones remotas de pipe y tokens por endpoint.
+El cliente ya no usa TCP loopback. Los clones comparten handle y el transporte
+interpreta un NUL reservado como EOF de la dirección de escritura, sin cerrar
+la lectura; `CancelIoEx` se solicita en cancelación total.
+
+Cambios concretos: `crates/fleet-protocol/src/windows_pipe.rs`,
+`transport.rs`, `Cargo.toml` y `Cargo.lock`; regresión W1-A adaptada a
+named pipes, prueba W1-B de endpoint/autenticación/colisión agregada a CI y
+tests Rust de half-close/respuesta pendiente/cancelación.
+
+**Validación en curso:** la primera iteración del backend falló compilación
+Windows por imports de Win32 y Rustfmt; se corrigieron ambos defectos en
+commits posteriores. El PASS de backend Linux de esas iteraciones no acredita
+funcionalidad Windows. Hasta finalizar los nuevos jobs Windows y Linux no se
+registra PASS de W1-B. La prueba real con un usuario SID diferente permanece
+**BLOCKED** (sin segunda cuenta de prueba autorizada). La cancelación en
+condiciones de backpressure y la ausencia de bloqueo de `Shutdown::Both`
+requieren evidencia adicional. **W1-B ABIERTA.**

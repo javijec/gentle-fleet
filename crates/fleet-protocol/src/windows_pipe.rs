@@ -528,13 +528,18 @@ mod tests {
         let listener = Listener::bind(&runtime, "disconnect").unwrap();
         let address = listener.address().to_owned();
         let (sender, receiver) = std::sync::mpsc::channel();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
             let mut stream = listener.accept().unwrap();
+            ready_tx.send(()).unwrap();
             let mut buffer = Vec::new();
             let _ = sender.send(stream.read_to_end(&mut buffer));
         });
         let client = connect(&address).unwrap();
         let other_clone = client.try_clone().unwrap();
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("server must accept before the client tests abortive shutdown");
         client.shutdown(Shutdown::Both).unwrap();
         let result = receiver
             .recv_timeout(std::time::Duration::from_secs(3))

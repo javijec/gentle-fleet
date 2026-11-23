@@ -43,7 +43,7 @@ través de los handlers y el render de Desktop.
 | Deadline y workers | PASS: una operación bloqueada 150 ms con deadline 30 ms devuelve `Timeout` y libera ambos slots |
 | Navegación a Welcome con máquina seleccionada | PASS: prueba GPUI |
 | Claves estables host/sesión | PASS: prueba unitaria de `machine_key`/`session_key` |
-| CI de la rama | PASS: [run 45206195615](https://github.com/javijec/gentle-fleet/actions/runs/45206195615) sobre `3678bbb` |
+| CI de la rama | PASS: [run 45208226815](https://github.com/javijec/gentle-fleet/actions/runs/45208226815) sobre `7ec7440` (el job `check` requirió un rerun por un fallo intermitente de `e2e_p3_survival.sh`; el rerun y el job GPUI pasaron) |
 | Omarchy/Hyprland (smoke manual de esta etapa) | UNTESTED: no se repitió la interacción manual con `fleetd` real de usuario; el E2E GPUI cubre la lógica de vista y los transportes reales, no una sesión de escritorio interactiva |
 | Segunda máquina física SSH | UNTESTED: el host remoto de la prueba es un `sshd` local efímero con runtime/DB aislados, no hardware distinto |
 | Windows/macOS | No validados |

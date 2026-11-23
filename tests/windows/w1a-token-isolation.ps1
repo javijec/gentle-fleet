@@ -137,6 +137,22 @@ function Assert-RunnerToken($Identity, [string]$Token, [bool]$Valid) {
     }
 }
 
+function Assert-PrivateFileAcl([string]$Path) {
+    $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        throw "sensitive Fleet file inherits permissions: $([IO.Path]::GetFileName($Path))"
+    }
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        $sid = $rule.IdentityReference.Translate(
+            [Security.Principal.SecurityIdentifier]).Value
+        if ($sid -ne $ownerSid) {
+            throw "sensitive Fleet file grants another identity access: $([IO.Path]::GetFileName($Path))"
+        }
+    }
+}
+
 try {
     $env:FLEET_RUNTIME_DIR = $runtime
     $env:FLEET_DB_PATH = Join-Path $root 'data/fleet.sqlite'
@@ -152,6 +168,8 @@ try {
         Start-Sleep -Milliseconds 100
     }
     $daemonTokenPath = Join-Path $runtime 'fleetd.token'
+    Assert-PrivateFileAcl (Join-Path $runtime 'fleetd.addr')
+    Assert-PrivateFileAcl $daemonTokenPath
     $daemonToken = [IO.File]::ReadAllText($daemonTokenPath)
     $workspaceOutput = Invoke-Fleetctl @('workspace', 'add', $root)
     $workspace = ($workspaceOutput -split "`t")[0]
@@ -169,6 +187,7 @@ try {
             throw "daemon token changed after runner $i started"
         }
         $runnerPath = Join-Path $runtime "fleet-runner-runner-$session.token"
+        Assert-PrivateFileAcl $runnerPath
         $runnerToken = [IO.File]::ReadAllText($runnerPath)
         if ($runnerToken -eq $daemonToken -or $runnerTokens -contains $runnerToken) {
             throw 'runner token is not independent'
@@ -188,6 +207,8 @@ try {
     $identity2 = Start-FixtureRunner 'w1a-two'
     $token1 = [IO.File]::ReadAllText((Join-Path $runtime 'fleet-runner-w1a-one.token'))
     $token2 = [IO.File]::ReadAllText((Join-Path $runtime 'fleet-runner-w1a-two.token'))
+    Assert-PrivateFileAcl (Join-Path $runtime 'fleet-runner-w1a-one.token')
+    Assert-PrivateFileAcl (Join-Path $runtime 'fleet-runner-w1a-two.token')
     Assert-RunnerToken $identity1 $token2 $false
     Assert-RunnerToken $identity2 $token1 $false
     Assert-RunnerToken $identity1 $token1 $true

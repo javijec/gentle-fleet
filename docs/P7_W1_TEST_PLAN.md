@@ -28,3 +28,12 @@ que exista el backend; no demuestran aislamiento entre usuarios.
 **W1-C–F:** rutas, permisos, WAL, crash real, reattach, deduplicación,
 concurrencia, aprobaciones, backpressure, CI y smoke manual enumerados en
 `P7_W0_AUDIT.md`; siguen UNTESTED.
+
+**Backend W1-B en revisión:** ejecutar `cargo test -p fleet-protocol --locked`
+en Windows y los dos scripts nativos `w1a-token-isolation.ps1` y
+`w1b-named-pipe.ps1`, ahora incorporados al job Windows. El test Rust
+`half_close_drains_pending_reply_without_truncation` comprueba EOF de escritura
+y respuesta tardía; `full_shutdown_wakes_pending_reader_without_dropping_client`
+comprueba cancelación. Agregar prueba de otro SID y de backpressure con
+`Shutdown::Both` antes de cerrar W1-B. Todos los resultados pendientes son
+UNTESTED o BLOCKED, nunca PASS por inspección de código.

@@ -46,6 +46,13 @@ clientes del daemon. Runners aislados también rechazaron credenciales cruzadas.
 El IPC seguro y el recorrido funcional completo siguen sin validar; ver
 `P7_W1_RESULTS.md` y el [CI Windows/Linux](https://github.com/javijec/gentle-fleet/actions/runs/45238966908).
 
+**W1-B ABIERTO:** el backend candidato usa named pipes; W1-A y el fixture
+W1-B con EOF del bridge pasaron localmente tras corregir I/O concurrente.
+Las ACL heredadas de `fleetd.addr` y `fleetd.token` no están protegidas y
+permiten modificación a identidades adicionales en el entorno probado:
+**FAIL** de seguridad. Prueba real de otra cuenta: **BLOCKED**. Ver evidencia
+y otras carreras pendientes en `P7_W1_RESULTS.md`.
+
 **W1-B (implementación candidata):** se sustituyó el backend Windows TCP por
 named pipes con DACL explícita y verificación SID, y se prepararon regresiones
 W1-A/W1-B sobre ese transporte. Las pruebas de CI y de aislamiento entre

@@ -84,3 +84,30 @@ requieren evidencia adicional. **W1-B ABIERTA.**
 - En [CI 45251457404](https://github.com/javijec/gentle-fleet/actions/runs/45251457404), pasaron 10 de 11 tests del protocolo; el test de cierre físico falló por una carrera del fixture: el cliente cerraba antes de que `ConnectNamedPipe` terminara. Se añadió una barrera de aceptación en el test (`1413d4d`).
 - **Estado al redactar:** el CI del último commit continúa pendiente. No existe aún una corrida verde completa del nuevo backend. La prueba de acceso desde una segunda cuenta Windows autorizada sigue BLOCKED, y el caso de cierre bajo backpressure no tiene evidencia exhaustiva.
 - W1-B permanece **ABIERTA**. No se empezó W1-C ni se hizo merge.
+
+## W1-B — diagnóstico y correcciones posteriores a `2525d2b`
+
+- El CI [45252231986](https://github.com/javijec/gentle-fleet/actions/runs/45252231986)
+  falló: `fleet-conformance` aún referenciaba `LocalStream::Tcp`, Clippy
+  rechazaba una conversión redundante y el bridge no terminaba tras EOF.
+  Ambos jobs Linux pasaron.
+- En Windows nativo se reprodujo el deadlock con
+  `concurrent_read_does_not_prevent_cloned_writer_from_sending`: una lectura
+  síncrona bloqueaba la escritura en un clon del mismo handle. Se cambió a
+  I/O superpuesta con un evento por operación y cancelación; el test pasó.
+  `fleet-conformance` usa ahora la variante pipe con timeouts de lectura y
+  escritura; el nuevo test de timeout comprueba que la conexión sigue usable.
+- Tras estos cambios, `cargo test -p fleet-protocol --locked`: PASS (13 tests);
+  compilación de `fleet-conformance`: PASS; los fixtures de proceso W1-A y
+  W1-B: PASS local, incluida recepción de las dos respuestas del bridge tras
+  EOF. Estas pruebas no demuestran toda la seguridad ni recuperación.
+- **FAIL de seguridad:** un daemon aislado en `%TEMP%` creó `fleetd.addr` y
+  `fleetd.token` con `AreAccessRulesProtected=False`, heredando permisos de
+  modificación para otras identidades/grupos. Se comprobó con `Get-Acl`, sin
+  mostrar el token. No existe aún protección explícita de estos archivos ni
+  prueba de rechazo real entre cuentas.
+- **Pendientes críticos:** corregir la ACL de los archivos de dirección y
+  credenciales sin ventanas de exposición; revisar y probar la carrera entre
+  registrar I/O y `CancelIoEx`, cierre bajo backpressure, e identidad del peer
+  frente a reutilización de PID. El rechazo real de otro usuario está BLOCKED
+  por falta de cuenta controlada. No se declara W1-B PASS.

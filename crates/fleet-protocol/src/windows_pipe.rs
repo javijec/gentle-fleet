@@ -522,6 +522,29 @@ mod tests {
     }
 
     #[test]
+    fn full_shutdown_physically_disconnects_even_with_live_clones() {
+        let runtime = std::env::temp_dir()
+            .join(format!("gentle-fleet-close-test-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "disconnect").unwrap();
+        let address = listener.address().to_owned();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut buffer = Vec::new();
+            let _ = sender.send(stream.read_to_end(&mut buffer));
+        });
+        let client = connect(&address).unwrap();
+        let other_clone = client.try_clone().unwrap();
+        client.shutdown(Shutdown::Both).unwrap();
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("the peer must see EOF without waiting for client clones to drop");
+        assert!(result.is_ok());
+        drop(other_clone);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn invalid_address_is_rejected_without_contacting_any_server() {
         assert!(connect("127.0.0.1:4000").is_err());
         assert!(connect(r"\\.\pipe\other-service").is_err());

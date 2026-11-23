@@ -121,3 +121,29 @@ requieren evidencia adicional. **W1-B ABIERTA.**
   no iniciaron sus jobs. GitHub informa: `The job was not started because
   recent account payments have failed or your spending limit needs to be
   increased`. Revisar Billing & plans; estos FAIL no son resultados de tests.
+
+## W1-B — corrección de ACL de archivos (verificación pendiente)
+
+Para corregir el FAIL nativo registrado sobre `fleetd.addr` y
+`fleetd.token`, se agregó `windows_pipe::write_private_file`. La función
+crea los archivos con `CreateFileW(CREATE_NEW)` y un descriptor de seguridad
+explícito `D:P(A;;GA;;;<SID actual>)` **antes de escribir el contenido**.
+No utiliza `CREATE_ALWAYS` ni modifica un archivo preexistente, porque
+Windows ignora el security descriptor suministrado al abrir un archivo
+existente. El archivo anterior se desvincula y una recreación inesperada
+provoca fallo cerrado. Se aplica al token y address del daemon, al address de
+cada runner y al token de cada runner.
+
+Las regresiones `tests/windows/w1a-token-isolation.ps1` y
+`tests/windows/w1b-named-pipe.ps1` comprueban que las ACL de archivos
+sensibles no sean heredadas y que ningún ACE de permiso incluya otro SID,
+sin imprimir sus contenidos. El parche está publicado, pero estas pruebas
+**NO HAN SIDO EJECUTADAS contra este commit**: GitHub Actions está rechazando
+jobs por facturación/límite de gastos. No contabilizarlo como PASS.
+
+**Riesgos aún abiertos:** el directorio `FLEET_RUNTIME_DIR` puede permitir
+`DELETE_CHILD` a otros sujetos aun cuando cada archivo tenga DACL privada;
+debe validarse/protegerse de manera atómica antes de certificar integridad del
+endpoint. Persisten la prueba desde otro usuario Windows, auditoría de
+reutilización de PID en verificación SID, cancelación bajo backpressure y CI
+Windows/Linux completo. **W1-B sigue ABIERTA.** Sin merge a main y sin W1-C.

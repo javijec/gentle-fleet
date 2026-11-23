@@ -571,7 +571,10 @@ mod tests {
 
         // Repeated user retries must not create additional SDK threads.
         for _ in 0..100 {
-            assert!(workers.try_acquire().is_none(), "timed-out RPC still holds slot");
+            assert!(
+                workers.try_acquire().is_none(),
+                "timed-out RPC still holds slot"
+            );
         }
 
         for tx in release {

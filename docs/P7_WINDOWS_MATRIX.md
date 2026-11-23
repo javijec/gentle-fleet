@@ -45,3 +45,10 @@ runners no sobrescriben el token del daemon y que sus tokens no autentican
 clientes del daemon. Runners aislados también rechazaron credenciales cruzadas.
 El IPC seguro y el recorrido funcional completo siguen sin validar; ver
 `P7_W1_RESULTS.md` y el [CI Windows/Linux](https://github.com/javijec/gentle-fleet/actions/runs/45238966908).
+
+**W1-B (implementación candidata):** se sustituyó el backend Windows TCP por
+named pipes con DACL explícita y verificación SID, y se prepararon regresiones
+W1-A/W1-B sobre ese transporte. Las pruebas de CI y de aislamiento entre
+usuarios distintos están pendientes; la matriz anterior contiene los fallos
+históricos de W0 y no debe interpretarse como estado funcional actual.
+**Estado W1-B: UNTESTED/BLOCKED hasta resultados concluyentes.**

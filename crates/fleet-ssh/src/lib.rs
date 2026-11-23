@@ -473,6 +473,13 @@ pub fn run_bridge() -> Result<(), String> {
 /// Reescribe `Hello` con el token del host remoto. El token local NUNCA viaja
 /// por SSH: se inyecta dentro del bridge, en la máquina del daemon.
 pub fn rewrite_hello_for_remote(frame: &Frame) -> Result<Frame, SshError> {
+    rewrite_hello_with_token(frame, expected_token)
+}
+
+fn rewrite_hello_with_token(
+    frame: &Frame,
+    token: impl FnOnce() -> io::Result<Option<String>>,
+) -> Result<Frame, SshError> {
     match frame {
         Frame::Request {
             request_id,
@@ -481,7 +488,7 @@ pub fn rewrite_hello_for_remote(frame: &Frame) -> Result<Frame, SshError> {
             request_id: request_id.clone(),
             request: Request::Hello {
                 client_id: client_id.clone(),
-                token: expected_token().map_err(|error| {
+                token: token().map_err(|error| {
                     SshError::Protocol(format!("remote token unavailable: {error}"))
                 })?,
             },
@@ -586,16 +593,33 @@ mod tests {
                 token: Some("local-secret-must-not-travel".into()),
             },
         };
-        let rewritten = rewrite_hello_for_remote(&frame).unwrap();
+        let rewritten =
+            rewrite_hello_with_token(&frame, || Ok(Some("remote-fixture-token".into()))).unwrap();
         match rewritten {
             Frame::Request {
                 request: Request::Hello { token, .. },
                 ..
             } => {
-                assert_ne!(token.as_deref(), Some("local-secret-must-not-travel"));
+                assert_eq!(token.as_deref(), Some("remote-fixture-token"));
             }
             _ => panic!("unexpected frame"),
         }
+    }
+
+    #[test]
+    fn hello_rewrite_reports_remote_token_errors() {
+        let frame = Frame::Request {
+            request_id: "r1".into(),
+            request: Request::Hello {
+                client_id: "fleetctl".into(),
+                token: None,
+            },
+        };
+        assert!(rewrite_hello_with_token(&frame, || Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "fixture token missing"
+        )))
+        .is_err());
     }
 
     #[test]

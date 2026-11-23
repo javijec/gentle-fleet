@@ -464,6 +464,35 @@ mod tests {
     }
 
     #[test]
+    fn full_shutdown_wakes_pending_reader_without_dropping_client() {
+        let runtime = std::env::temp_dir()
+            .join(format!("gentle-fleet-cancel-test-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "cancellation").unwrap();
+        let address = listener.address().to_owned();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let _connected = listener.accept().unwrap();
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+        let client = connect(&address).unwrap();
+        let mut observer = client.try_clone().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            let _ = sender.send(observer.read(&mut buffer));
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        client.shutdown(Shutdown::Both).unwrap();
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("pipe shutdown must wake the pending reader");
+        assert!(result.is_err() || result.unwrap() == 0);
+        release_tx.send(()).unwrap();
+        reader.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
     fn invalid_address_is_rejected_without_contacting_any_server() {
         assert!(connect("127.0.0.1:4000").is_err());
         assert!(connect(r"\\.\pipe\other-service").is_err());

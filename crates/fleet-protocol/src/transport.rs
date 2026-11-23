@@ -7,9 +7,9 @@
 //!   La prueba entre dos usuarios distintos sigue pendiente de ejecución.
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
 #[cfg(unix)]
 use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(windows)]
 #[path = "windows_pipe.rs"]

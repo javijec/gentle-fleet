@@ -39,3 +39,8 @@ adaptados para ejecución Windows; su éxito en Linux no modifica esta matriz.
 Los PASS de tests excluyen los probes opt-in ignorados y código `cfg(unix)`.
 W0 queda cerrado como auditoría; los FAIL y UNTESTED funcionales siguen siendo
 pendientes, no declaraciones de compatibilidad.
+
+**W1-A en curso:** la regresión de proceso Windows ahora comprueba que dos
+runners no sobrescriben el token del daemon y que sus tokens no autentican
+clientes del daemon. El IPC seguro, la autenticación cruzada entre runners y el
+recorrido funcional completo siguen sin validar; ver `P7_W1_RESULTS.md`.

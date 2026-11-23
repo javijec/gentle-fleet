@@ -143,9 +143,12 @@ impl LocalListener {
         std::fs::create_dir_all(runtime_dir())?;
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
         let address = listener.local_addr()?;
-        // UUID v4 utiliza aleatoriedad del sistema; PID/tiempo eran predecibles.
-        let token = uuid::Uuid::new_v4().to_string();
-        std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
+        // Only the daemon owns fleetd.token. Runners generate their own
+        // independent token during startup and must never rotate the daemon's.
+        if name == "fleetd" {
+            let token = uuid::Uuid::new_v4().to_string();
+            std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
+        }
         std::fs::write(address_file_named(name), address.to_string())?;
         Ok(Self::Tcp(listener))
     }

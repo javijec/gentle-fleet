@@ -29,6 +29,8 @@ jobs:
       - name: Build workspace
         if: ${{ always() }}
         run: cargo build --workspace --locked
+      - name: W1-A token isolation process regression
+        run: pwsh -NoProfile -File tests/windows/w1a-token-isolation.ps1
 
   check:
     runs-on: ubuntu-latest

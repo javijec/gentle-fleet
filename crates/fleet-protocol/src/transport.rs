@@ -2,12 +2,16 @@
 //!
 //! - Unix: Unix Domain Socket en un directorio 0700 con socket 0600. El
 //!   filesystem impide que otro usuario se conecte; no se confía en loopback.
-//! - Windows: TCP en loopback + token aleatorio leído de un fichero privado.
-//!   Esta plataforma queda marcada como NO VALIDADA en P1.1: el token depende
-//!   de la ACL del fichero y no se ha probado con otro usuario.
+//! - Windows: named pipes con DACL explícita para el SID del usuario, rechazo
+//!   de conexiones ajenas y token adicional independiente de cada endpoint.
+//!   La prueba entre dos usuarios distintos sigue pendiente de ejecución.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+#[path = "windows_pipe.rs"]
+mod windows_pipe;
 
 pub fn runtime_dir() -> PathBuf {
     std::env::var_os("FLEET_RUNTIME_DIR")
@@ -30,7 +34,7 @@ pub enum LocalListener {
 
 #[cfg(windows)]
 pub enum LocalListener {
-    Tcp(std::net::TcpListener),
+    NamedPipe(windows_pipe::Listener),
 }
 
 #[cfg(unix)]
@@ -40,7 +44,7 @@ pub enum LocalStream {
 
 #[cfg(windows)]
 pub enum LocalStream {
-    Tcp(std::net::TcpStream),
+    NamedPipe(windows_pipe::Stream),
 }
 
 impl LocalStream {
@@ -50,7 +54,7 @@ impl LocalStream {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.shutdown(how),
             #[cfg(windows)]
-            LocalStream::Tcp(stream) => stream.shutdown(how),
+            LocalStream::NamedPipe(stream) => stream.shutdown(how),
         }
     }
 
@@ -59,7 +63,7 @@ impl LocalStream {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.try_clone().map(LocalStream::Unix),
             #[cfg(windows)]
-            LocalStream::Tcp(stream) => stream.try_clone().map(LocalStream::Tcp),
+            LocalStream::NamedPipe(stream) => stream.try_clone().map(LocalStream::NamedPipe),
         }
     }
 }
@@ -70,7 +74,7 @@ impl Read for LocalStream {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.read(buffer),
             #[cfg(windows)]
-            LocalStream::Tcp(stream) => stream.read(buffer),
+            LocalStream::NamedPipe(stream) => stream.read(buffer),
         }
     }
 }
@@ -81,7 +85,7 @@ impl Write for LocalStream {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.write(buffer),
             #[cfg(windows)]
-            LocalStream::Tcp(stream) => stream.write(buffer),
+            LocalStream::NamedPipe(stream) => stream.write(buffer),
         }
     }
 
@@ -90,7 +94,7 @@ impl Write for LocalStream {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.flush(),
             #[cfg(windows)]
-            LocalStream::Tcp(stream) => stream.flush(),
+            LocalStream::NamedPipe(stream) => stream.flush(),
         }
     }
 }
@@ -141,8 +145,8 @@ impl LocalListener {
 
     pub fn bind_named(name: &str) -> io::Result<Self> {
         std::fs::create_dir_all(runtime_dir())?;
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-        let address = listener.local_addr()?;
+        let listener = windows_pipe::Listener::bind(&runtime_dir(), name)?;
+        let address = listener.address().to_string();
         // Only the daemon owns fleetd.token. Runners generate their own
         // independent token during startup and must never rotate the daemon's.
         if name == "fleetd" {
@@ -150,19 +154,17 @@ impl LocalListener {
             std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
         }
         std::fs::write(address_file_named(name), address.to_string())?;
-        Ok(Self::Tcp(listener))
+        Ok(Self::NamedPipe(listener))
     }
 
     pub fn accept(&self) -> io::Result<LocalStream> {
         match self {
-            Self::Tcp(listener) => listener
-                .accept()
-                .map(|(stream, _)| LocalStream::Tcp(stream)),
+            Self::NamedPipe(listener) => listener.accept().map(LocalStream::NamedPipe),
         }
     }
 
     pub fn description(&self) -> String {
-        format!("tcp-loopback:{:?}", address_file_named("fleetd"))
+        format!("named-pipe:{:?}", address_file_named("fleetd"))
     }
 }
 
@@ -180,8 +182,7 @@ pub fn connect_named(name: &str) -> io::Result<LocalStream> {
     }
     #[cfg(windows)]
     {
-        let _ = Path::new(address);
-        std::net::TcpStream::connect(address).map(LocalStream::Tcp)
+        windows_pipe::connect(address).map(LocalStream::NamedPipe)
     }
 }
 

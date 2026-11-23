@@ -523,8 +523,8 @@ mod tests {
 
     #[test]
     fn full_shutdown_physically_disconnects_even_with_live_clones() {
-        let runtime = std::env::temp_dir()
-            .join(format!("gentle-fleet-close-test-{}", uuid::Uuid::new_v4()));
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-close-test-{}", uuid::Uuid::new_v4()));
         let listener = Listener::bind(&runtime, "disconnect").unwrap();
         let address = listener.address().to_owned();
         let (sender, receiver) = std::sync::mpsc::channel();

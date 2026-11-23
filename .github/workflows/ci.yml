@@ -20,9 +20,9 @@ jobs:
       - name: Validar sintaxis de scripts E2E
         run: |
           for script in tests/*.sh; do bash -n "$script"; done
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace
+      - run: cargo clippy --workspace --exclude gentle-fleet-desktop --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --exclude gentle-fleet-desktop --locked
+      - run: cargo build --workspace --exclude gentle-fleet-desktop --locked
       - name: e2e con FakeDriver (sin servicios de pago)
         run: tests/e2e_fake.sh
       - name: e2e concurrencia y aislamiento
@@ -77,3 +77,26 @@ jobs:
           fi
       - name: e2e P6.1 SDK local con FakeDriver
         run: tests/e2e_p61_sdk.sh
+
+  desktop-gpui-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Instalar dependencias nativas de GPUI (Linux X11/Wayland)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libfontconfig1-dev libfreetype-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxext-dev \
+            libxfixes-dev libxi-dev libxcursor-dev libxrandr-dev libxrender-dev \
+            libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-sync-dev \
+            libxcb-xfixes0-dev libxcb-xkb-dev libvulkan-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo check -p gentle-fleet-desktop --locked
+      - run: cargo clippy -p gentle-fleet-desktop --all-targets --locked -- -D warnings
+      - run: cargo test -p gentle-fleet-desktop --locked
+      - run: cargo build -p gentle-fleet-desktop --locked

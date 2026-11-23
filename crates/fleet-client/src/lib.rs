@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use fleet_domain::{store, ApprovalArgument, ControlState, Event, OperationId, SessionId};
 use fleet_protocol::transport::{connect as connect_local, expected_token};
-use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response};
-use fleet_ssh::{find_host, FleetReader, FleetWriter, SshStream};
+use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
+pub use fleet_protocol::{AgentSummary, SessionSummary, WorkspaceSummary};
+use fleet_ssh::{find_host, load_hosts, FleetReader, FleetWriter, SshStream};
 use uuid::Uuid;
 
 /// Explicit target. A connection never inherits a process-global host choice.
@@ -65,6 +66,29 @@ impl std::fmt::Display for ClientError {
 impl std::error::Error for ClientError {}
 
 pub type Result<T> = std::result::Result<T, ClientError>;
+
+/// Public, non-secret identity for an SSH host configured through fleetctl.
+/// Connection details remain owned by fleet-ssh and are not exposed to UIs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConfiguredHost {
+    pub alias: String,
+}
+
+/// Read the existing fleetctl SSH catalog without probing or connecting to
+/// any remote host.
+pub fn configured_hosts() -> Result<Vec<ConfiguredHost>> {
+    let hosts = load_hosts()
+        .map_err(|_| ClientError::Transport("configured SSH host catalog is unavailable".into()))?;
+    Ok(public_host_catalog(hosts))
+}
+
+fn public_host_catalog(mut hosts: Vec<fleet_ssh::HostConfig>) -> Vec<ConfiguredHost> {
+    hosts.sort_by(|left, right| left.alias.cmp(&right.alias));
+    hosts
+        .into_iter()
+        .map(|host| ConfiguredHost { alias: host.alias })
+        .collect()
+}
 
 pub struct FleetClient {
     host: Host,
@@ -963,6 +987,43 @@ mod tests {
         assert_eq!(
             classify_ssh_disconnect(Some(255), "Host key verification failed."),
             "HostKeyRejected: SSH server identity verification failed"
+        );
+    }
+
+    #[test]
+    fn configured_host_catalog_exposes_only_sorted_aliases() {
+        let configured = public_host_catalog(vec![
+            fleet_ssh::HostConfig {
+                alias: "zeta".into(),
+                destination: "private-user@private-host".into(),
+                bridge_path: "/private/path/fleet-ssh-bridge".into(),
+                port: Some(22),
+                identity_file: Some("/private/key".into()),
+                expected_host_key: None,
+                last_status: Some("connected".into()),
+                protocol_version: Some("wire-v1".into()),
+            },
+            fleet_ssh::HostConfig {
+                alias: "alpha".into(),
+                destination: "user@host".into(),
+                bridge_path: "/opt/fleet-ssh-bridge".into(),
+                port: None,
+                identity_file: None,
+                expected_host_key: None,
+                last_status: None,
+                protocol_version: None,
+            },
+        ]);
+        assert_eq!(
+            configured,
+            vec![
+                ConfiguredHost {
+                    alias: "alpha".into()
+                },
+                ConfiguredHost {
+                    alias: "zeta".into()
+                }
+            ]
         );
     }
 

@@ -180,34 +180,7 @@ impl FleetClient {
         }
         let code = self.writer.get_mut().ssh_exit_code();
         let diagnostics = self.writer.get_ref().ssh_diagnostics().join(" | ");
-        let lower = diagnostics.to_ascii_lowercase();
-        if lower.contains("host key verification failed")
-            || lower.contains("remote host identification has changed")
-            || lower.contains("no matching host key")
-        {
-            "HostKeyRejected: SSH server identity verification failed".into()
-        } else if lower.contains("permission denied (publickey")
-            || lower.contains("permission denied (")
-        {
-            "AuthFailed: SSH authentication rejected".into()
-        } else if lower.contains("fleetd unavailable") {
-            "DaemonDown: remote fleetd is unavailable".into()
-        } else if code == Some(127)
-            || lower.contains("fleet-ssh-bridge: not found")
-            || lower.contains("fleet-ssh-bridge: no such file")
-        {
-            "BridgeMissing: remote bridge executable not found".into()
-        } else if lower.contains("connection refused") {
-            "SSHUnreachable: connection refused".into()
-        } else if lower.contains("connection timed out") || lower.contains("operation timed out") {
-            "SSHTimeout: connection timed out".into()
-        } else if lower.contains("could not resolve hostname") {
-            "SSHUnreachable: name resolution failed".into()
-        } else {
-            // SSH diagnostics may contain local paths, account names or
-            // unexpected sensitive data; classify without echoing raw stderr.
-            format!("SSHDisconnected: SSH exited with status {code:?}")
-        }
+        classify_ssh_disconnect(code, &diagnostics)
     }
 
     fn journal_if_remote(&self, request: &Request) -> Result<()> {
@@ -569,6 +542,38 @@ impl FleetClient {
             Response::ControlChanged { control } => Ok(control),
             _ => Err(ClientError::UnexpectedResponse("ControlChanged")),
         }
+    }
+}
+
+fn classify_ssh_disconnect(code: Option<i32>, diagnostics: &str) -> String {
+    let lower = diagnostics.to_ascii_lowercase();
+    if lower.contains("host key verification failed")
+        || lower.contains("remote host identification has changed")
+        || lower.contains("no matching host key")
+        || (lower.contains("strict checking") && lower.contains("host key"))
+    {
+        "HostKeyRejected: SSH server identity verification failed".into()
+    } else if lower.contains("permission denied (publickey")
+        || lower.contains("permission denied (")
+    {
+        "AuthFailed: SSH authentication rejected".into()
+    } else if lower.contains("fleetd unavailable") {
+        "DaemonDown: remote fleetd is unavailable".into()
+    } else if code == Some(127)
+        || lower.contains("fleet-ssh-bridge: not found")
+        || lower.contains("fleet-ssh-bridge: no such file")
+    {
+        "BridgeMissing: remote bridge executable not found".into()
+    } else if lower.contains("connection refused") {
+        "SSHUnreachable: connection refused".into()
+    } else if lower.contains("connection timed out") || lower.contains("operation timed out") {
+        "SSHTimeout: connection timed out".into()
+    } else if lower.contains("could not resolve hostname") {
+        "SSHUnreachable: name resolution failed".into()
+    } else {
+        // SSH diagnostics may contain local paths, account names or
+        // unexpected sensitive data; classify without echoing raw stderr.
+        format!("SSHDisconnected: SSH exited with status {code:?}")
     }
 }
 
@@ -945,6 +950,21 @@ fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_host_key_rejection_classification_does_not_depend_on_exit_code() {
+        assert_eq!(
+            classify_ssh_disconnect(
+                Some(255),
+                "No ED25519 host key is known for [127.0.0.1]:23000 and strict checking is enabled."
+            ),
+            "HostKeyRejected: SSH server identity verification failed"
+        );
+        assert_eq!(
+            classify_ssh_disconnect(Some(255), "Host key verification failed."),
+            "HostKeyRejected: SSH server identity verification failed"
+        );
+    }
 
     fn sample_event(seq: u64) -> Event {
         Event {

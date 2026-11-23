@@ -2,8 +2,8 @@
 
 ## Pruebas automatizadas
 
-`cargo test -p gentle-fleet-desktop --locked` cubre el modelo visual y la
-conversión de tokens de color sin necesitar servidor gráfico:
+`cargo test -p gentle-fleet-desktop --locked` cubre el modelo visual, la
+conversión de tokens y las transiciones de foco/interacción de ventana:
 
 1. Estado inicial en bienvenida, panel visible, hosts/sesiones vacíos y sin
    sesión iniciada.
@@ -11,10 +11,12 @@ conversión de tokens de color sin necesitar servidor gráfico:
 3. Abrir/cerrar panel.
 4. Selección de paleta clara/oscura y persistencia del tema visual.
 5. Navegación/panel no crean estado Fleet ni sesión.
+6. Tab recorre Ajustes; Enter activa la acción enfocada y el foco se restaura en
+   la página destino y al volver.
 
-Las pruebas de estado deliberadamente no afirman interacciones gráficas. GPUI
-0.2.2 implementa la activación Enter/Espacio en elementos enfocados, pero todavía
-no hay una prueba de ventana fiable en este proyecto.
+Las pruebas GPUI simulan KeyDown y KeyUp por separado: el helper
+`simulate_keystrokes` solo genera KeyDown y el click de teclado de GPUI se activa
+en KeyUp.
 
 ## Validaciones de build
 
@@ -42,13 +44,21 @@ del backend debe seguir ejecutándose sin un display server.
 Registrar el resultado con sesión de pantalla/servidor gráfico y evidencia
 observada. La existencia de `DISPLAY` por sí sola no constituye un smoke.
 
-Intento previo: Hyprland reportó la ventana GPUI mapeada, visible y con input
-habilitado, pero la captura resultó transparente y no sirvió como evidencia.
-Reintento en la sesión activa: la ventana se mapeó y se inspeccionó una captura
-opaca de 1920×1080; se distinguieron bienvenida, panel vacío y tema oscuro. Se
-enviaron Tab/Return con `wtype`, pero no se observó una transición de pantalla.
-No se completaron las comprobaciones de controles, foco/teclado, redimensionado
-ni cierre; el smoke sigue incompleto.
+Reintento en la sesión Hyprland activa: monitor físico `eDP-1` encendido,
+1920×1080. El binario actualizado se inspeccionó visible y apto para input.
+Capturas en `/tmp/opencode/p62-67-final-welcome.png`,
+`p62-73-settings-followup.png`, `p62-75-back-followup.png`,
+`p62-82-light-latest.png` y `p62-80-resized.png` documentan bienvenida,
+Ajustes, regreso, tema claro y layout redimensionado. Se verificó tema oscuro
+antes del cambio a claro. «Abrir sesión» llegó a la pantalla informativa; no se
+inició ningún agente.
+
+El panel lateral se ocultó una vez en el smoke anterior, pero durante el
+reintento más reciente no se pudo activar de manera fiable mediante el
+dispatcher sintético de Hyprland; por tanto, su ciclo ocultar/mostrar sigue sin
+PASS reproducible. El cierre normal de la última instancia sí se verificó en el
+reintento previo. Windows/macOS y el CI de un commit nuevo no se han validado.
+El smoke y P6.2-A permanecen abiertos.
 
 ## Dependencias Linux para CI
 

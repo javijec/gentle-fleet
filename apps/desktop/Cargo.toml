@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 gpui = "=0.2.2"
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }

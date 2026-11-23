@@ -20,7 +20,10 @@ se registra BLOCKED, no PASS.
 
 Primera prueba negra: `pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1`.
 Actualmente FAIL contra TCP como se espera antes de implementar W1-B; todavía
-no se ha añadido a CI y no sustituye las pruebas de seguridad enumeradas.
+no se ha añadido a CI y no sustituye las pruebas de seguridad enumeradas. Tras
+detectar pipe, la prueba intenta conexión con token inválido y arranque de un
+segundo daemon en el mismo runtime: ambas comprobaciones están UNTESTED hasta
+que exista el backend; no demuestran aislamiento entre usuarios.
 
 **W1-C–F:** rutas, permisos, WAL, crash real, reattach, deduplicación,
 concurrencia, aprobaciones, backpressure, CI y smoke manual enumerados en

@@ -40,8 +40,8 @@ Los PASS de tests excluyen los probes opt-in ignorados y código `cfg(unix)`.
 W0 queda cerrado como auditoría; los FAIL y UNTESTED funcionales siguen siendo
 pendientes, no declaraciones de compatibilidad.
 
-**W1-A en curso:** la regresión de proceso Windows ahora comprueba que dos
+**W1-A PASS:** la regresión de proceso Windows comprueba que dos
 runners no sobrescriben el token del daemon y que sus tokens no autentican
 clientes del daemon. Runners aislados también rechazaron credenciales cruzadas.
 El IPC seguro y el recorrido funcional completo siguen sin validar; ver
-`P7_W1_RESULTS.md`.
+`P7_W1_RESULTS.md` y el [CI Windows/Linux](https://github.com/javijec/gentle-fleet/actions/runs/45238966908).

@@ -39,6 +39,9 @@ En `a151038`, con los binarios nativos de W1-A:
 únicamente su daemon, en runtime y DB aislados. La prueba es intencionalmente
 roja mientras W1-B no se implemente; aún no está integrada en CI. Por sí sola
 no comprueba DACL, identidad, colisiones, EOF ni ausencia de puertos de red.
+La versión ampliada también define comprobaciones de rechazo de token inválido
+y colisión con un segundo daemon, pero todavía no llega a ejecutarlas porque
+falla primero en la ausencia de named pipe. No se cuentan como PASS.
 
 El run W0 de cierre
 [#45237481862](https://github.com/javijec/gentle-fleet/actions/runs/45237481862)

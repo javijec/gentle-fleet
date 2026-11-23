@@ -45,3 +45,20 @@ que se deben evaluar derechos individuales y creación de la primera instancia
 para evitar nuevos servidores no autorizados. Fuente:
 [Named Pipe Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights).
 Estos requisitos son criterios de diseño, no evidencia de implementación.
+
+## Contrato observado por plataforma
+
+En Unix, `LocalListener` y `LocalStream` usan sockets de dominio Unix; el
+`try_clone()` permite lectura y escritura simultáneas y `shutdown(Write)`
+propaga EOF sin cerrar el canal de respuesta. En Windows actual se usan TCP
+loopback y `TcpStream`, con la misma semántica de mitad de conexión, pero el
+token y la dirección se publican en ficheros sin DACL comprobada. Esto no
+implementa la política de aislamiento de Windows.
+
+Una pipe Windows dúplex no ofrece el mismo shutdown direccional por duplicar
+un handle. La solución deberá especificar, probar y acotar cómo se representa
+el EOF de entrada y cómo se despierta una lectura o escritura bloqueada sin
+perder respuestas; no basta convertir `shutdown(Write)` en no-op. `fleetd` y
+`fleet-runner` leen frames por una clonación y escriben por otra, y el SDK,
+CLI, conformance y bridge también consumen el transporte; los cambios deben
+mantener esas concurrencias y no reenviar prompts inciertos.

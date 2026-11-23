@@ -101,6 +101,10 @@ requieren evidencia adicional. **W1-B ABIERTA.**
   compilación de `fleet-conformance`: PASS; los fixtures de proceso W1-A y
   W1-B: PASS local, incluida recepción de las dos respuestas del bridge tras
   EOF. Estas pruebas no demuestran toda la seguridad ni recuperación.
+- En Windows 11 nativo, tras `b43a22f`: fmt, check, Clippy `--all-targets`,
+  test y build del workspace completo con `--locked`: PASS. Permanecen
+  ignorados los dos probes opt-in existentes de Gentle Shell real y E2E GPUI
+  Linux; no son evidencia de esas integraciones en Windows.
 - **FAIL de seguridad:** un daemon aislado en `%TEMP%` creó `fleetd.addr` y
   `fleetd.token` con `AreAccessRulesProtected=False`, heredando permisos de
   modificación para otras identidades/grupos. Se comprobó con `Get-Acl`, sin

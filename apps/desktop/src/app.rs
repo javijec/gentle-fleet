@@ -257,8 +257,9 @@ impl DesktopView {
         });
         let request_id = id.clone();
         let task = cx.background_executor().spawn(async move {
-            let _permit = permit;
-            fleet::inspect(&request_id, &cancellation, reusable_client)
+            // The permit moves into the OS thread performing the blocking SDK
+            // operation. A UI timeout must not free its real transport slot.
+            fleet::inspect(&request_id, &cancellation, reusable_client, permit)
         });
 
         cx.spawn(async move |this, cx| {

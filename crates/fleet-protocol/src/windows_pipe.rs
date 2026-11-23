@@ -317,13 +317,15 @@ impl Stream {
                 }
             }
             std::net::Shutdown::Both => {
-                // Unlike closing an Arc clone, the logical EOF reaches the
-                // peer even when the client still owns its reader half.
-                let _ = self.shutdown(std::net::Shutdown::Write);
+                // Abortive cancellation must never wait for peer input or
+                // write-buffer capacity. Graceful shutdown(Write) above is
+                // the only path that sends the in-band EOF marker.
                 self.0.stopped.store(true, Ordering::Release);
                 self.0.read_eof.store(true, Ordering::Release);
                 self.0.write_eof.store(true, Ordering::Release);
-                // Wake pending reads/writes issued by other threads.
+                // Interrupt pending synchronous I/O on the shared handle.
+                // The peer sees a physical disconnect when the final
+                // Stream clone drops its underlying handle.
                 unsafe {
                     CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
                 }

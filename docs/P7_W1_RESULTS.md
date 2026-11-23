@@ -111,3 +111,9 @@ requieren evidencia adicional. **W1-B ABIERTA.**
   registrar I/O y `CancelIoEx`, cierre bajo backpressure, e identidad del peer
   frente a reutilización de PID. El rechazo real de otro usuario está BLOCKED
   por falta de cuenta controlada. No se declara W1-B PASS.
+- **CI BLOCKED:** los runs
+  [45256707164](https://github.com/javijec/gentle-fleet/actions/runs/45256707164)
+  y [45256771289](https://github.com/javijec/gentle-fleet/actions/runs/45256771289)
+  no iniciaron sus jobs. GitHub informa: `The job was not started because
+  recent account payments have failed or your spending limit needs to be
+  increased`. Revisar Billing & plans; estos FAIL no son resultados de tests.

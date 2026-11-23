@@ -50,12 +50,14 @@ function Track-Runners {
 
 function Assert-DaemonRejectsToken([string]$Token) {
     $address = ([IO.File]::ReadAllText((Join-Path $runtime 'fleetd.addr'))).Trim()
-    $endpoint = [Net.IPEndPoint]::Parse($address)
-    $socket = [Net.Sockets.TcpClient]::new()
+    $prefix = '\\.\\pipe\\'
+    if (-not $address.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'daemon address must be a Windows named pipe'
+    }
+    $socket = [IO.Pipes.NamedPipeClientStream]::new('.', $address.Substring($prefix.Length), [IO.Pipes.PipeDirection]::InOut)
     try {
-        $socket.Connect($endpoint)
-        $socket.ReceiveTimeout = 5000
-        $stream = $socket.GetStream()
+        $socket.Connect(5000)
+        $stream = $socket
         $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 1024, $true)
         $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false), $false, 1024, $true)
         try {
@@ -64,7 +66,9 @@ function Assert-DaemonRejectsToken([string]$Token) {
             } } | ConvertTo-Json -Compress
             $writer.WriteLine($frame)
             $writer.Flush()
-            $response = $reader.ReadLine() | ConvertFrom-Json
+            $line = $reader.ReadLineAsync()
+            if (-not $line.Wait(5000)) { throw 'daemon did not reject token in time' }
+            $response = $line.Result | ConvertFrom-Json
             if ($response.result.Err.code -ne 'Unauthorized') {
                 throw 'daemon did not reject an invalid token'
             }
@@ -98,11 +102,14 @@ function Start-FixtureRunner([string]$Id) {
 function Assert-RunnerToken($Identity, [string]$Token, [bool]$Valid) {
     $name = "fleet-runner-$($Identity.runner_id)"
     $address = ([IO.File]::ReadAllText((Join-Path $runtime "$name.addr"))).Trim()
-    $socket = [Net.Sockets.TcpClient]::new()
+    $prefix = '\\.\\pipe\\'
+    if (-not $address.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'runner address must be a Windows named pipe'
+    }
+    $socket = [IO.Pipes.NamedPipeClientStream]::new('.', $address.Substring($prefix.Length), [IO.Pipes.PipeDirection]::InOut)
     try {
-        $socket.Connect([Net.IPEndPoint]::Parse($address))
-        $socket.ReceiveTimeout = 5000
-        $stream = $socket.GetStream()
+        $socket.Connect(5000)
+        $stream = $socket
         $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 1024, $true)
         $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false), $false, 1024, $true)
         try {
@@ -111,7 +118,9 @@ function Assert-RunnerToken($Identity, [string]$Token, [bool]$Valid) {
             } } | ConvertTo-Json -Compress -Depth 10
             $writer.WriteLine($frame)
             $writer.Flush()
-            $response = $reader.ReadLine() | ConvertFrom-Json
+            $line = $reader.ReadLineAsync()
+            if (-not $line.Wait(5000)) { throw 'runner did not answer hello in time' }
+            $response = $line.Result | ConvertFrom-Json
             if ($Valid) {
                 if ($null -eq $response.result.Ok -or $response.result.Ok.type -ne 'hello') {
                     throw 'runner rejected its own valid identity and token'

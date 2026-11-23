@@ -42,6 +42,8 @@
 
 **Estado P6.1 (22/11/2026): CERRADA EN LINUX** en `feature/p6-sdk-gpui`. `fleetctl` consume `fleet-client`; el SDK comparte el wire y `fleet-ssh`, con observación cancelable, replay/reconexión y cursor durable por host/sesión. La suite unitaria y E2E determinista, chat FakeDriver local/SSH y smoke real opt-in OpenCode pasaron; ver [`P6_1_RESULTS.md`](P6_1_RESULTS.md). P6.2 GPUI no iniciado.
 
+**Estado P6.2-A (22/11/2026): EN PROGRESO, NO CERRADA.** `apps/desktop` ya compila con GPUI 0.2.2, estado visual aislado, layout inicial, navegación, temas y pantallas vacías/informativas. Pasan fmt, check, Clippy, tests (138 PASS; uno opt-in ignorado) y build del workspace locked. Un parche local mapea el alias `ENOATTR` de la dependencia transitiva `xattr 0.2.3` en Linux. El intento gráfico confirmó que se crea la ventana, pero no permitió verificar contenido/interacciones; CI remota tampoco ejecutada. Ver [`P6_2A_RESULTS.md`](P6_2A_RESULTS.md), diseño en [`P6_2_DESIGN.md`](P6_2_DESIGN.md) y plan en [`P6_2_TEST_PLAN.md`](P6_2_TEST_PLAN.md).
+
 **Salida**: SDK de cliente con gestión de hosts, stream cursors, backoff y deduplicación, consumido por CLI/GPUI. El cliente muestra lista de sesiones, timeline de chat, herramientas, panel de permisos y desconexión/reattach. GPUI no importa el runtime interno. Soporte de terminal/archivos se añade como capacidad adicional, nunca como sustituto del chat.
 
 ## P7: robustez operacional y release

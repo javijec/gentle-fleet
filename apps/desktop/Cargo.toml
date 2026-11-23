@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 gpui = "=0.2.2"
+fleet-client = { path = "../../crates/fleet-client" }
 
 [dev-dependencies]
 gpui = { version = "=0.2.2", features = ["test-support"] }

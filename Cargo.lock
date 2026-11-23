@@ -2158,6 +2158,7 @@ dependencies = [
 name = "gentle-fleet-desktop"
 version = "0.1.0"
 dependencies = [
+ "fleet-client",
  "gpui",
 ]
 

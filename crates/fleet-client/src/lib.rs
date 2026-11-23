@@ -693,7 +693,8 @@ fn push_subscription_event(
             Err(mpsc::TrySendError::Full(value)) => {
                 if start.elapsed() >= Duration::from_secs(5) {
                     return Err(ClientError::Transport(
-                        "timeline consumer backpressure; reconnect from last enqueued cursor".into(),
+                        "timeline consumer backpressure; reconnect from last enqueued cursor"
+                            .into(),
                     ));
                 }
                 pending = value;
@@ -712,13 +713,7 @@ fn subscription_worker(
 ) {
     let mut backoff = Duration::from_millis(100);
     while !cancelled.load(Ordering::SeqCst) {
-        let result = subscription_connection(
-            &host,
-            &session_id,
-            &mut cursor,
-            &sender,
-            &cancelled,
-        );
+        let result = subscription_connection(&host, &session_id, &mut cursor, &sender, &cancelled);
         if cancelled.load(Ordering::SeqCst) {
             break;
         }
@@ -957,7 +952,9 @@ mod tests {
             session_id: "ses_test".into(),
             seq,
             created_at_ms: 0,
-            kind: fleet_domain::EventKind::TurnStarted { turn_id: "turn_test".into() },
+            kind: fleet_domain::EventKind::TurnStarted {
+                turn_id: "turn_test".into(),
+            },
         }
     }
 
@@ -1005,7 +1002,10 @@ mod tests {
             notify_subscription_error(
                 &sender,
                 &worker_cancelled,
-                ClientError::RetentionGap { expected: 2, received: 4 },
+                ClientError::RetentionGap {
+                    expected: 2,
+                    received: 4,
+                },
             )
         });
         std::thread::sleep(Duration::from_millis(50));
@@ -1013,12 +1013,17 @@ mod tests {
         assert!(worker.join().unwrap());
         assert!(matches!(
             receiver.recv().unwrap(),
-            Err(ClientError::RetentionGap { expected: 2, received: 4 })
+            Err(ClientError::RetentionGap {
+                expected: 2,
+                received: 4
+            })
         ));
-        assert!(!recoverable_subscription_error(&ClientError::RetentionGap {
-            expected: 2,
-            received: 4,
-        }));
+        assert!(!recoverable_subscription_error(
+            &ClientError::RetentionGap {
+                expected: 2,
+                received: 4,
+            }
+        ));
     }
 
     #[test]

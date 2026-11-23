@@ -34,6 +34,7 @@ pub struct SessionIdentity {
 pub enum ClientError {
     Transport(String),
     Protocol(String),
+    State(String),
     Api { code: String, message: String },
     UnexpectedResponse(&'static str),
     RetentionGap { expected: u64, received: u64 },
@@ -43,7 +44,9 @@ pub enum ClientError {
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Transport(message) | Self::Protocol(message) => f.write_str(message),
+            Self::Transport(message) | Self::Protocol(message) | Self::State(message) => {
+                f.write_str(message)
+            }
             Self::Api { code, message } => write!(f, "{code}: {message}"),
             Self::UnexpectedResponse(expected) => {
                 write!(f, "unexpected response; expected {expected}")
@@ -452,7 +455,6 @@ impl FleetClient {
         let host = self.host.clone();
         let subscribed_session = session_id.clone();
         let cursor = Arc::new(std::sync::atomic::AtomicU64::new(since_seq));
-        let worker_cursor = Arc::clone(&cursor);
         let (sender, receiver) = mpsc::sync_channel(64);
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = Arc::clone(&cancelled);
@@ -465,7 +467,6 @@ impl FleetClient {
                     since_seq,
                     sender,
                     thread_cancelled,
-                    worker_cursor,
                 )
             })
             .map_err(|error| ClientError::Transport(error.to_string()))?;
@@ -639,13 +640,75 @@ impl Drop for TimelineSubscription {
     }
 }
 
+/// A timeline gap or permanent protocol error requires intervention, not a
+/// retry loop using the same invalid cursor.
+fn recoverable_subscription_error(error: &ClientError) -> bool {
+    match error {
+        ClientError::Transport(_) => true,
+        ClientError::Api { code, .. } => matches!(code.as_str(), "Backpressure" | "Timeout"),
+        _ => false,
+    }
+}
+
+/// Deliver errors even when the bounded channel is full. Blocking is
+/// cancelable so dropping an idle GUI subscription never deadlocks.
+fn notify_subscription_error(
+    sender: &mpsc::SyncSender<Result<Event>>,
+    cancelled: &AtomicBool,
+    error: ClientError,
+) -> bool {
+    let mut pending = Err(error);
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        match sender.try_send(pending) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+            Err(mpsc::TrySendError::Full(value)) => {
+                pending = value;
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Apply bounded backpressure without dropping an accepted sequence.
+/// The worker cursor advances only once the event is enqueued; the public
+/// acknowledged cursor advances only after recv() persists delivery.
+fn push_subscription_event(
+    sender: &mpsc::SyncSender<Result<Event>>,
+    cancelled: &AtomicBool,
+    event: Event,
+) -> Result<bool> {
+    let start = std::time::Instant::now();
+    let mut pending = Ok(event);
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        match sender.try_send(pending) {
+            Ok(()) => return Ok(true),
+            Err(mpsc::TrySendError::Disconnected(_)) => return Ok(false),
+            Err(mpsc::TrySendError::Full(value)) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    return Err(ClientError::Transport(
+                        "timeline consumer backpressure; reconnect from last enqueued cursor".into(),
+                    ));
+                }
+                pending = value;
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 fn subscription_worker(
     host: Host,
     session_id: SessionId,
     mut cursor: u64,
     sender: mpsc::SyncSender<Result<Event>>,
     cancelled: Arc<AtomicBool>,
-    cursor_state: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let mut backoff = Duration::from_millis(100);
     while !cancelled.load(Ordering::SeqCst) {
@@ -655,16 +718,13 @@ fn subscription_worker(
             &mut cursor,
             &sender,
             &cancelled,
-            &cursor_state,
         );
         if cancelled.load(Ordering::SeqCst) {
             break;
         }
         if let Err(error) = result {
-            if matches!(
-                sender.try_send(Err(error)),
-                Err(mpsc::TrySendError::Disconnected(_))
-            ) {
+            let retry = recoverable_subscription_error(&error);
+            if !notify_subscription_error(&sender, &cancelled, error) || !retry {
                 break;
             }
         }
@@ -685,7 +745,6 @@ fn subscription_connection(
     cursor: &mut u64,
     sender: &mpsc::SyncSender<Result<Event>>,
     cancelled: &AtomicBool,
-    cursor_state: &std::sync::atomic::AtomicU64,
 ) -> Result<()> {
     let mut client = FleetClient::connect(host.clone())?;
     client.next_request_id += 1;
@@ -747,18 +806,13 @@ fn subscription_connection(
                         received: seq,
                     });
                 }
-                match sender.try_send(Ok(event)) {
-                    Ok(()) => {
+                match push_subscription_event(sender, cancelled, event) {
+                    Ok(true) => {
                         *cursor = seq;
-                        cursor_state.store(seq, Ordering::SeqCst);
                         expected = seq + 1;
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => break Ok(()),
-                    Err(mpsc::TrySendError::Full(_)) => {
-                        break Err(ClientError::Transport(
-                            "timeline consumer backpressure; reconnect from last cursor".into(),
-                        ))
-                    }
+                    Ok(false) => break Ok(()),
+                    Err(error) => break Err(error),
                 }
             }
             Frame::Response { request_id, result } if request_id == id => {
@@ -805,7 +859,7 @@ fn cursor_journal_path() -> Result<PathBuf> {
     let root = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .ok_or_else(|| ClientError::Transport("HOME or XDG_STATE_HOME required".into()))?;
+        .ok_or_else(|| ClientError::State("HOME or XDG_STATE_HOME required".into()))?;
     Ok(root.join("gentle-fleet/cursors.jsonl"))
 }
 
@@ -821,7 +875,7 @@ fn load_saved_cursor(host: &Host, session_id: &str) -> Result<u64> {
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(ClientError::Transport(format!("cursor journal: {error}"))),
+        Err(error) => return Err(ClientError::State(format!("cursor journal: {error}"))),
     };
     let host_key = host_cursor_key(host);
     let mut cursor = 0;
@@ -839,18 +893,18 @@ fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
     let path = cursor_journal_path()?;
     let parent = path
         .parent()
-        .ok_or_else(|| ClientError::Transport("cursor journal needs a parent directory".into()))?;
+        .ok_or_else(|| ClientError::State("cursor journal needs a parent directory".into()))?;
     std::fs::create_dir_all(parent)
-        .map_err(|error| ClientError::Transport(format!("cursor journal: {error}")))?;
+        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
     #[cfg(unix)]
     if std::env::var_os("FLEET_CURSOR_JOURNAL").is_none() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| ClientError::Transport(format!("cursor journal: {error}")))?;
+            .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
     }
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(ClientError::Transport(
+            return Err(ClientError::State(
                 "cursor journal is not a regular file".into(),
             ));
         }
@@ -871,31 +925,101 @@ fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
     }
     let mut file = options
         .open(path)
-        .map_err(|error| ClientError::Transport(format!("cursor journal: {error}")))?;
+        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if file
             .metadata()
-            .map_err(|error| ClientError::Transport(error.to_string()))?
+            .map_err(|error| ClientError::State(error.to_string()))?
             .permissions()
             .mode()
             & 0o077
             != 0
         {
-            return Err(ClientError::Transport(
+            return Err(ClientError::State(
                 "cursor journal permissions are too permissive".into(),
             ));
         }
     }
     file.write_all(&line)
         .and_then(|_| file.sync_data())
-        .map_err(|error| ClientError::Transport(format!("cursor journal: {error}")))
+        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_event(seq: u64) -> Event {
+        Event {
+            event_id: format!("evt_{seq}"),
+            session_id: "ses_test".into(),
+            seq,
+            created_at_ms: 0,
+            kind: fleet_domain::EventKind::TurnStarted { turn_id: "turn_test".into() },
+        }
+    }
+
+    #[test]
+    fn queued_events_do_not_advance_consumed_cursor() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cursor = Arc::new(std::sync::atomic::AtomicU64::new(5));
+        let subscription = TimelineSubscription {
+            host: Host::Local,
+            session_id: "ses_test".into(),
+            receiver,
+            cancelled: Arc::clone(&cancelled),
+            worker: None,
+            cursor,
+        };
+        assert!(push_subscription_event(&sender, &cancelled, sample_event(6)).unwrap());
+        assert!(push_subscription_event(&sender, &cancelled, sample_event(7)).unwrap());
+        assert_eq!(subscription.last_sequence(), 5, "queued != consumed");
+        drop(subscription);
+    }
+
+    #[test]
+    fn bounded_queue_waits_for_slow_consumer_without_losing_events() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        assert!(push_subscription_event(&sender, &cancelled, sample_event(1)).unwrap());
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker = std::thread::spawn(move || {
+            push_subscription_event(&sender, &worker_cancelled, sample_event(2))
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(receiver.recv().unwrap().unwrap().seq, 1);
+        assert!(worker.join().unwrap().unwrap());
+        assert_eq!(receiver.recv().unwrap().unwrap().seq, 2);
+    }
+
+    #[test]
+    fn full_queue_does_not_discard_terminal_gap_error() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        sender.try_send(Ok(sample_event(1))).unwrap();
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker = std::thread::spawn(move || {
+            notify_subscription_error(
+                &sender,
+                &worker_cancelled,
+                ClientError::RetentionGap { expected: 2, received: 4 },
+            )
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(receiver.recv().unwrap().unwrap().seq, 1);
+        assert!(worker.join().unwrap());
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            Err(ClientError::RetentionGap { expected: 2, received: 4 })
+        ));
+        assert!(!recoverable_subscription_error(&ClientError::RetentionGap {
+            expected: 2,
+            received: 4,
+        }));
+    }
 
     #[test]
     fn same_session_id_is_scoped_by_host() {

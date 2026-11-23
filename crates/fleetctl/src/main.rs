@@ -489,7 +489,17 @@ fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     eprintln!("subscribed\t{session_id}\tsince={since}");
     let mut printed = 0usize;
     loop {
-        let event = subscription.recv().map_err(|error| error.to_string())?;
+        let event = match subscription.recv() {
+            Ok(event) => event,
+            // The SDK observer stays alive and reconnects after transient errors.
+            Err(fleet_client::ClientError::Transport(_)) => continue,
+            Err(fleet_client::ClientError::Api { code, .. })
+                if matches!(code.as_str(), "Backpressure" | "Timeout") =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         println!("{}\t{}", event.seq, describe(&event.kind));
         printed += 1;
         if count.is_some_and(|limit| printed >= limit) {

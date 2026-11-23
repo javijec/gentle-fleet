@@ -13,11 +13,11 @@ use fleet_client::{
     AgentSummary, ClientError, FleetClient, Host, SessionSummary, WorkspaceSummary,
 };
 
-/// Upper bound for one blocking SDK operation (connect plus three lists).
+/// Upper bound for the UI waiting on one SDK operation (connect plus three lists).
 ///
-/// The GPUI worker slot is released when this deadline expires even if the
-/// underlying blocking transport has not returned yet. The abandoned thread
-/// still owns its connection and closes it when it eventually finishes.
+/// A timeout ends the wait, NOT the underlying OS thread. The worker permit
+/// remains owned by that thread until the transport operation actually exits,
+/// so repeated timeouts cannot create unbounded connections or threads.
 pub const OPERATION_DEADLINE: Duration = Duration::from_secs(20);
 const CANCELLATION_POLL: Duration = Duration::from_millis(50);
 
@@ -276,30 +276,44 @@ fn timeout_error() -> SafeFleetError {
     }
 }
 
-/// Run a blocking SDK operation on its own thread and stop waiting once the
-/// cancellation token is set or the deadline expires. The worker permit is
-/// released on return, so a wedged transport cannot exhaust the UI workers.
-pub fn run_bounded<T, F>(cancellation: &Cancellation, operation: F) -> Result<T, SafeFleetError>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Result<T, SafeFleetError> + Send + 'static,
-{
-    run_bounded_with_deadline(cancellation, OPERATION_DEADLINE, operation)
-}
-
-pub fn run_bounded_with_deadline<T, F>(
+/// Run a blocking SDK operation on a dedicated thread, returning on cancellation
+/// or deadline without blocking GPUI. Ownership of the permit moves to the REAL
+/// transport worker. It is not released when the caller stops waiting.
+pub fn run_bounded<T, F>(
     cancellation: &Cancellation,
-    deadline: Duration,
+    permit: WorkerPermit,
     operation: F,
 ) -> Result<T, SafeFleetError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, SafeFleetError> + Send + 'static,
 {
+    run_bounded_with_deadline(cancellation, OPERATION_DEADLINE, permit, operation)
+}
+
+pub fn run_bounded_with_deadline<T, F>(
+    cancellation: &Cancellation,
+    deadline: Duration,
+    permit: WorkerPermit,
+    operation: F,
+) -> Result<T, SafeFleetError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, SafeFleetError> + Send + 'static,
+{
+    if cancellation.is_cancelled() {
+        return Err(cancelled_error());
+    }
+    if deadline.is_zero() {
+        return Err(timeout_error());
+    }
     let (sender, receiver) = mpsc::channel();
     let worker = std::thread::Builder::new()
         .name("fleet-desktop-sdk".into())
         .spawn(move || {
+            // This guard is held for the lifetime of the blocking operation.
+            // Never return the slot to the UI when recv_timeout expires.
+            let _permit = permit;
             let _ = sender.send(operation());
         })
         .map_err(|_| SafeFleetError {
@@ -333,7 +347,8 @@ where
     }
 }
 
-/// A tiny bounded admission controller for blocking Fleet SDK work.
+/// Limits the number of ACTUAL blocking Fleet SDK operations, including
+/// operations whose callers already timed out or cancelled.
 #[derive(Clone, Default)]
 pub struct FleetWorkers(Arc<std::sync::atomic::AtomicUsize>);
 
@@ -414,10 +429,11 @@ pub fn inspect(
     machine: &MachineId,
     cancellation: &Cancellation,
     connection: Option<Connection>,
+    permit: WorkerPermit,
 ) -> Result<(MachineSnapshot, Connection), SafeFleetError> {
     let request_machine = machine.clone();
     let request_cancellation = cancellation.clone();
-    run_bounded(cancellation, move || {
+    run_bounded(cancellation, permit, move || {
         inspect_blocking(&request_machine, &request_cancellation, connection)
     })
 }
@@ -484,49 +500,119 @@ mod tests {
 
     #[test]
     fn bounded_operations_time_out_and_honour_cancellation() {
+        let workers = FleetWorkers::default();
         let cancellation = Cancellation::default();
+        let (finish_tx, finish_rx) = mpsc::channel::<()>();
         let started = Instant::now();
-        let result = run_bounded_with_deadline(&cancellation, Duration::from_millis(50), || {
-            std::thread::sleep(Duration::from_millis(300));
-            Ok(())
-        });
+        let result = run_bounded_with_deadline(
+            &cancellation,
+            Duration::from_millis(50),
+            workers.try_acquire().expect("slot available"),
+            move || {
+                finish_rx.recv().expect("release blocked RPC");
+                Ok(())
+            },
+        );
         assert_eq!(result.unwrap_err().kind, FleetErrorKind::Timeout);
         assert!(started.elapsed() < Duration::from_millis(250));
+        // Only one slot can now be acquired: the timed-out RPC is still alive.
+        let second = workers.try_acquire().expect("second slot available");
+        assert!(workers.try_acquire().is_none());
+        drop(second);
+        finish_tx.send(()).expect("unblock timed-out RPC");
 
         let cancellation = Cancellation::default();
-        let worker = cancellation.clone();
-        std::thread::spawn(move || {
+        let worker_cancel = cancellation.clone();
+        let workers = FleetWorkers::default();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let canceller = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
-            worker.cancel();
+            worker_cancel.cancel();
         });
         let started = Instant::now();
-        let result = run_bounded_with_deadline(&cancellation, Duration::from_secs(5), || {
-            std::thread::sleep(Duration::from_millis(400));
-            Ok(())
-        });
+        let result = run_bounded_with_deadline(
+            &cancellation,
+            Duration::from_secs(5),
+            workers.try_acquire().expect("slot available"),
+            move || {
+                release_rx.recv().expect("release cancelled RPC");
+                Ok(())
+            },
+        );
         assert_eq!(result.unwrap_err().message, "La consulta fue cancelada.");
         assert!(started.elapsed() < Duration::from_millis(350));
+        assert!(workers.try_acquire().is_some());
+        let second = workers.try_acquire().expect("second slot available");
+        assert!(workers.try_acquire().is_none());
+        drop(second);
+        release_tx.send(()).expect("unblock cancelled RPC");
+        canceller.join().expect("cancellation thread finished");
     }
 
     #[test]
-    fn timed_out_operations_return_both_worker_slots() {
+    fn timed_out_operations_keep_both_slots_until_real_workers_exit() {
         let workers = FleetWorkers::default();
         let cancellation = Cancellation::default();
+        let mut release = Vec::new();
         for _ in 0..2 {
-            let permit = workers.try_acquire().expect("two slots available");
-            let result =
-                run_bounded_with_deadline(&cancellation, Duration::from_millis(30), || {
-                    std::thread::sleep(Duration::from_millis(150));
+            let permit = workers.try_acquire().expect("slot available");
+            let (tx, rx) = mpsc::channel::<()>();
+            let result = run_bounded_with_deadline(
+                &cancellation,
+                Duration::from_millis(30),
+                permit,
+                move || {
+                    rx.recv().expect("release blocked RPC");
                     Ok(())
-                });
+                },
+            );
             assert_eq!(result.unwrap_err().kind, FleetErrorKind::Timeout);
-            drop(permit);
+            release.push(tx);
         }
-        let first = workers.try_acquire().expect("slot released after timeout");
-        let second = workers
-            .try_acquire()
-            .expect("second slot released after timeout");
-        drop((first, second));
+
+        // Repeated user retries must not create additional SDK threads.
+        for _ in 0..100 {
+            assert!(workers.try_acquire().is_none(), "timed-out RPC still holds slot");
+        }
+
+        for tx in release {
+            tx.send(()).expect("release blocked RPC");
+        }
+
+        let started = Instant::now();
+        loop {
+            if let Some(first) = workers.try_acquire() {
+                if let Some(second) = workers.try_acquire() {
+                    drop((first, second));
+                    break;
+                }
+                drop(first);
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "both permits should return when their real threads exit"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn already_cancelled_requests_never_spawn_or_consume_capacity() {
+        let workers = FleetWorkers::default();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+        let result = run_bounded_with_deadline(
+            &cancellation,
+            Duration::from_secs(1),
+            workers.try_acquire().unwrap(),
+            || -> Result<(), SafeFleetError> {
+                panic!("a cancelled request must not invoke the SDK")
+            },
+        );
+        assert_eq!(result.unwrap_err().message, "La consulta fue cancelada.");
+        let _first = workers.try_acquire().expect("first slot returned");
+        let _second = workers.try_acquire().expect("second slot returned");
+        assert!(workers.try_acquire().is_none());
     }
 
     #[test]

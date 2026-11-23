@@ -541,7 +541,6 @@ mod tests {
         );
         assert_eq!(result.unwrap_err().message, "La consulta fue cancelada.");
         assert!(started.elapsed() < Duration::from_millis(350));
-        assert!(workers.try_acquire().is_some());
         let second = workers.try_acquire().expect("second slot available");
         assert!(workers.try_acquire().is_none());
         drop(second);

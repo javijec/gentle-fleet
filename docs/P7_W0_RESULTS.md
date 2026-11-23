@@ -28,18 +28,28 @@
   Esto no valida el enlace ni la ejecución. Advertencia de incompatibilidad
   futura: `proc-macro-error2 v2.0.1`.
 - `cargo build --workspace --locked`: PASS, incluido enlace GPUI; no se abrió
-  ninguna ventana. Clippy y test completos: en curso.
-- En el HEAD anterior `a068eba` (no la base): check, clippy y build pasaron;
-  test falló en `fleet_ssh::tests::hello_is_rewritten_with_remote_token` con
+  ninguna ventana.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: PASS.
+- Primera ejecución `cargo test --workspace --locked`: FAIL en
+  `fleet_ssh::tests::hello_is_rewritten_with_remote_token` con
   `Protocol("remote token unavailable: El sistema no puede encontrar la ruta especificada. (os error 3)")`.
-  No usar estos resultados para afirmar que los nuevos crates pasan.
+  Los tests anteriores al fallo pasaron; los posteriores no se ejecutaron.
+  El probe real opt-in Gentle Shell se ignoró por requerir instalación real.
+  Adaptación W0: el test usa un token inyectado y aislado y verifica también
+  error de lectura; el bridge real sigue usando `expected_token()`. Tras la
+  adaptación, `cargo test --workspace --locked`: PASS. Se ignoraron dos probes
+  ya opt-in: Gentle Shell real y GPUI con fixture Linux `fleetd/sshd`.
+  Repetición de Clippy tras la adaptación: PASS.
+- Tras la adaptación SSH en `e31efcb` también se repitieron fmt, check y
+  build completos: PASS.
 - Linux en base exacta `427a5c1`: [run 45220359567](https://github.com/javijec/gentle-fleet/actions/runs/45220359567)
   PASS en jobs principal y `desktop-gpui-linux`; no es evidencia del commit W0.
 - Se agregó job `windows-native` con los cinco comandos del workspace y pasos
   diagnósticos independientes. En el
   [run 45233915713](https://github.com/javijec/gentle-fleet/actions/runs/45233915713)
   sobre `5183d32`, Linux `check` PASS; Windows y Linux GPUI seguían en curso al
-  consultar. No se presupone el resultado final.
+  consultar. El run de `e31efcb` también estaba en curso; no se presupone el
+  resultado final.
 - Los scripts Bash de proceso existentes corren en Linux CI; no se han portado
   a Windows ni desactivado para simular éxito. Los tests `cfg(unix)` y el
   probe real opt-in no prueban Windows.

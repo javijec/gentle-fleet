@@ -18,8 +18,9 @@ declara paridad Windows. Las mediciones y pendientes están en
    garantía de aislamiento entre usuarios.
 2. **P0, tests:** el test SSH `hello_is_rewritten_with_remote_token` llama a
    `expected_token()` sin fixture Windows; requiere un fichero real en el
-   runtime y falla si no existe. El problema observado en el HEAD anterior
-   debe repetirse en la base de esta auditoría antes de cerrar.
+   runtime y falla si no existe; fallo reproducido en `427a5c1`. El test se
+   adaptó con token inyectado sin desactivar la comprobación ni cambiar el
+   entorno global de otros tests; la repetición completa pasó en Windows.
 3. **P1, procesos:** `fleetd/src/process_runner.rs` busca un ejecutable hermano
    llamado `fleet-runner` sin extensión explícita; el comportamiento real de
    `Command` Windows y las rutas con espacios requieren prueba. `Child` y

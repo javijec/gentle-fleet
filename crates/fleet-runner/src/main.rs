@@ -81,23 +81,18 @@ fn prepare_token(runner_id: &str) -> io::Result<String> {
     // A newly spawned runner must have a fresh secret. Old PID-based tokens
     // were predictable; token continuity is only needed while THIS process lives.
     let token = uuid::Uuid::new_v4().to_string();
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    #[cfg(windows)]
+    fleet_protocol::transport::write_private_file(&path, token.as_bytes())?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&path)?;
-    file.write_all(token.as_bytes())?;
-    drop(file);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true).mode(0o600);
+        let mut file = options.open(&path)?;
+        file.write_all(token.as_bytes())?;
+        drop(file);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
-    // Windows: el directorio de runtime es privado; la ACL del fichero queda
-    // pendiente de validación en esa plataforma.
     Ok(token)
 }
 

@@ -10,7 +10,11 @@
 - Clasificación de clave SSH rechazada no filtra el diagnóstico privado.
 - La cancelación es compartida entre vistas/trabajador y se consulta entre
   operaciones SDK.
-- Una operación bloqueada respeta el deadline y devuelve los dos slots de worker.
+- Una operación bloqueada respeta el deadline de respuesta de GPUI, **sin liberar** el permiso mientras el hilo SDK siga activo.
+- Dos llamadas bloqueadas tras timeout/cancelación mantienen ocupados los dos permisos: 100 reintentos son rechazados sin crear transportes adicionales.
+- Al terminar realmente ambos hilos, los dos permisos vuelven a estar disponibles.
+- Una operación ya cancelada no inicia el trabajo SDK ni consume un permiso.
+- Separar explícitamente límite de espera de UI y límite efectivo del transporte: el timeout del primero no implica que el segundo haya terminado.
 - La generación y el ID de máquina descartan respuestas de selección obsoleta.
 - Desconectar o fallar elimina el snapshot anterior, y el detalle no muestra
   datos de una fila que no está `Connected`.

@@ -31,6 +31,8 @@ jobs:
         run: cargo build --workspace --locked
       - name: W1-A token isolation process regression
         run: pwsh -NoProfile -File tests/windows/w1a-token-isolation.ps1
+      - name: W1-B named pipe process and collision regression
+        run: pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1
 
   check:
     runs-on: ubuntu-latest

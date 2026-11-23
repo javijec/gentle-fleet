@@ -444,16 +444,16 @@ mod tests {
             let mut stream = listener.accept().unwrap();
             let mut request = Vec::new();
             stream.read_to_end(&mut request).unwrap();
-            assert_eq!(request, b"hello\\n");
-            stream.write_all(b"goodbye\\n").unwrap();
+            assert_eq!(request, b"hello\n");
+            stream.write_all(b"goodbye\n").unwrap();
             stream.shutdown(Shutdown::Write).unwrap();
         });
         let mut client = connect(&address).unwrap();
-        client.write_all(b"hello\\n").unwrap();
+        client.write_all(b"hello\n").unwrap();
         client.shutdown(Shutdown::Write).unwrap();
         let mut reply = Vec::new();
         client.read_to_end(&mut reply).unwrap();
-        assert_eq!(reply, b"goodbye\\n");
+        assert_eq!(reply, b"goodbye\n");
         server.join().unwrap();
     }
 

@@ -146,21 +146,51 @@ impl DesktopView {
     }
 
     fn select_machine(&mut self, id: MachineId, cx: &mut Context<Self>) {
-        self.fleet.selected = Some(id.clone());
         self.selected_session = None;
-        if self
-            .fleet
-            .row(&id)
-            .is_some_and(|row| row.status == ConnectionStatus::Connected)
-            && self
-                .active_client
-                .as_ref()
-                .is_some_and(|(active_id, _)| active_id == &id)
-        {
+        self.switch_selection(id, cx);
+    }
+
+    fn switch_selection(&mut self, id: MachineId, cx: &mut Context<Self>) {
+        if self.fleet.active_request_machine.as_ref() == Some(&id) {
+            self.fleet.selected = Some(id);
             cx.notify();
             return;
-        };
-        self.connect_machine(id, cx);
+        }
+
+        if let Some(previous_id) = self.fleet.active_request_machine.take() {
+            self.cancellation.cancel();
+            self.fleet.request_generation = self.fleet.request_generation.wrapping_add(1);
+            if let Some(row) = self.fleet.row_mut(&previous_id) {
+                row.status = ConnectionStatus::Disconnected;
+            }
+        }
+        let active_same_machine = self
+            .active_client
+            .as_ref()
+            .is_some_and(|(active_id, _)| active_id == &id);
+        if let Some((previous_id, mut client)) = self.active_client.take() {
+            if previous_id == id {
+                self.active_client = Some((previous_id, client));
+            } else {
+                if let Some(row) = self.fleet.row_mut(&previous_id) {
+                    row.status = ConnectionStatus::Disconnected;
+                }
+                cx.background_executor()
+                    .spawn(async move { client.disconnect() })
+                    .detach();
+            }
+        }
+        self.fleet.selected = Some(id.clone());
+        if active_same_machine
+            && self
+                .fleet
+                .row(&id)
+                .is_some_and(|row| row.status == ConnectionStatus::Connected)
+        {
+            self.connect_machine(id, cx);
+        } else {
+            cx.notify();
+        }
     }
 
     fn connect_machine(&mut self, id: MachineId, cx: &mut Context<Self>) {
@@ -304,20 +334,7 @@ impl DesktopView {
     fn select_session(&mut self, identity: SessionIdentity, cx: &mut Context<Self>) {
         let machine = identity.machine.clone();
         self.selected_session = Some(identity);
-        self.fleet.selected = Some(machine.clone());
-        if self
-            .fleet
-            .row(&machine)
-            .is_some_and(|row| row.status == ConnectionStatus::Connected)
-            && self
-                .active_client
-                .as_ref()
-                .is_some_and(|(active, _)| active == &machine)
-        {
-            cx.notify();
-        } else {
-            self.connect_machine(machine, cx);
-        }
+        self.switch_selection(machine, cx);
     }
 
     fn toggle_sidebar(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1227,6 +1244,19 @@ mod tests {
                 Some(MachineId::Ssh("missing-test-alias".into()))
             );
             let row = view
+                .fleet
+                .row(&MachineId::Ssh("missing-test-alias".into()))
+                .unwrap();
+            assert_eq!(row.status, ConnectionStatus::Disconnected);
+        });
+        let connect_bounds = visual
+            .debug_bounds("machine-connect")
+            .expect("manual connect action is rendered");
+        visual.simulate_click(connect_bounds.center(), Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|_, cx| {
+            let row = view
+                .read(cx)
                 .fleet
                 .row(&MachineId::Ssh("missing-test-alias".into()))
                 .unwrap();

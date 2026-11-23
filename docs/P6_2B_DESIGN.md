@@ -22,6 +22,9 @@ colisiones entre máquinas.
 Descubrir entradas no conecta ni marca hosts como conectados. Local siempre se
 presenta; los SSH requieren selección/conexión explícita. Desktop no copia
 destinos, claves, credenciales ni rutas de identidad a su estado visual.
+Seleccionar una máquina solo cambia la vista; conectar o actualizar requiere
+acción explícita. Cambiar de selección cancela y marca como desconectada cualquier
+solicitud pendiente anterior.
 
 Los estados distinguen desconectado, conectando, conectado, reconectando, error
 y no disponible. Una consulta satisfactoria es la evidencia de conexión. Los

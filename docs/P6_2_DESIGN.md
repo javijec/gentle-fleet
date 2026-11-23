@@ -1,4 +1,4 @@
-# P6.2-A — Gentle Fleet Desktop: diseño inicial
+# P6.2 — Gentle Fleet Desktop: diseño
 
 ## Alcance
 
@@ -47,8 +47,9 @@ por el ejemplo publicado.
 - `app.rs`: arranque, ventana GPUI y vista raíz.
 - `state.rs`: estado visual efímero de la ventana; no contiene sesiones Fleet.
 - `navigation.rs`: destinos locales de navegación.
-- `layout.rs`: panel lateral con estados vacíos, ancho configurable en el modelo
-  y capacidad de ocultar/mostrar.
+- El panel lateral inicial de `layout.rs` (solo placeholders de A) se sustituyó
+  en B por Machines y datos dinámicos en `app.rs`, consumiendo el modelo del
+  adapter `fleet/`.
 - `components/`: botones visuales compartidos.
 - `theme.rs`: paletas, colores, radios, espaciados y escala tipográfica.
 
@@ -75,3 +76,33 @@ El crate usa solo GPUI y código Rust portable; las features X11/Wayland activas
 son las del target Linux. No se validó compilación Windows/macOS en esta etapa.
 GPUI publica backends para ambos, pero son riesgos de integración aún no
 verificados por Gentle Fleet.
+
+## P6.2-B — Machines y adapter del Fleet SDK
+
+P6.2-A quedó cerrada por separado; sus evidencias y procedencia están en
+[`P6_2A_RESULTS.md`](P6_2A_RESULTS.md). B añade `apps/desktop/src/fleet/` como
+frontera entre GPUI y `fleet-client`. Desktop consume el SDK y sus tipos públicos
+de respuesta; no depende de Fleet core, runner, drivers, SQLite ni de la
+implementación de SSH.
+
+El alias de SSH es la etiqueta visible, pero el ID interno es la variante
+`MachineId::Ssh(alias)`; local usa `MachineId::Local`. La API
+`fleet_client::configured_hosts()` reutiliza `fleet-ssh::load_hosts()` y expone
+solo alias ordenados. Leer el catálogo no prueba hosts remotos ni los declara
+conectados. La conexión se inicia por selección/acción explícita y las consultas
+reales son `list_agents`, `list_workspaces` y `list_sessions`.
+
+GPUI agenda las operaciones síncronas con su executor de fondo, admite a lo sumo
+dos operaciones simultáneas, cancela cooperativamente entre requests y asocia
+cada respuesta a generación + MachineId. Solo se conserva un `FleetClient` en la
+vista; cambiar de host cierra únicamente el transporte del cliente previo. Un
+IO ya bloqueado no puede abortarse a mitad de request: SSH conserva el
+`ConnectTimeout=10` existente y los resultados vencidos no alteran la vista.
+Desconectar/cerrar Desktop no manda `StopSession` ni mata runners.
+
+Los errores se traducen a mensajes seguros y categorías de transporte,
+autenticación, host key, bridge, daemon y protocolo. No se presenta stderr crudo.
+Se mantiene `StrictHostKeyChecking=yes`; verificar/aceptar una clave nueva ocurre
+fuera de Desktop mediante el flujo seguro de OpenSSH/known_hosts. B no crea
+sesiones ni implementa chat/timeline; «Abrir chat» se explica como trabajo de
+P6.2-C, que no se inicia en esta etapa.

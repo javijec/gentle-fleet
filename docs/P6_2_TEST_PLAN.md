@@ -56,11 +56,10 @@ inició ningún agente.
 El registro de trabajo conserva la limitación del intento con dispatcher
 sintético; posteriormente el usuario confirmó PASS para el ciclo del panel y
 para el cierre gráfico, que eran los dos criterios pendientes de P6.2-A. El
-usuario también confirmó PASS del CI del último commit de A. Durante el inicio
-de P6.2-B, GitHub CLI no mostró una ejecución asociada a `4048eb2`; por eso no se
-incluye aquí un enlace/número de ejecución. Windows/macOS no se validaron. P6.2-A
-queda cerrada con esa procedencia de evidencia, sin extender la afirmación a
-esas plataformas.
+usuario también confirmó PASS del CI del último commit de A y después se verificó
+[run 45195572977](https://github.com/javijec/gentle-fleet/actions/runs/45195572977)
+en SHA `870c8ed`. Windows/macOS no se validaron. P6.2-A queda cerrada con esa
+procedencia de evidencia, sin extender la afirmación a esas plataformas.
 
 ## Dependencias Linux para CI
 

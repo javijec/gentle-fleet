@@ -24,7 +24,7 @@ inicia procesos de agentes.
 | Conversión de color | Corregida RGB-hex → `Hsla`; pruebas para rojo, escala de grises y token del canvas oscuro |
 | Identidad de botones | IDs distintos y estables, cursor de mano y estilo de foco |
 | Smoke Linux | PASS reportado por el usuario para los dos criterios pendientes: ciclo del panel en Omarchy y cierre gráfico. La evidencia previa de la sesión Hyprland está en el registro de trabajo y en las capturas `/tmp/opencode/p62-67-final-welcome.png`, `p62-73-settings-followup.png`, `p62-75-back-followup.png`, `p62-82-light-latest.png`, `p62-80-resized.png`; monitor `eDP-1` 1920×1080. |
-| CI remota | PASS reportado por el usuario para el último commit de P6.2-A. `gh run list --commit 4048eb2` no devolvió una ejecución visible durante el inicio de P6.2-B; no se atribuye aquí un número de run que no se pudo verificar. |
+| CI remota | PASS confirmado: [run 45195572977](https://github.com/javijec/gentle-fleet/actions/runs/45195572977), SHA `870c8ed39bb601ea8db688ccee400c173310c3f1`, commit de cierre documental A. |
 | E2E shell de backend | PASS en CI: suite FakeDriver, concurrencia, backpressure, permisos, persistencia, approvals, supervivencia runner, identidad, replay, P4.4, SSH y P6.1 |
 | Windows/macOS | No validados |
 

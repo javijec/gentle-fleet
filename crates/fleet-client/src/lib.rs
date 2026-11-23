@@ -645,7 +645,7 @@ impl Drop for TimelineSubscription {
 fn recoverable_subscription_error(error: &ClientError) -> bool {
     match error {
         ClientError::Transport(_) => true,
-        ClientError::Api { code, .. } => matches!(code.as_str(), "Backpressure" | "Timeout"),
+        ClientError::Api { code, .. } => code == "Timeout",
         _ => false,
     }
 }
@@ -1024,6 +1024,10 @@ mod tests {
                 received: 4,
             }
         ));
+        assert!(!recoverable_subscription_error(&ClientError::Api {
+            code: "Backpressure".into(),
+            message: "subscriber overflow".into(),
+        }));
     }
 
     #[test]

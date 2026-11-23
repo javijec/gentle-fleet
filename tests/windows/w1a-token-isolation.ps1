@@ -50,7 +50,7 @@ function Track-Runners {
 
 function Assert-DaemonRejectsToken([string]$Token) {
     $address = ([IO.File]::ReadAllText((Join-Path $runtime 'fleetd.addr'))).Trim()
-    $prefix = '\\.\\pipe\\'
+    $prefix = '\\.\pipe\'
     if (-not $address.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'daemon address must be a Windows named pipe'
     }
@@ -102,7 +102,7 @@ function Start-FixtureRunner([string]$Id) {
 function Assert-RunnerToken($Identity, [string]$Token, [bool]$Valid) {
     $name = "fleet-runner-$($Identity.runner_id)"
     $address = ([IO.File]::ReadAllText((Join-Path $runtime "$name.addr"))).Trim()
-    $prefix = '\\.\\pipe\\'
+    $prefix = '\\.\pipe\'
     if (-not $address.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'runner address must be a Windows named pipe'
     }

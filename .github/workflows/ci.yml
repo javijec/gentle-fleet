@@ -34,6 +34,22 @@ jobs:
       - name: W1-B named pipe process and collision regression
         run: pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1
 
+  windows-ipc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check and test Windows IPC first
+        run: cargo test -p fleet-protocol --locked
+      - name: Build real IPC daemon, runner, CLI and SSH bridge
+        run: cargo build -p fleetd -p fleet-runner -p fleetctl -p fleet-ssh --locked
+      - name: Named pipe daemon and runner credential regression
+        run: pwsh -NoProfile -File tests/windows/w1a-token-isolation.ps1
+      - name: Named pipe bridge, half-close and collision regression
+        run: pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1
+
   check:
     runs-on: ubuntu-latest
     steps:

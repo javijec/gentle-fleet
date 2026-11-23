@@ -24,7 +24,7 @@ trap cleanup EXIT
 mkdir -p "$LOCAL_RUNTIME" "$LOCAL_WORKSPACE" "$REMOTE_RUNTIME" "$REMOTE_WORKSPACE"
 chmod 700 "$LOCAL_RUNTIME" "$REMOTE_RUNTIME"
 
-cargo build --locked -p fleetd -p fleetctl -p fleet-ssh >/dev/null
+cargo build --locked -p fleetd -p fleetctl -p fleet-ssh -p fleet-runner >/dev/null
 cargo test --locked -p gentle-fleet-desktop --no-run >/dev/null
 
 # Local daemon, isolated from the user's real runtime.

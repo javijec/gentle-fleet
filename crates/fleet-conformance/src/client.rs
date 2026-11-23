@@ -23,7 +23,7 @@ fn set_timeout(stream: &LocalStream, timeout: Duration) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
         }
         #[cfg(windows)]
-        LocalStream::Tcp(inner) => {
+        LocalStream::NamedPipe(inner) => {
             inner
                 .set_read_timeout(Some(timeout))
                 .map_err(|e| e.to_string())?;

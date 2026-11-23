@@ -155,7 +155,7 @@ impl LocalListener {
             let token = uuid::Uuid::new_v4().to_string();
             std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
         }
-        std::fs::write(address_file_named(name), address.to_string())?;
+        std::fs::write(address_file_named(name), &address)?;
         Ok(Self::NamedPipe(listener))
     }
 

@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    LocalFree, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE,
+    LocalFree, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
+    HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -31,16 +31,19 @@ use windows_sys::Win32::Security::{
     CopySid, EqualSid, GetLengthSid, GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES,
     TOKEN_QUERY, TOKEN_USER,
 };
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
+};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
     WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_sys::Win32::System::IO::CancelIoEx;
+use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
 const FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
@@ -53,6 +56,78 @@ fn wide(s: &str) -> Vec<u16> {
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message)
+}
+
+fn overlapped_op(
+    handle: HANDLE,
+    timeout: Option<std::time::Duration>,
+    start: impl FnOnce(*mut OVERLAPPED, *mut u32) -> i32,
+) -> io::Result<u32> {
+    // Each operation owns its event and OVERLAPPED until completion, including
+    // after cancellation. No pointer outlives the blocking result wait.
+    let event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
+    if event.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let event = unsafe { OwnedHandle::from_raw_handle(event) };
+    let mut operation: OVERLAPPED = unsafe { std::mem::zeroed() };
+    operation.hEvent = event.as_raw_handle();
+    let mut transferred = 0u32;
+    if start(&mut operation, &mut transferred) != 0 {
+        return Ok(transferred);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+        return Err(error);
+    }
+    let milliseconds = timeout.map_or(INFINITE, |duration| {
+        duration.as_millis().max(1).min((INFINITE - 1) as u128) as u32
+    });
+    let wait = unsafe { WaitForSingleObject(event.as_raw_handle(), milliseconds) };
+    if wait != WAIT_OBJECT_0 {
+        let wait_error = if wait == WAIT_TIMEOUT {
+            io::Error::new(io::ErrorKind::TimedOut, "Fleet pipe I/O timed out")
+        } else {
+            io::Error::last_os_error()
+        };
+        // The operation's stack-backed OVERLAPPED and buffer must remain
+        // alive until the kernel reports completion, even if it raced timeout.
+        unsafe {
+            CancelIoEx(handle, &operation);
+            GetOverlappedResult(handle, &operation, &mut transferred, 1);
+        }
+        return Err(wait_error);
+    }
+    if unsafe { GetOverlappedResult(handle, &operation, &mut transferred, 1) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(transferred)
+}
+
+fn pipe_read(
+    file: &File,
+    buffer: &mut [u8],
+    timeout: Option<std::time::Duration>,
+) -> io::Result<usize> {
+    let handle = file.as_raw_handle();
+    let len = buffer.len().min(u32::MAX as usize) as u32;
+    overlapped_op(handle, timeout, |operation, count| unsafe {
+        ReadFile(handle, buffer.as_mut_ptr(), len, count, operation)
+    })
+    .map(|n| n as usize)
+}
+
+fn pipe_write(
+    file: &File,
+    buffer: &[u8],
+    timeout: Option<std::time::Duration>,
+) -> io::Result<usize> {
+    let handle = file.as_raw_handle();
+    let len = buffer.len().min(u32::MAX as usize) as u32;
+    overlapped_op(handle, timeout, |operation, count| unsafe {
+        WriteFile(handle, buffer.as_ptr(), len, count, operation)
+    })
+    .map(|n| n as usize)
 }
 
 fn sid_of_process(process: HANDLE) -> io::Result<Vec<u8>> {
@@ -180,7 +255,8 @@ fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHan
         lpSecurityDescriptor: descriptor,
         bInheritHandle: 0,
     };
-    let flags = PIPE_ACCESS_DUPLEX | if first { FIRST_PIPE_INSTANCE } else { 0 };
+    let flags =
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | if first { FIRST_PIPE_INSTANCE } else { 0 };
     let handle = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -250,14 +326,18 @@ impl Listener {
         let instance = pending
             .take()
             .ok_or_else(|| io::Error::other("listener closed"))?;
-        let connected = unsafe { ConnectNamedPipe(instance.as_raw_handle(), ptr::null_mut()) };
-        if connected == 0
-            && io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32)
-        {
-            let error = io::Error::last_os_error();
-            // Do not lose the listener after a failed connection attempt.
-            *pending = Some(create_instance(&self.name_wide, &self.sid, false)?);
-            return Err(error);
+        let handle = instance.as_raw_handle();
+        let result = overlapped_op(handle, None, |operation, _| unsafe {
+            ConnectNamedPipe(handle, operation)
+        });
+        if let Err(error) = result {
+            if error.raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32) {
+                // Client connected between CreateNamedPipe and ConnectNamedPipe.
+            } else {
+                // Do not lose the listener after a failed connection attempt.
+                *pending = Some(create_instance(&self.name_wide, &self.sid, false)?);
+                return Err(error);
+            }
         }
         let verified = check_peer(instance.as_raw_handle(), &self.sid, true);
         // Rejecting an unauthorised peer must not disable future accepts.
@@ -276,6 +356,8 @@ struct Shared {
     read_eof: AtomicBool,
     write_eof: AtomicBool,
     stopped: AtomicBool,
+    read_timeout: Mutex<Option<std::time::Duration>>,
+    write_timeout: Mutex<Option<std::time::Duration>>,
 }
 
 pub struct Stream(Arc<Shared>);
@@ -289,11 +371,29 @@ impl Stream {
             read_eof: AtomicBool::new(false),
             write_eof: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            read_timeout: Mutex::new(None),
+            write_timeout: Mutex::new(None),
         }))
     }
 
     pub fn try_clone(&self) -> io::Result<Self> {
         Ok(Self(self.0.clone()))
+    }
+
+    pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
+        if timeout == Some(std::time::Duration::ZERO) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "zero timeout"));
+        }
+        *self.0.read_timeout.lock().expect("pipe timeout poisoned") = timeout;
+        Ok(())
+    }
+
+    pub fn set_write_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {
+        if timeout == Some(std::time::Duration::ZERO) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "zero timeout"));
+        }
+        *self.0.write_timeout.lock().expect("pipe timeout poisoned") = timeout;
+        Ok(())
     }
 
     fn file(&self) -> io::Result<Arc<File>> {
@@ -318,9 +418,13 @@ impl Stream {
                     // Raw NUL is impossible inside a valid JSONL frame and is
                     // consumed only inside this transport implementation.
                     let file = self.file()?;
-                    let mut borrowed = file.as_ref();
-                    borrowed.write_all(&[0])?;
-                    borrowed.flush()?;
+                    let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
+                    if pipe_write(&file, &[0], timeout)? != 1 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "pipe EOF not sent",
+                        ));
+                    }
                 }
             }
             std::net::Shutdown::Read => {
@@ -369,8 +473,8 @@ impl Read for Stream {
             return Ok(0);
         }
         let file = self.file()?;
-        let mut borrowed = file.as_ref();
-        match borrowed.read(out) {
+        let timeout = *self.0.read_timeout.lock().expect("pipe timeout poisoned");
+        match pipe_read(&file, out, timeout) {
             Ok(n) => {
                 if let Some(pos) = out[..n].iter().position(|b| *b == 0) {
                     self.0.read_eof.store(true, Ordering::Release);
@@ -415,13 +519,14 @@ impl Write for Stream {
             ));
         }
         let file = self.file()?;
-        let mut borrowed = file.as_ref();
-        borrowed.write(bytes)
+        let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
+        pipe_write(&file, bytes, timeout)
     }
     fn flush(&mut self) -> io::Result<()> {
-        let file = self.file()?;
-        let mut borrowed = file.as_ref();
-        borrowed.flush()
+        // WriteFile completion has already handed bytes to the pipe. Calling
+        // FlushFileBuffers here waits for the peer to read and can deadlock a
+        // full-duplex request/response exchange.
+        self.file().map(|_| ())
     }
 }
 
@@ -442,7 +547,7 @@ pub fn connect(address: &str) -> io::Result<Stream> {
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
-                0,
+                FILE_FLAG_OVERLAPPED,
                 ptr::null_mut(),
             )
         };
@@ -493,6 +598,59 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_read_does_not_prevent_cloned_writer_from_sending() {
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-duplex-test-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "duplex").unwrap();
+        let address = listener.address().to_owned();
+        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).unwrap();
+            stream.write_all(&byte).unwrap();
+        });
+        let client = connect(&address).unwrap();
+        accepted_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let mut reader = client.try_clone().unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let mut byte = [0u8; 1];
+            let result = reader.read_exact(&mut byte).map(|()| byte[0]);
+            let _ = done_tx.send(result);
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        // Allow the reader to enter the blocking OS read before the write.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent_tx.send(writer.write_all(b"x"));
+        });
+        let sent = sent_rx.recv_timeout(std::time::Duration::from_secs(2));
+        if sent.is_err() {
+            let _ = client.shutdown(Shutdown::Both);
+        }
+        sent.expect("blocked read must not block a concurrent writer")
+            .unwrap();
+        assert_eq!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            b'x'
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn full_shutdown_wakes_pending_reader_without_dropping_client() {
         let runtime =
             std::env::temp_dir().join(format!("gentle-fleet-cancel-test-{}", uuid::Uuid::new_v4()));
@@ -518,6 +676,33 @@ mod tests {
         assert!(result.is_err() || result.unwrap() == 0);
         release_tx.send(()).unwrap();
         reader.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn read_timeout_is_bounded_and_does_not_break_the_connection() {
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-timeout-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "timeout").unwrap();
+        let address = listener.address().to_owned();
+        let (send, receive) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            receive.recv().unwrap();
+            stream.write_all(b"x").unwrap();
+        });
+        let mut client = connect(&address).unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            client.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        send.send(()).unwrap();
+        client.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"x");
         server.join().unwrap();
     }
 

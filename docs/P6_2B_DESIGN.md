@@ -36,7 +36,7 @@ reintento manual.
 ## Workers, carga y obsolescencia
 
 `FleetClient` es síncrono: connect y las tres listas se ejecutan en el executor
-de fondo GPUI, no durante render. El adapter limita a dos workers simultáneos,
+de fondo GPUI, no durante render. El adapter limita a dos transportes SDK subyacentes simultáneos,
 usa token cancelable comprobado entre requests y número de generación para
 descartar resultados si cambió la selección. Solo el cliente seleccionado se
 retiene; cambiar de host desconecta únicamente el cliente Desktop anterior, no
@@ -45,8 +45,15 @@ retiene; cambiar de host desconecta únicamente el cliente Desktop anterior, no
 La E/S síncrona que ya está dentro de una llamada SDK no puede interrumpirse a
 mitad de frame. El `ConnectTimeout=10` existente limita establecimiento SSH; una
 respuesta Fleet en curso puede durar hasta que transporte/proceso cierre. La
-generación impide que ese resultado sobrescriba la selección nueva. No se añade
-Tokio ni una cola ilimitada.
+espera de GPUI tiene un deadline de 20 s, **no** un timeout de terminación del
+hilo subyacente. El permiso de `FleetWorkers` se mueve al hilo real de I/O y
+se libera únicamente cuando ese hilo finaliza, incluso si el usuario cancela
+o GPUI deja de esperar. Por tanto no se pueden acumular más de dos conexiones
+bloqueadas por reintentos. En el peor caso, ambos permisos pueden permanecer
+ocupados mientras el transporte no cierre; la UI continúa respondiendo y no
+admite nuevas consultas hasta que haya capacidad. La generación impide que
+un resultado atrasado sobrescriba la selección nueva. No se añade Tokio ni una
+cola ilimitada.
 
 ## Consultas y límite con P6.2-C
 

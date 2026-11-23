@@ -493,9 +493,7 @@ fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
             Ok(event) => event,
             // The SDK observer stays alive and reconnects after transient errors.
             Err(fleet_client::ClientError::Transport(_)) => continue,
-            Err(fleet_client::ClientError::Api { code, .. })
-                if code == "Timeout" =>
-            {
+            Err(fleet_client::ClientError::Api { code, .. }) if code == "Timeout" => {
                 continue;
             }
             Err(error) => return Err(error.to_string()),

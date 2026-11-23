@@ -36,3 +36,12 @@ sustituir TCP.
 La sesión Windows actual tiene el grupo Administradores marcado solo para
 denegar; no se ha dispuesto una segunda identidad controlada ni ejecutado una
 prueba entre usuarios. Esa prueba es **BLOCKED**, no una validación de DACL.
+
+Según la documentación de Microsoft, una pipe con descriptor de seguridad
+predeterminado puede conceder lectura a Everyone y Anonymous; se debe pasar
+un descriptor explícito al crearla. Además, `FILE_GENERIC_WRITE` incluye
+`FILE_CREATE_PIPE_INSTANCE`, por compartir bit con `FILE_APPEND_DATA`, por lo
+que se deben evaluar derechos individuales y creación de la primera instancia
+para evitar nuevos servidores no autorizados. Fuente:
+[Named Pipe Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights).
+Estos requisitos son criterios de diseño, no evidencia de implementación.

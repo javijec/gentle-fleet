@@ -30,3 +30,22 @@ habilitado y no se ha configurado otra identidad de prueba. Named pipes, DACL,
 persistencia, supervivencia del runner y E2E exhaustivos no se implementaron ni
 probaron.
 No se declara compatibilidad funcional ni seguridad del transporte Windows.
+
+### W1-B — primera regresión de proceso
+
+En `a151038`, con los binarios nativos de W1-A:
+`pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1` **FAIL**:
+`Windows daemon endpoint is not a named pipe`. El fixture arranca y termina
+únicamente su daemon, en runtime y DB aislados. La prueba es intencionalmente
+roja mientras W1-B no se implemente; aún no está integrada en CI. Por sí sola
+no comprueba DACL, identidad, colisiones, EOF ni ausencia de puertos de red.
+
+El run W0 de cierre
+[#45237481862](https://github.com/javijec/gentle-fleet/actions/runs/45237481862)
+sobre `7701bba` terminó **FAIL** en `windows-native`: el test
+`fleet-core::tests::ack_failure_is_reported_instead_of_silently_replaying`
+falló con `store_config_failed: database is locked`. Ambos jobs Linux pasaron.
+El [CI posterior de W1-A](https://github.com/javijec/gentle-fleet/actions/runs/45238966908)
+pasó, pero una repetición exitosa no explica ni corrige ese fallo; investigar
+el bloqueo de SQLite y su posible concurrencia como parte de W1-C, sin
+deshabilitar el test.

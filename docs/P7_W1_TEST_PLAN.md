@@ -18,6 +18,10 @@ controlada, DACL, colisiones, rechazo de tokens e identidad, handles, EOF y
 ausencia de listeners de red. Acceso a otra cuenta sin autorización apropiada
 se registra BLOCKED, no PASS.
 
+Primera prueba negra: `pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1`.
+Actualmente FAIL contra TCP como se espera antes de implementar W1-B; todavía
+no se ha añadido a CI y no sustituye las pruebas de seguridad enumeradas.
+
 **W1-C–F:** rutas, permisos, WAL, crash real, reattach, deduplicación,
 concurrencia, aprobaciones, backpressure, CI y smoke manual enumerados en
 `P7_W0_AUDIT.md`; siguen UNTESTED.

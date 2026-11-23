@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED,
-    HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -32,16 +32,16 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
-use windows_sys::Win32::System::IO::CancelIoEx;
 use windows_sys::Win32::System::Memory::LocalFree;
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId,
-    GetNamedPipeServerProcessId, WaitNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
+    WaitNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows_sys::Win32::System::IO::CancelIoEx;
 
 const FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -65,7 +65,11 @@ fn sid_of_process(process: HANDLE) -> io::Result<Vec<u8>> {
     let mut required = 0u32;
     unsafe {
         GetTokenInformation(
-            token.as_raw_handle(), TokenUser, ptr::null_mut(), 0, &mut required,
+            token.as_raw_handle(),
+            TokenUser,
+            ptr::null_mut(),
+            0,
+            &mut required,
         );
     }
     if required == 0 {
@@ -76,8 +80,11 @@ fn sid_of_process(process: HANDLE) -> io::Result<Vec<u8>> {
     let mut data = vec![0usize; words];
     let ok = unsafe {
         GetTokenInformation(
-            token.as_raw_handle(), TokenUser,
-            data.as_mut_ptr().cast::<c_void>(), required, &mut required,
+            token.as_raw_handle(),
+            TokenUser,
+            data.as_mut_ptr().cast::<c_void>(),
+            required,
+            &mut required,
         )
     };
     if ok == 0 {
@@ -111,11 +118,15 @@ fn sid_string(sid: &[u8]) -> io::Result<String> {
     // SAFETY: ConvertSidToStringSidW returns a NUL-terminated LocalAlloc buffer.
     let len = unsafe {
         let mut n = 0;
-        while *out.add(n) != 0 { n += 1; }
+        while *out.add(n) != 0 {
+            n += 1;
+        }
         n
     };
     let value = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(out, len)) };
-    unsafe { LocalFree(out.cast::<c_void>()); }
+    unsafe {
+        LocalFree(out.cast::<c_void>());
+    }
     Ok(value)
 }
 
@@ -135,7 +146,13 @@ fn check_peer(handle: HANDLE, sid: &[u8], client: bool) -> io::Result<()> {
     }
     let process = unsafe { OwnedHandle::from_raw_handle(process) };
     let peer_sid = sid_of_process(process.as_raw_handle())?;
-    if unsafe { EqualSid(sid.as_ptr().cast::<c_void>(), peer_sid.as_ptr().cast::<c_void>()) } == 0 {
+    if unsafe {
+        EqualSid(
+            sid.as_ptr().cast::<c_void>(),
+            peer_sid.as_ptr().cast::<c_void>(),
+        )
+    } == 0
+    {
         return Err(invalid("named-pipe peer has a different user SID"));
     }
     Ok(())
@@ -149,9 +166,13 @@ fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHan
     let mut descriptor = ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut(),
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            ptr::null_mut(),
         )
-    } == 0 {
+    } == 0
+    {
         return Err(io::Error::last_os_error());
     }
     let attributes = SECURITY_ATTRIBUTES {
@@ -162,9 +183,14 @@ fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHan
     let flags = PIPE_ACCESS_DUPLEX | if first { FIRST_PIPE_INSTANCE } else { 0 };
     let handle = unsafe {
         CreateNamedPipeW(
-            name.as_ptr(), flags,
+            name.as_ptr(),
+            flags,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, &attributes,
+            PIPE_UNLIMITED_INSTANCES,
+            65536,
+            65536,
+            0,
+            &attributes,
         )
     };
     let error = if handle == INVALID_HANDLE_VALUE {
@@ -172,8 +198,12 @@ fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHan
     } else {
         None
     };
-    unsafe { LocalFree(descriptor); }
-    if let Some(error) = error { return Err(error); }
+    unsafe {
+        LocalFree(descriptor);
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
@@ -186,10 +216,15 @@ pub struct Listener {
 
 impl Listener {
     pub fn bind(runtime: &std::path::Path, instance: &str) -> io::Result<Self> {
-        if instance.is_empty() || !instance.bytes().all(|b|
-            b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
-        ) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid Fleet pipe name"));
+        if instance.is_empty()
+            || !instance
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid Fleet pipe name",
+            ));
         }
         let sid = current_sid()?;
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -198,16 +233,27 @@ impl Listener {
         let name = format!(r"\\.\pipe\gentle-fleet-{:016x}-{instance}", hash.finish());
         let name_wide = wide(&name);
         let first = create_instance(&name_wide, &sid, true)?;
-        Ok(Self { name, name_wide, sid, pending: Mutex::new(Some(first)) })
+        Ok(Self {
+            name,
+            name_wide,
+            sid,
+            pending: Mutex::new(Some(first)),
+        })
     }
 
-    pub fn address(&self) -> &str { &self.name }
+    pub fn address(&self) -> &str {
+        &self.name
+    }
 
     pub fn accept(&self) -> io::Result<Stream> {
         let mut pending = self.pending.lock().expect("Fleet pipe listener poisoned");
-        let instance = pending.take().ok_or_else(|| io::Error::other("listener closed"))?;
+        let instance = pending
+            .take()
+            .ok_or_else(|| io::Error::other("listener closed"))?;
         let connected = unsafe { ConnectNamedPipe(instance.as_raw_handle(), ptr::null_mut()) };
-        if connected == 0 && io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+        if connected == 0
+            && io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32)
+        {
             return Err(io::Error::last_os_error());
         }
         check_peer(instance.as_raw_handle(), &self.sid, true)?;
@@ -240,12 +286,18 @@ impl Stream {
         }))
     }
 
-    pub fn try_clone(&self) -> io::Result<Self> { Ok(Self(self.0.clone())) }
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self(self.0.clone()))
+    }
 
     pub fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
         match how {
             std::net::Shutdown::Write => {
-                let _guard = self.0.write_lock.lock().expect("Fleet pipe writer poisoned");
+                let _guard = self
+                    .0
+                    .write_lock
+                    .lock()
+                    .expect("Fleet pipe writer poisoned");
                 if !self.0.write_eof.swap(true, Ordering::AcqRel) {
                     // Raw NUL is impossible inside a valid JSONL frame and is
                     // consumed only inside this transport implementation.
@@ -256,7 +308,9 @@ impl Stream {
             }
             std::net::Shutdown::Read => {
                 self.0.read_eof.store(true, Ordering::Release);
-                unsafe { CancelIoEx(self.0.file.as_raw_handle(), ptr::null()); }
+                unsafe {
+                    CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
+                }
             }
             std::net::Shutdown::Both => {
                 self.0.stopped.store(true, Ordering::Release);
@@ -264,7 +318,9 @@ impl Stream {
                 self.0.write_eof.store(true, Ordering::Release);
                 // Best effort cancellation of blocked I/O issued by other
                 // threads. Return errors from future writes rather than hang.
-                unsafe { CancelIoEx(self.0.file.as_raw_handle(), ptr::null()); }
+                unsafe {
+                    CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
+                }
             }
         }
         Ok(())
@@ -273,24 +329,34 @@ impl Stream {
 
 impl Read for Stream {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if out.is_empty() || self.0.read_eof.load(Ordering::Acquire) { return Ok(0); }
+        if out.is_empty() || self.0.read_eof.load(Ordering::Acquire) {
+            return Ok(0);
+        }
         let _guard = self.0.read_lock.lock().expect("Fleet pipe reader poisoned");
-        if self.0.read_eof.load(Ordering::Acquire) { return Ok(0); }
+        if self.0.read_eof.load(Ordering::Acquire) {
+            return Ok(0);
+        }
         let mut file = &self.0.file;
         match file.read(out) {
             Ok(n) => {
                 if let Some(pos) = out[..n].iter().position(|b| *b == 0) {
                     self.0.read_eof.store(true, Ordering::Release);
                     if pos + 1 != n {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData,
-                            "bytes received after Fleet pipe half-close"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "bytes received after Fleet pipe half-close",
+                        ));
                     }
                     return Ok(pos);
                 }
                 Ok(n)
             }
-            Err(error) if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32)
-                       || error.raw_os_error() == Some(ERROR_PIPE_NOT_CONNECTED as i32) => Ok(0),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32)
+                    || error.raw_os_error() == Some(ERROR_PIPE_NOT_CONNECTED as i32) =>
+            {
+                Ok(0)
+            }
             Err(error) => Err(error),
         }
     }
@@ -298,13 +364,22 @@ impl Read for Stream {
 
 impl Write for Stream {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let _guard = self.0.write_lock.lock().expect("Fleet pipe writer poisoned");
-        if self.0.write_eof.load(Ordering::Acquire)
-            || self.0.stopped.load(Ordering::Acquire) {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "Fleet pipe closed for writing"));
+        let _guard = self
+            .0
+            .write_lock
+            .lock()
+            .expect("Fleet pipe writer poisoned");
+        if self.0.write_eof.load(Ordering::Acquire) || self.0.stopped.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Fleet pipe closed for writing",
+            ));
         }
         if bytes.contains(&0) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "raw NUL is reserved for Fleet pipe EOF"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "raw NUL is reserved for Fleet pipe EOF",
+            ));
         }
         let mut file = &self.0.file;
         file.write(bytes)
@@ -317,14 +392,24 @@ impl Write for Stream {
 
 pub fn connect(address: &str) -> io::Result<Stream> {
     if !address.starts_with(r"\\.\pipe\gentle-fleet-") {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid Fleet pipe address"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Fleet pipe address",
+        ));
     }
     let wide_name = wide(address);
     let sid = current_sid()?;
     for attempt in 0..2 {
         let handle = unsafe {
-            CreateFileW(wide_name.as_ptr(), GENERIC_READ | GENERIC_WRITE,
-                0, ptr::null(), OPEN_EXISTING, 0, ptr::null_mut())
+            CreateFileW(
+                wide_name.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                ptr::null(),
+                OPEN_EXISTING,
+                0,
+                ptr::null_mut(),
+            )
         };
         if handle != INVALID_HANDLE_VALUE {
             let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
@@ -332,7 +417,9 @@ pub fn connect(address: &str) -> io::Result<Stream> {
             return Ok(Stream::new(File::from(handle)));
         }
         let error = io::Error::last_os_error();
-        if attempt == 1 || error.raw_os_error() != Some(231) /* ERROR_PIPE_BUSY */ {
+        if attempt == 1 || error.raw_os_error() != Some(231)
+        /* ERROR_PIPE_BUSY */
+        {
             return Err(error);
         }
         if unsafe { WaitNamedPipeW(wide_name.as_ptr(), 5000) } == 0 {

@@ -95,8 +95,12 @@ jobs:
             libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-sync-dev \
             libxcb-xfixes0-dev libxcb-xkb-dev libvulkan-dev
+      - name: Instalar OpenSSH server para el E2E GPUI
+        run: sudo apt-get install -y -qq openssh-server
       - run: cargo fmt --all -- --check
       - run: cargo check -p gentle-fleet-desktop --locked
       - run: cargo clippy -p gentle-fleet-desktop --all-targets --locked -- -D warnings
       - run: cargo test -p gentle-fleet-desktop --locked
       - run: cargo build -p gentle-fleet-desktop --locked
+      - name: e2e P6.2-B consultas reales desde GPUI (local + SSH fixture)
+        run: tests/e2e_p62b_desktop_gpui.sh

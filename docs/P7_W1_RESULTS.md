@@ -15,8 +15,9 @@ PASS en Windows, backend Linux y desktop Linux.
   secretos. Los procesos de fixture se terminaron por handles registrados.
 - `cargo test -p fleet-protocol --locked` y `cargo fmt --all -- --check`: PASS
   en Windows. Regresión Linux del cambio y CI del commit: UNTESTED por ahora.
-- Rechazo de token de un runner por otro: UNTESTED. No se declara cerrado W1-A
-  hasta verificarlo y comprobar regresión Linux.
+- Rechazo cruzado: PASS en Windows con dos runners FakeDriver de fixture
+  independientes; cada runner rechazó el token del otro y aceptó su propio
+  token e identidad. No se declara cerrado W1-A hasta comprobar Linux y CI.
 
 ## W1-B–F
 

@@ -7,8 +7,9 @@ del daemon no cambia, que los tokens son distintos y que el daemon rechaza el
 token de cada runner y un token inválido. Usa timeouts y termina solo procesos
 registrados. Los tokens no se imprimen.
 
-Pendiente W1-A: prueba directa de rechazo de credenciales entre runners,
-confirmar regresión Linux y el resultado del CI del commit. La prueba actual
+El fixture también inicia dos runners independientes y comprueba rechazo
+cruzado y aceptación del token propio. Pendiente W1-A: confirmar regresión
+Linux y el resultado del CI del commit. La prueba actual
 utiliza TCP y deberá adaptarse explícitamente al nuevo transporte en W1-B.
 
 **W1-B:** autenticar mismo usuario y rechazar otro usuario en una instalación

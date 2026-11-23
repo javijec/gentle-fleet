@@ -77,6 +77,57 @@ function Assert-DaemonRejectsToken([string]$Token) {
     }
 }
 
+function Start-FixtureRunner([string]$Id) {
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = Join-Path $bin 'fleet-runner.exe'
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    foreach ($argument in @('--runner-id', $Id, '--session', "session-$Id",
+                           '--provider', 'fake', '--workspace', $root)) {
+        [void]$info.ArgumentList.Add($argument)
+    }
+    $process = [Diagnostics.Process]::Start($info)
+    [void]$process.Handle
+    $runners.Add($process)
+    $line = $process.StandardOutput.ReadLineAsync()
+    if (-not $line.Wait(30000)) { throw "runner $Id did not start within 30 seconds" }
+    if ([string]::IsNullOrEmpty($line.Result)) { throw "runner $Id exited without identity" }
+    return ($line.Result | ConvertFrom-Json)
+}
+
+function Assert-RunnerToken($Identity, [string]$Token, [bool]$Valid) {
+    $name = "fleet-runner-$($Identity.runner_id)"
+    $address = ([IO.File]::ReadAllText((Join-Path $runtime "$name.addr"))).Trim()
+    $socket = [Net.Sockets.TcpClient]::new()
+    try {
+        $socket.Connect([Net.IPEndPoint]::Parse($address))
+        $socket.ReceiveTimeout = 5000
+        $stream = $socket.GetStream()
+        $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false), 1024, $true)
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false), $false, 1024, $true)
+        try {
+            $frame = @{ kind = 'request'; request_id = 'identity-test'; request = @{
+                type = 'hello'; identity = $Identity; token = $Token
+            } } | ConvertTo-Json -Compress -Depth 10
+            $writer.WriteLine($frame)
+            $writer.Flush()
+            $response = $reader.ReadLine() | ConvertFrom-Json
+            if ($Valid) {
+                if ($null -eq $response.result.Ok -or $response.result.Ok.type -ne 'hello') {
+                    throw 'runner rejected its own valid identity and token'
+                }
+            } elseif ($response.result.Err.code -ne 'Unauthorized') {
+                throw 'runner did not reject an invalid token'
+            }
+        } finally {
+            $writer.Dispose()
+            $reader.Dispose()
+        }
+    } finally {
+        $socket.Dispose()
+    }
+}
+
 try {
     $env:FLEET_RUNTIME_DIR = $runtime
     $env:FLEET_DB_PATH = Join-Path $root 'data/fleet.sqlite'
@@ -124,7 +175,15 @@ try {
     foreach ($session in $sessions) {
         [void](Invoke-Fleetctl @('stop', $session))
     }
-    Write-Output 'PASS: daemon token remains stable; two runners have independent tokens'
+    $identity1 = Start-FixtureRunner 'w1a-one'
+    $identity2 = Start-FixtureRunner 'w1a-two'
+    $token1 = [IO.File]::ReadAllText((Join-Path $runtime 'fleet-runner-w1a-one.token'))
+    $token2 = [IO.File]::ReadAllText((Join-Path $runtime 'fleet-runner-w1a-two.token'))
+    Assert-RunnerToken $identity1 $token2 $false
+    Assert-RunnerToken $identity2 $token1 $false
+    Assert-RunnerToken $identity1 $token1 $true
+    Assert-RunnerToken $identity2 $token2 $true
+    Write-Output 'PASS: daemon and runner credentials are isolated and invalid tokens are rejected'
 } finally {
     if ($null -ne $daemon -and -not $daemon.HasExited) {
         Track-Runners

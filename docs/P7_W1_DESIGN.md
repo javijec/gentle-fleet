@@ -1,6 +1,6 @@
 # P7-W1 — diseño y límites actuales
 
-**ABIERTO.** W1-A pasó su regresión nativa y CI; W1-B–F no están implementados.
+**ABIERTO.** W1-A pasó su regresión nativa y CI. W1-B tiene una implementación inicial de named pipes en revisión y CI pendiente; W1-C–F no se iniciaron.
 Este documento registra el comportamiento real, no una garantía futura.
 
 ## Identidades actuales
@@ -14,16 +14,11 @@ el handshake `RunnerRequest::Hello`, que también verifica la identidad.
 
 En W0, `bind_named` escribía `fleetd.token` para cualquier nombre. W1-A limita
 esa escritura al listener `fleetd`; los runners mantienen su propio token.
-No cambia el wire ni la autenticación. El transporte sigue siendo TCP
-loopback, y los ficheros no tienen DACL explícita: **no cumple** el modelo de
-seguridad objetivo. No usar el arreglo como demostración de IPC seguro.
+La corrección W1-A se validó originalmente sobre TCP. En W1-B se sustituyó la capa Windows por named pipes, pero todavía no hay evidencia completa de su seguridad. No confundir el PASS histórico W1-A con la validación de W1-B.
 
 ## Puerta de seguridad W1-B
 
-Falta diseñar e implementar named pipes con DACL explícita, verificación SID,
-defensa contra apropiación del endpoint, propiedad y cierre de handles y una
-decisión probada sobre half-close. No hay fallback TCP seguro validado ni
-prueba de usuario Windows distinto. No se declara implementado W1-B.
+Se implementó en la rama un backend named pipe con DACL protegida para el SID del usuario, comprobación del SID del proceso remoto y FILE_FLAG_FIRST_PIPE_INSTANCE. Falta validar el funcionamiento, la semántica de cancelación y el rechazo real de otra cuenta. No existe fallback TCP y **W1-B no está cerrada**.
 
 El bridge `fleet-ssh::run_bridge` necesita `Shutdown::Write` tras EOF de
 stdin mientras el hilo de salida continúa leyendo; también usa
@@ -62,3 +57,13 @@ perder respuestas; no basta convertir `shutdown(Write)` en no-op. `fleetd` y
 `fleet-runner` leen frames por una clonación y escriben por otra, y el SDK,
 CLI, conformance y bridge también consumen el transporte; los cambios deben
 mantener esas concurrencias y no reenviar prompts inciertos.
+
+## Backend Windows propuesto (pendiente de validación)
+
+- `crates/fleet-protocol/src/windows_pipe.rs` usa la API Win32 mediante `windows-sys 0.61.2`. Cada listener publica una ruta `\\\\.\\pipe\\gentle-fleet-...`, bajo nombre derivado del runtime/identidad local.
+- `CreateNamedPipeW` usa una DACL explícita protegida `D:P(A;;GA;;;<SID>)`, handles no heredables, `PIPE_REJECT_REMOTE_CLIENTS` y `FILE_FLAG_FIRST_PIPE_INSTANCE` al reservar el primer endpoint. La comprobación de SID se repite en servidor y cliente mediante el PID del proceso par y su token Windows.
+- Los tokens de W1-A siguen separados por daemon/runner. La identidad de Windows **no** se infiere de la autenticación JSONL: ambas barreras son independientes.
+- `LocalStream` comparte el handle entre sus clones, con bloqueos de lectura y escritura independientes. El mensaje de control interno de medio-cierre es un único byte NUL, que no puede aparecer sin escape en JSONL. `Read` lo interpreta como EOF sin impedir recibir la dirección contraria. `Shutdown::Both` además solicita cancelar I/O pendiente por `CancelIoEx`.
+- Se agregaron pruebas Rust nativas de half-close, respuesta pendiente y cancelación, y se adaptó W1-A para conectarse por `NamedPipeClientStream`. W1-B ejecuta un fixture de daemon, token inválido y segundo daemon competidor en CI.
+- La propiedad de handles y el efecto de cancelación ante un peer que no consume datos exigen prueba de carga adicional. El cierre completo puede bloquear al transmitir el marcador EOF si el buffer de salida está lleno. **No declarar cancelación no bloqueante en cualquier estado** hasta cerrar esa brecha.
+- La ACL de archivos (token, DB, WAL, spool) y la prueba contra otra cuenta Windows siguen pendientes. El modelo de confianza sigue considerando al mismo usuario como confiable; esto no prueba aislamiento entre usuarios distintos.

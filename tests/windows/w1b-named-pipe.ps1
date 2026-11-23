@@ -48,6 +48,46 @@ try {
     } finally {
         $client.Dispose()
     }
+    # Exercise actual SSH bridge half-close over the named pipe:
+    # EOF on stdin must not discard the pending fleetd responses.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $bin 'fleet-ssh-bridge.exe'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $bridge = [Diagnostics.Process]::Start($start)
+    try {
+        $bridge.StandardInput.WriteLine('{"kind":"request","request_id":"h1","request":{"type":"hello","client_id":"w1b","token":null}}')
+        $bridge.StandardInput.WriteLine('{"kind":"request","request_id":"a1","request":{"type":"list_agents"}}')
+        $bridge.StandardInput.Close()
+        $outTask = $bridge.StandardOutput.ReadToEndAsync()
+        $errTask = $bridge.StandardError.ReadToEndAsync()
+        if (-not $bridge.WaitForExit(15000)) {
+            $bridge.Kill()
+            [void]$bridge.WaitForExit(5000)
+            throw 'SSH bridge remained blocked after stdin EOF'
+        }
+        $output = $outTask.GetAwaiter().GetResult()
+        $errors = $errTask.GetAwaiter().GetResult()
+        if ($bridge.ExitCode -ne 0) {
+            throw "bridge exited unsuccessfully after EOF: $errors"
+        }
+        $frames = @($output -split "\r?\n" | Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object { $_ | ConvertFrom-Json })
+        if (@($frames | Where-Object { $_.request_id -eq 'h1' -and $_.result.Ok.type -eq 'hello' }).Count -ne 1) {
+            throw 'SSH bridge dropped Hello response after half-close'
+        }
+        if (@($frames | Where-Object { $_.request_id -eq 'a1' -and $_.result.Ok.type -eq 'agents' }).Count -ne 1) {
+            throw 'SSH bridge dropped Agents response after half-close'
+        }
+    } finally {
+        if (-not $bridge.HasExited) {
+            $bridge.Kill()
+            [void]$bridge.WaitForExit(5000)
+        }
+        $bridge.Dispose()
+    }
+
     $env:FLEET_DB_PATH = Join-Path $root 'competitor/fleet.sqlite'
     $competitor = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
         -RedirectStandardOutput (Join-Path $root 'competitor.out') `

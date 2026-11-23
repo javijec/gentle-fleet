@@ -5,13 +5,16 @@ use gpui::{
 use crate::theme::{Palette, BORDER_WIDTH, RADIUS, SPACING};
 
 pub fn quiet_button(
+    id: &'static str,
     label: impl Into<SharedString>,
     palette: Palette,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
     div()
-        .id(label.clone())
+        .id(id)
+        .debug_selector(|| id.to_owned())
+        .cursor_pointer()
         .px_3()
         .py(px(SPACING[1]))
         .rounded(px(RADIUS))
@@ -26,13 +29,16 @@ pub fn quiet_button(
 }
 
 pub fn primary_button(
+    id: &'static str,
     label: impl Into<SharedString>,
     palette: Palette,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let label = label.into();
     div()
-        .id(label.clone())
+        .id(id)
+        .debug_selector(|| id.to_owned())
+        .cursor_pointer()
         .px_4()
         .py(px(SPACING[2]))
         .rounded(px(RADIUS))

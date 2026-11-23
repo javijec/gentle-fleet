@@ -2,8 +2,8 @@
 
 ## Pruebas automatizadas
 
-`cargo test -p gentle-fleet-desktop` cubre el modelo visual sin necesitar servidor
-gráfico:
+`cargo test -p gentle-fleet-desktop --locked` cubre el modelo visual y la
+conversión de tokens de color sin necesitar servidor gráfico:
 
 1. Estado inicial en bienvenida, panel visible, hosts/sesiones vacíos y sin
    sesión iniciada.
@@ -12,9 +12,9 @@ gráfico:
 4. Selección de paleta clara/oscura y persistencia del tema visual.
 5. Navegación/panel no crean estado Fleet ni sesión.
 
-Las pruebas de estado deliberadamente no afirman interacciones gráficas: cuando
-la API de prueba de GPUI 0.2.2 y el entorno de CI se validen, se agregarán pruebas
-de ventana/eventos con `gpui::test`.
+Las pruebas de estado deliberadamente no afirman interacciones gráficas. GPUI
+0.2.2 implementa la activación Enter/Espacio en elementos enfocados, pero todavía
+no hay una prueba de ventana fiable en este proyecto.
 
 ## Validaciones de build
 
@@ -42,10 +42,13 @@ del backend debe seguir ejecutándose sin un display server.
 Registrar el resultado con sesión de pantalla/servidor gráfico y evidencia
 observada. La existencia de `DISPLAY` por sí sola no constituye un smoke.
 
-Intento de este corte: Hyprland reportó la ventana GPUI mapeada, visible y con
-input habilitado. `grim` creó una imagen, pero todos sus píxeles son transparentes;
-por eso no se pudo inspeccionar el contenido renderizado. No se verificaron las
-interacciones manualmente y ambas cosas siguen pendientes.
+Intento previo: Hyprland reportó la ventana GPUI mapeada, visible y con input
+habilitado, pero la captura resultó transparente y no sirvió como evidencia.
+Reintento en la sesión activa: la ventana se mapeó y se inspeccionó una captura
+opaca de 1920×1080; se distinguieron bienvenida, panel vacío y tema oscuro. Se
+enviaron Tab/Return con `wtype`, pero no se observó una transición de pantalla.
+No se completaron las comprobaciones de controles, foco/teclado, redimensionado
+ni cierre; el smoke sigue incompleto.
 
 ## Dependencias Linux para CI
 

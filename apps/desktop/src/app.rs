@@ -76,6 +76,7 @@ impl Render for DesktopView {
                             .items_center()
                             .gap_3()
                             .child(quiet_button(
+                                "sidebar-toggle",
                                 "☰",
                                 palette,
                                 cx.listener(Self::toggle_sidebar),
@@ -87,6 +88,7 @@ impl Render for DesktopView {
                             ),
                     )
                     .child(quiet_button(
+                        "settings-open",
                         "Configuración",
                         palette,
                         cx.listener(Self::open_settings),
@@ -133,6 +135,7 @@ fn render_page(
             )
             .child(
                 primary_button(
+                    "welcome-open-session",
                     "Abrir sesión",
                     palette,
                     cx.listener(DesktopView::show_session_information),
@@ -157,6 +160,7 @@ fn render_page(
                     .gap_2()
                     .child(
                         quiet_button(
+                            "theme-dark",
                             "Oscuro",
                             palette,
                             cx.listener(DesktopView::select_dark_theme),
@@ -164,6 +168,7 @@ fn render_page(
                     )
                     .child(
                         quiet_button(
+                            "theme-light",
                             "Claro",
                             palette,
                             cx.listener(DesktopView::select_light_theme),
@@ -172,6 +177,7 @@ fn render_page(
             )
             .child(
                 quiet_button(
+                    "settings-home",
                     "Volver al inicio",
                     palette,
                     cx.listener(DesktopView::show_welcome),
@@ -199,7 +205,12 @@ fn render_page(
                     .child("La creación de sesiones se incorporará en P6.2-C. No se inició ningún agente."),
             )
             .child(
-                quiet_button("Volver", palette, cx.listener(DesktopView::show_welcome)),
+                quiet_button(
+                    "session-back",
+                    "Volver",
+                    palette,
+                    cx.listener(DesktopView::show_welcome),
+                ),
             ),
     }
 }

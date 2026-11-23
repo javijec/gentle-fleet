@@ -1,4 +1,4 @@
-use gpui::{hsla, Hsla};
+use gpui::{rgb, Hsla};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeMode {
@@ -53,11 +53,8 @@ impl ThemeMode {
     }
 }
 
-fn color(rgb: u32) -> Hsla {
-    let r = ((rgb >> 16) & 0xff) as f32 / 255.0;
-    let g = ((rgb >> 8) & 0xff) as f32 / 255.0;
-    let b = (rgb & 0xff) as f32 / 255.0;
-    hsla(r, g, b, 1.0)
+fn color(hex: u32) -> Hsla {
+    Hsla::from(rgb(hex))
 }
 
 #[cfg(test)]
@@ -72,5 +69,30 @@ mod tests {
         assert_ne!(dark.canvas, light.canvas);
         assert_ne!(dark.focus, light.focus);
         assert!(SPACING.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn hex_rgb_is_converted_to_hsla_instead_of_treated_as_hsl() {
+        let red = color(0xff0000);
+        assert!((red.h - 0.0).abs() < f32::EPSILON);
+        assert!((red.s - 1.0).abs() < f32::EPSILON);
+        assert!((red.l - 0.5).abs() < f32::EPSILON);
+        assert!((red.a - 1.0).abs() < f32::EPSILON);
+
+        let dark_canvas = ThemeMode::Dark.palette().canvas;
+        let expected = Hsla::from(rgb(0x111318));
+        assert!((dark_canvas.h - expected.h).abs() < f32::EPSILON);
+        assert!((dark_canvas.s - expected.s).abs() < f32::EPSILON);
+        assert!((dark_canvas.l - expected.l).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn grayscale_hex_keeps_zero_saturation_and_expected_lightness() {
+        let gray = color(0x808080);
+
+        assert_eq!(gray.h, 0.0);
+        assert_eq!(gray.s, 0.0);
+        assert!((gray.l - (128.0 / 255.0)).abs() < f32::EPSILON);
+        assert_eq!(gray.a, 1.0);
     }
 }

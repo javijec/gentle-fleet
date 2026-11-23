@@ -22,28 +22,28 @@ use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
     ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows_sys::Win32::Security::{
-    CopySid, EqualSid, GetLengthSid, GetTokenInformation, OpenProcessToken, TokenUser,
+    CopySid, EqualSid, GetLengthSid, GetTokenInformation, TokenUser,
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
-use windows_sys::Win32::System::Memory::LocalFree;
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
-    WaitNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::System::IO::CancelIoEx;
 
 const FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 

@@ -76,3 +76,11 @@ registra PASS de W1-B. La prueba real con un usuario SID diferente permanece
 **BLOCKED** (sin segunda cuenta de prueba autorizada). La cancelación en
 condiciones de backpressure y la ausencia de bloqueo de `Shutdown::Both`
 requieren evidencia adicional. **W1-B ABIERTA.**
+
+## W1-B — ejecución y hallazgos de CI durante la implementación
+
+- Se sustituyó el transporte Windows TCP loopback por named pipes nativas. El código incorpora DACL protegida por SID, verificación de SID en ambos extremos, `FILE_FLAG_FIRST_PIPE_INSTANCE`, y separación entre medio-cierre ordenado y cancelación abortiva.
+- En [CI 45249957541](https://github.com/javijec/gentle-fleet/actions/runs/45249957541), el job `windows-ipc` compiló daemon, runner, CLI y bridge, pasó el protocolo y la regresión W1-A, pero **falló W1-B** por timeout del bridge después de EOF de stdin. El fixture se instrumentó y se cambió `ListAgents` (que ejecuta sondeos nativos) por `ListWorkspaces` para aislar el transporte.
+- En [CI 45251457404](https://github.com/javijec/gentle-fleet/actions/runs/45251457404), pasaron 10 de 11 tests del protocolo; el test de cierre físico falló por una carrera del fixture: el cliente cerraba antes de que `ConnectNamedPipe` terminara. Se añadió una barrera de aceptación en el test (`1413d4d`).
+- **Estado al redactar:** el CI del último commit continúa pendiente. No existe aún una corrida verde completa del nuevo backend. La prueba de acceso desde una segunda cuenta Windows autorizada sigue BLOCKED, y el caso de cierre bajo backpressure no tiene evidencia exhaustiva.
+- W1-B permanece **ABIERTA**. No se empezó W1-C ni se hizo merge.

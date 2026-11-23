@@ -1,6 +1,6 @@
 # P6.2-A — resultados
 
-## Estado: EN PROGRESO; CI del commit pendiente y smoke del panel lateral incompleto
+## Estado: CERRADA (confirmación de cierre recibida el 23/11/2026)
 
 Se creó el esqueleto de Gentle Fleet Desktop con GPUI 0.2.2, vista de bienvenida,
 panel de Machines/sesiones vacío, navegación local, controles de tema y vista
@@ -23,8 +23,8 @@ inicia procesos de agentes.
 | `cargo test -p gentle-fleet-desktop --locked` | PASS: 12 pruebas, incluidas pruebas GPUI de Tab, Enter y foco al navegar |
 | Conversión de color | Corregida RGB-hex → `Hsla`; pruebas para rojo, escala de grises y token del canvas oscuro |
 | Identidad de botones | IDs distintos y estables, cursor de mano y estilo de foco |
-| Smoke Linux | Parcial en el binario actualizado: monitor `eDP-1` encendido (1920×1080); ventana GPUI visible y acepta input (`dev.gentle-fleet.desktop`). Welcome, Ajustes, «Abrir sesión» informativa y «Volver» se observaron en pantalla. Tema oscuro y claro se observaron; ventana redimensionada de 1180×640 a 1280×700 y layout inspeccionado. El panel se ocultó una vez con dispatchers sintéticos de Hyprland; no se verificó su restauración. Cierre normal de la última ventana: PASS |
-| CI remota | No hay CI para los cambios pendientes. El histórico [run 45167387221](https://github.com/javijec/gentle-fleet/actions/runs/45167387221) reportó error de clasificación de host key; el E2E P5 volvió a pasar localmente con `StrictHostKeyChecking=yes` |
+| Smoke Linux | PASS reportado por el usuario para los dos criterios pendientes: ciclo del panel en Omarchy y cierre gráfico. La evidencia previa de la sesión Hyprland está en el registro de trabajo y en las capturas `/tmp/opencode/p62-67-final-welcome.png`, `p62-73-settings-followup.png`, `p62-75-back-followup.png`, `p62-82-light-latest.png`, `p62-80-resized.png`; monitor `eDP-1` 1920×1080. |
+| CI remota | PASS reportado por el usuario para el último commit de P6.2-A. `gh run list --commit 4048eb2` no devolvió una ejecución visible durante el inicio de P6.2-B; no se atribuye aquí un número de run que no se pudo verificar. |
 | E2E shell de backend | PASS en CI: suite FakeDriver, concurrencia, backpressure, permisos, persistencia, approvals, supervivencia runner, identidad, replay, P4.4, SSH y P6.1 |
 | Windows/macOS | No validados |
 
@@ -34,12 +34,13 @@ al navegar, para que Tab/Enter continúen desde una acción válida. Las pruebas
 ventana simulan tanto KeyDown como KeyUp: `TestAppContext::simulate_keystrokes`
 solo emite KeyDown, mientras que el click de teclado de GPUI se procesa en
 KeyUp. La integración real se ejecutó con `wtype` en Hyprland y se inspeccionaron
-capturas de los estados. La interacción de teclado/ratón fue inyectada por
-Wayland/Hyprland (`wtype` y dispatcher), no por dispositivos físicos. El smoke
-del panel lateral sigue incompleto; no se declara cerrado el corte.
+capturas de los estados. Las secuencias comprobadas durante este trabajo se
+inyectaron por Wayland/Hyprland (`wtype` y dispatcher); el PASS final del ciclo
+del panel fue confirmado posteriormente por el usuario.
 
 El primer build expuso un problema en la dependencia transitiva
 `gpui_http_client 0.2.2` (`zed-async-tar` → `xattr`); el parche local mínimo
 descrito en el diseño permitió completar las validaciones Rust. No se modificó
-la lógica del backend Fleet ni se relajaron reglas de Clippy. P6.2-A no se
-considera cerrada hasta completar interacción gráfica real y obtener CI verde.
+la lógica del backend Fleet ni se relajaron reglas de Clippy. P6.2-A se da por
+cerrada sobre la confirmación del usuario de PASS para el smoke gráfico
+pendiente y CI; el detalle de los resultados previos se conserva arriba.

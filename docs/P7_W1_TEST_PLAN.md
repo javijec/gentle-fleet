@@ -37,3 +37,21 @@ y respuesta tardía; `full_shutdown_wakes_pending_reader_without_dropping_client
 comprueba cancelación. Agregar prueba de otro SID y de backpressure con
 `Shutdown::Both` antes de cerrar W1-B. Todos los resultados pendientes son
 UNTESTED o BLOCKED, nunca PASS por inspección de código.
+
+### Pruebas posteriores a corrección ACL
+
+Antes de marcar W1-B como PASS, ejecutar en Windows 11 nativo
+`cargo fmt --all -- --check`, `cargo check --workspace --locked`,
+`cargo clippy --workspace --all-targets --locked -- -D warnings`,
+`cargo test --workspace --locked` y `cargo build --workspace --locked`.
+Luego ejecutar ambos scripts `tests/windows/w1a-token-isolation.ps1` y
+`tests/windows/w1b-named-pipe.ps1`. Ambos ahora comprueban ACL protegida
+de archivos de credenciales/dirección además de la autenticación y bridge.
+
+Registrar SID y `AreAccessRulesProtected` para el directorio de runtime,
+archivos .addr y .token (sin imprimir tokens), los permisos efectivos de
+`DELETE_CHILD` del directorio y un intento real de acceso desde otra
+cuenta local. El cambio de archivo con `CREATE_NEW` debe probarse al
+reiniciar tras un archivo obsoleto y frente a un competidor de endpoint.
+Si CI sigue bloqueado por facturación, registrar BLOCKED; no usar PASS local
+como sustituto del CI. Eliminar fallas reales de seguridad antes de W1-C.

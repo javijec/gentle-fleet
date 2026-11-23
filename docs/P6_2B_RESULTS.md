@@ -1,6 +1,12 @@
 # P6.2-B — resultados
 
-## Estado: EN PROGRESO; integración real y CI de esta etapa pendientes
+## Estado: CERRADA EN LINUX (23/11/2026)
+
+Las consultas Fleet locales y SSH se demostraron desde la vista GPUI real,
+contra un `fleetd` aislado iniciado explícitamente por el E2E y un host OpenSSH
+de fixture. No se confunde este resultado con el E2E CLI de P5: la prueba
+selecciona máquinas y sesiones, conecta, refresca, desconecta y reintenta a
+través de los handlers y el render de Desktop.
 
 ### Implementación
 
@@ -9,9 +15,13 @@
 | Adapter | `apps/desktop/src/fleet/` usa `fleet-client` y sus tipos públicos reexportados; no implementa transporte ni protocolo |
 | Catálogo | Presenta Local y aliases SSH de `fleetctl host`; leer el catálogo no prueba conexiones |
 | Consultas | La ruta real de éxito consulta proveedores, workspaces y sesiones, y conserva un cliente SDK de la máquina seleccionada |
-| Concurrencia | Operaciones fuera de Render, máximo 2 workers, cancelación cooperativa entre requests, respuesta filtrada por generación e identidad |
-| Errores | Traducción a categorías/mensajes sanitizados; seguridad OpenSSH permanece en `StrictHostKeyChecking=yes` |
-| UI | Panel Machines expandible, selección de máquina/sesión, vista central, acciones conectar/actualizar/desconectar/reintentar/cancelar |
+| Concurrencia y espera | Operaciones fuera de Render, máximo 2 workers, cancelación cooperativa, deadline de 20 s y sondeo de cancelación cada 50 ms. Un transporte bloqueado no retiene el worker más allá del deadline |
+| Snapshots | `mark_disconnected`/`mark_failed` eliminan el snapshot anterior; el detalle y el panel solo muestran datos con la fila en `Connected` |
+| Respuestas obsoletas | Generación + `MachineId` descartan resultados de una selección anterior |
+| Navegación | «Volver al inicio» limpia `fleet.selected`/`selected_session`, de modo que Welcome se renderiza aunque hubiera una máquina seleccionada |
+| Identidades UI | Elementos interactivos usan claves estables derivadas de `MachineId`/`SessionIdentity`, no índices de lista |
+| Modularización | `app.rs` (vista, handlers, `run`) se separó de `machines.rs` (panel/detalle), `pages.rs` (bienvenida/configuración/información) y `app/tests.rs` |
+| Errores | Categorías/mensajes sanitizados; `StrictHostKeyChecking=yes` intacto en `fleet-ssh` |
 | Ciclo de vida | No crea sesiones ni manda StopSession; desconectar cierra solo el transporte de cliente |
 | P6.2-C | No implementada |
 
@@ -22,28 +32,29 @@
 | `cargo fmt --all -- --check` | PASS |
 | `cargo check --workspace --locked` | PASS |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |
-| `cargo test --workspace --locked` | PASS en el último pase completo; la suite desktop se volvió a ampliar después a 20 pruebas PASS. 1 diagnóstico real opt-in ignorado en Gentle Shell |
+| `cargo test --workspace --locked` | PASS |
+| `cargo test -p gentle-fleet-desktop --locked` | PASS: 25 pruebas, 1 integración real opt-in ignorada |
 | `cargo build --workspace --locked` | PASS |
 | `tests/e2e_p51_ssh.sh` | PASS: paridad de transporte, dos clientes, supervivencia al disconnect, replay y errores de seguridad |
 | `tests/e2e_p52_two_hosts.sh` | PASS: dos hosts SSH de fixture con sesiones, operation keys y timelines aislados |
 | `tests/e2e_p61_sdk.sh` | PASS: SDK local con FakeDriver, consulta de agentes, prompt/timeline y cancelación |
-| Omarchy/Hyprland | Ventana GPUI visible/acepta input en `eDP-1` 1920×1080. Captura `/tmp/opencode/p62b-machines-initial.png` muestra el panel Machines real con Local y Desconectada; no hay alias SSH configurados. |
-| Conexión local real | BLOQUEADA: `fleetctl agents` devolvió `Connection refused`; `fleetd.service` está inactivo. No se inició `fleetd` (no se debe ocultar el error del entorno). |
-| Smoke remoto real | No ejecutado: `fleetctl host list` no reportó aliases configurados. El E2E P5.2 solo valida SSH con servidores de fixture, no otra máquina física. |
-| Respuesta de error visible en UI | Pendiente: el dispatcher sintético de Hyprland no produjo activación verificable durante esta sesión; la prueba GPUI sí selecciona el row y descarta el resultado no conectado del alias fixture. |
-| CI para commit B | Pendiente |
+| `tests/e2e_p62b_desktop_gpui.sh` | PASS local y en CI: `fleetd` local aislado + `sshd`/`fleetd` remotos de fixture; GPUI conecta Local, consulta proveedores/workspaces/sesiones, refresca, desconecta, reconecta, repite sobre SSH y verifica que los runners preexistentes sobreviven al disconnect del cliente |
+| Snapshots tras desconexión/fallo | PASS: pruebas unitarias del adapter y aserciones GPUI verifican que el snapshot desaparece |
+| Deadline y workers | PASS: una operación bloqueada 150 ms con deadline 30 ms devuelve `Timeout` y libera ambos slots |
+| Navegación a Welcome con máquina seleccionada | PASS: prueba GPUI |
+| Claves estables host/sesión | PASS: prueba unitaria de `machine_key`/`session_key` |
+| CI de la rama | PASS: [run 45206195615](https://github.com/javijec/gentle-fleet/actions/runs/45206195615) sobre `3678bbb` |
+| Omarchy/Hyprland (smoke manual de esta etapa) | UNTESTED: no se repitió la interacción manual con `fleetd` real de usuario; el E2E GPUI cubre la lógica de vista y los transportes reales, no una sesión de escritorio interactiva |
+| Segunda máquina física SSH | UNTESTED: el host remoto de la prueba es un `sshd` local efímero con runtime/DB aislados, no hardware distinto |
 | Windows/macOS | No validados |
 
 ### Limitaciones y riesgos pendientes
 
-- No se puede declarar satisfecho el criterio de conexión/consulta real del SDK
-  desde Desktop hasta disponer de `fleetd` local activo bajo el entorno de
-  usuario, sin que Desktop lo arranque automáticamente.
-- No se verificaron UI local conectada ni máquina SSH física remota. Los E2E
-  proporcionan cobertura de contrato/seguridad, no sustituyen esas integraciones.
-- Una operación síncrona en curso solo se cancela entre requests; una lectura RPC
-  bloqueada no se interrumpe a mitad de frame. La selección nueva descarta su
-  resultado y el máximo de dos workers limita solicitudes simultáneas.
+- Una lectura RPC bloqueada no se interrumpe a mitad de frame: el adapter la
+  abandona al cumplirse el deadline y libera el slot, pero el hilo de transporte
+  puede terminar después. La respuesta tardía se descarta por generación.
+- La prueba SSH demuestra el camino OpenSSH real (host key, identidad, bridge,
+  daemon remoto aislado), no una máquina física ni un proveedor de pago.
 - La administración de altas/eliminaciones de hosts permanece en `fleetctl`;
   Desktop descubre, selecciona, conecta y refresca, pero no edita configuración.
 - No hay chat, timeline, creación de sesión ni ejecución de agentes: corresponden

@@ -10,9 +10,16 @@
 - Clasificación de clave SSH rechazada no filtra el diagnóstico privado.
 - La cancelación es compartida entre vistas/trabajador y se consulta entre
   operaciones SDK.
+- Una operación bloqueada respeta el deadline y devuelve los dos slots de worker.
 - La generación y el ID de máquina descartan respuestas de selección obsoleta.
+- Desconectar o fallar elimina el snapshot anterior, y el detalle no muestra
+  datos de una fila que no está `Connected`.
 - Prueba GPUI de render/selección de host SSH sin configuración; verifica que el
   evento vuelve sin bloquear y no declara una conexión exitosa.
+- Prueba GPUI de «Volver al inicio» con una máquina seleccionada: Welcome se
+  muestra y la selección se limpia.
+- Claves de elementos estables derivadas de host/sesión, independientes de la
+  posición en la lista.
 
 ### Validaciones de regresión
 
@@ -25,8 +32,12 @@ cargo build --workspace --locked
 tests/e2e_p51_ssh.sh
 tests/e2e_p52_two_hosts.sh
 tests/e2e_p61_sdk.sh
+tests/e2e_p62b_desktop_gpui.sh
 ```
 
+`tests/e2e_p62b_desktop_gpui.sh` inicia explícitamente un `fleetd` local aislado y
+otro remoto tras un `sshd` de fixture; después ejecuta la prueba GPUI opt-in que
+atraviesa catálogo, conexión, consulta, refresco, desconexión, reintento y SSH.
 Los E2E P5/P6.1 son deterministas con SSH local/FakeDriver y no equivalen a un
 smoke contra una segunda máquina física ni contra proveedor pago.
 

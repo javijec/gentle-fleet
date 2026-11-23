@@ -21,21 +21,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE, LocalFree,
+    LocalFree, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows_sys::Win32::Security::{
-    CopySid, EqualSid, GetLengthSid, GetTokenInformation, TokenUser,
-    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    CopySid, EqualSid, GetLengthSid, GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES,
+    TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
-    WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -442,8 +442,8 @@ mod tests {
 
     #[test]
     fn half_close_drains_pending_reply_without_truncation() {
-        let runtime = std::env::temp_dir()
-            .join(format!("gentle-fleet-pipe-test-{}", uuid::Uuid::new_v4()));
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-pipe-test-{}", uuid::Uuid::new_v4()));
         let listener = Listener::bind(&runtime, "halfclose").unwrap();
         let address = listener.address().to_owned();
         let server = std::thread::spawn(move || {

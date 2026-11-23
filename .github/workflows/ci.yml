@@ -71,3 +71,5 @@ jobs:
           else
             echo "SKIP: sshd not installed in CI image"
           fi
+      - name: e2e P6.1 SDK local con FakeDriver
+        run: tests/e2e_p61_sdk.sh

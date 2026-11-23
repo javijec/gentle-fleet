@@ -92,6 +92,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-client"
+version = "0.1.0"
+dependencies = [
+ "fleet-domain",
+ "fleet-protocol",
+ "fleet-ssh",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "fleet-conformance"
 version = "0.1.0"
 dependencies = [
@@ -226,6 +237,7 @@ dependencies = [
 name = "fleetctl"
 version = "0.1.0"
 dependencies = [
+ "fleet-client",
  "fleet-domain",
  "fleet-protocol",
  "fleet-ssh",

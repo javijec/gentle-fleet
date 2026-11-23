@@ -13,6 +13,7 @@ members = [
   "crates/fleet-driver-gentle-shell",
   "crates/fleet-conformance",
   "crates/fleet-ssh",
+  "crates/fleet-client",
   "crates/fleet-providers",
   "crates/fleetd",
   "crates/fleetctl",

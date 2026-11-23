@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/debug"
+cd "$ROOT"
+cargo build --locked -p fleetd -p fleetctl -p fleet-client --example sdk_smoke >/dev/null
 command -v sshd >/dev/null || { echo "SKIP: sshd not installed"; exit 0; }
 RUNTIME="$(mktemp -d /tmp/gf-p51-ssh-XXXXXX)"
 WORKSPACE="$(mktemp -d /tmp/gf-p51-ssh-ws-XXXXXX)"
@@ -43,6 +45,7 @@ ssh-keyscan -p "$PORT" -t ed25519 127.0.0.1 >"$RUNTIME/known_hosts" 2>/dev/null
 export FLEET_RUNTIME_DIR="$RUNTIME" FLEET_DB_PATH="$RUNTIME/fleet.sqlite"
 export FLEET_SSH_CONFIG="$RUNTIME/hosts.json"
 export FLEET_SSH_KNOWN_HOSTS="$RUNTIME/known_hosts"
+export FLEET_CURSOR_JOURNAL="$RUNTIME/cursors.jsonl"
 export FLEET_OPERATION_JOURNAL="$RUNTIME/operations.jsonl"
 "$BIN/fleetd" >"$RUNTIME/daemon.out" 2>"$RUNTIME/daemon.err" &
 DAEMON_PID=$!
@@ -51,6 +54,39 @@ for _ in $(seq 1 100); do [[ -f "$RUNTIME/fleetd.addr" ]] && break; sleep 0.1; d
 
 "$BIN/fleetctl" host add test "$USER_NAME@127.0.0.1" \
   --bridge "$BIN/fleet-ssh-bridge" --port "$PORT" --identity "$RUNTIME/client_key" >/dev/null
+
+# The reusable Rust SDK must consume the same remote Fleet API as fleetctl.
+"$BIN/fleetctl" --host test agents | cut -f1 | sort >"$RUNTIME/cli-remote-agents"
+"$BIN/examples/sdk_smoke" --host test "$WORKSPACE" >"$RUNTIME/sdk-remote.out"
+grep '^SDK_AGENT' "$RUNTIME/sdk-remote.out" | cut -f2 | sort >"$RUNTIME/sdk-remote-agents"
+diff -u "$RUNTIME/cli-remote-agents" "$RUNTIME/sdk-remote-agents"
+
+# A live SDK observer reconnects after its bridge is killed. FakeDriver's
+# configured delay leaves a deterministic window after the accepted prompt.
+timeout 90 "$BIN/examples/sdk_smoke" --reconnect test "$WORKSPACE" \
+  >"$RUNTIME/sdk-reconnect.out" 2>"$RUNTIME/sdk-reconnect.err" &
+SDK_PID=$!
+for _ in $(seq 1 300); do
+  grep -q '^SDK_PROMPT_SENT$' "$RUNTIME/sdk-reconnect.out" 2>/dev/null && break
+  kill -0 "$SDK_PID" 2>/dev/null || { cat "$RUNTIME/sdk-reconnect.err"; exit 1; }
+  sleep 0.05
+done
+grep -q '^SDK_PROMPT_SENT$' "$RUNTIME/sdk-reconnect.out" || {
+  echo "FAIL: SDK did not reach accepted prompt"; exit 1;
+}
+pkill -f "$BIN/fleet-ssh-bridge" 2>/dev/null || true
+wait "$SDK_PID" || { cat "$RUNTIME/sdk-reconnect.err"; exit 1; }
+SDK_SESSION="$(awk -F '\t' '$1=="SDK_SESSION" {print $2; exit}' "$RUNTIME/sdk-reconnect.out")"
+[[ -n "$SDK_SESSION" ]] || { echo "FAIL: SDK session ID missing"; exit 1; }
+[[ "$(grep -c '^SDK_EVENT' "$RUNTIME/sdk-reconnect.out")" -eq \
+   "$(grep '^SDK_EVENT' "$RUNTIME/sdk-reconnect.out" | cut -f2 | sort -u | wc -l)" ]] || {
+  echo "FAIL: SDK emitted duplicate event sequences"; exit 1;
+}
+"$BIN/fleetctl" --host test timeline "$SDK_SESSION" --limit 100 \
+  >"$RUNTIME/sdk-reconnect-timeline.out"
+[[ "$(grep -c 'user.SDK smoke' "$RUNTIME/sdk-reconnect-timeline.out")" == "1" ]] || {
+  echo "FAIL: SDK reconnect duplicated prompt"; exit 1;
+}
 
 # 1. Paridad de proveedores local/remoto.
 "$BIN/fleetctl" agents >"$RUNTIME/local-agents.out"

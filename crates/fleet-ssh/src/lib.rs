@@ -168,6 +168,17 @@ pub enum FleetWriter {
 }
 
 impl FleetWriter {
+    /// Close only this client transport. The remote fleetd and runners remain
+    /// owned by the host and are not signalled.
+    pub fn close(&mut self) {
+        match self {
+            FleetWriter::Local(stream) => {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            FleetWriter::Ssh(writer) => writer.close(),
+        }
+    }
+
     pub fn ssh_exit_code(&mut self) -> Option<i32> {
         match self {
             FleetWriter::Ssh(writer) => writer.exit_code(),
@@ -208,6 +219,14 @@ pub struct SshWriter {
 }
 
 impl SshWriter {
+    pub fn close(&mut self) {
+        self.stdin.take();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
     /// Código de salida del proceso SSH para clasificar fallos de transporte.
     pub fn exit_code(&mut self) -> Option<i32> {
         // stdout can reach EOF just before OpenSSH exits; give it a bounded

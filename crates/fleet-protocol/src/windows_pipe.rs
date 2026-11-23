@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
+    ERROR_BROKEN_PIPE, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
     INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
@@ -112,7 +112,7 @@ fn current_sid() -> io::Result<Vec<u8>> {
 
 fn sid_string(sid: &[u8]) -> io::Result<String> {
     let mut out = ptr::null_mut();
-    if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast::<c_void>(), &mut out) } == 0 {
+    if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast::<c_void>(), &mut out) } == 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: ConvertSidToStringSidW returns a NUL-terminated LocalAlloc buffer.
@@ -148,8 +148,8 @@ fn check_peer(handle: HANDLE, sid: &[u8], client: bool) -> io::Result<()> {
     let peer_sid = sid_of_process(process.as_raw_handle())?;
     if unsafe {
         EqualSid(
-            sid.as_ptr().cast::<c_void>(),
-            peer_sid.as_ptr().cast::<c_void>(),
+            sid.as_ptr().cast_mut().cast::<c_void>(),
+            peer_sid.as_ptr().cast_mut().cast::<c_void>(),
         )
     } == 0
     {

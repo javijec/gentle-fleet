@@ -26,6 +26,23 @@ try {
     if (-not $address.StartsWith('\\.\pipe\', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Windows daemon endpoint is not a named pipe'
     }
+    # Reject inherited or broadly writable credential/endpoint ACLs.
+    # The exact owner SID is derived at runtime (no locale-dependent group names).
+    $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    foreach ($sensitive in @($addressFile, (Join-Path $runtime 'fleetd.token'))) {
+        $acl = Get-Acl -LiteralPath $sensitive
+        if (-not $acl.AreAccessRulesProtected) {
+            throw "Fleet endpoint file inherits unprotected ACL: $([IO.Path]::GetFileName($sensitive))"
+        }
+        foreach ($rule in $acl.Access) {
+            if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+            $sid = $rule.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+            if ($sid -ne $ownerSid) {
+                throw "Fleet endpoint file grants non-owner access: $([IO.Path]::GetFileName($sensitive))"
+            }
+        }
+    }
     $name = $address.Substring('\\.\pipe\'.Length)
     $client = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::InOut)
     try {

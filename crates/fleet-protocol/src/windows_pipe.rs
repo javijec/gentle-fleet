@@ -465,8 +465,8 @@ mod tests {
 
     #[test]
     fn full_shutdown_wakes_pending_reader_without_dropping_client() {
-        let runtime = std::env::temp_dir()
-            .join(format!("gentle-fleet-cancel-test-{}", uuid::Uuid::new_v4()));
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-cancel-test-{}", uuid::Uuid::new_v4()));
         let listener = Listener::bind(&runtime, "cancellation").unwrap();
         let address = listener.address().to_owned();
         let (release_tx, release_rx) = std::sync::mpsc::channel();

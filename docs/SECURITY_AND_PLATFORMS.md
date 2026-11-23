@@ -46,3 +46,12 @@ El **cliente** Windows `fleetctl.exe` fue probado con OpenSSH en P5 contra Linux
 ## No objetivos de seguridad inicial
 
 Aislamiento de UID dedicado, contenedores por agente, host remoto multiusuario compartido, cero confianza entre procesos del mismo usuario y autenticar reinicio de procesos frente a root/administrador. Si se requiere alguno, escribir un ADR y añadir pruebas antes de declararlo admitido; no incrustarlo como excepción en el MVP.
+
+**Implementación preliminar W1-B (no validación de seguridad):** el código
+Windows incorporó named pipes con DACL protegida para el SID propietario,
+comprobación del SID del peer, protección de primera instancia y un marcador
+interno de half-close independiente de JSONL. La prueba entre usuarios
+Windows distintos, los permisos de archivos sensibles y la cancelación ante
+backpressure continúan sin validación completa. Consultar
+`P7_W1_DESIGN.md` y `P7_W1_RESULTS.md`; no declarar IPC Windows seguro
+solo porque el endpoint tenga un nombre de pipe.

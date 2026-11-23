@@ -5,6 +5,31 @@ on:
   pull_request:
 
 jobs:
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Run every diagnostic even if a previous one fails. Failures are not
+      # suppressed: this job remains red until Windows incompatibilities are fixed.
+      - name: Format
+        if: ${{ always() }}
+        run: cargo fmt --all -- --check
+      - name: Check workspace
+        if: ${{ always() }}
+        run: cargo check --workspace --locked
+      - name: Clippy workspace
+        if: ${{ always() }}
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Native Rust tests
+        if: ${{ always() }}
+        run: cargo test --workspace --locked
+      - name: Build workspace
+        if: ${{ always() }}
+        run: cargo build --workspace --locked
+
   check:
     runs-on: ubuntu-latest
     steps:

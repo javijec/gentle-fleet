@@ -12,6 +12,7 @@
 
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
+use std::path::Path;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
@@ -32,7 +33,8 @@ use windows_sys::Win32::Security::{
     TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
+    CreateFileW, ReadFile, WriteFile, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED,
+    FILE_SHARE_READ, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
@@ -281,6 +283,73 @@ fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHan
         return Err(error);
     }
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// Create a Fleet endpoint credential or address file with a protected,
+/// owner-only DACL *before* its contents become visible to any other process.
+///
+/// CREATE_NEW is mandatory: CreateFileW ignores the security descriptor if
+/// an existing file is opened. An old file is removed only after Fleet has
+/// reserved its named-pipe endpoint, so a second Fleet daemon cannot rotate
+/// the first daemon's credentials. If another process races the creation,
+/// CREATE_NEW fails closed rather than overwriting its file.
+///
+/// This does not protect an insecure parent directory from DELETE_CHILD:
+/// runtime-directory validation remains an explicit W1-B security gate.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Fleet credential path must be absolute",
+        ));
+    }
+    let sid = current_sid()?;
+    let owner = sid_string(&sid)?;
+    let sddl = wide(&format!("D:P(A;;GA;;;{owner})"));
+    let mut descriptor = ptr::null_mut();
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut(),
+        )
+    } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    // Remove a stale file rather than reopening it with inherited DACL.
+    // A symlink at this path is removed, not followed; CREATE_NEW then
+    // refuses any unexpected replacement created during the race.
+    let removed = match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    };
+    let created = removed.and_then(|()| {
+        let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle = unsafe {
+            CreateFileW(
+                path_wide.as_ptr(),
+                GENERIC_WRITE,
+                FILE_SHARE_READ,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let mut file = File::from(handle);
+        file.write_all(contents)?;
+        file.sync_all()
+    });
+    unsafe { LocalFree(descriptor); }
+    created
 }
 
 pub struct Listener {

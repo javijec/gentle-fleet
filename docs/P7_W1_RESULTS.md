@@ -14,13 +14,19 @@ PASS en Windows, backend Linux y desktop Linux.
   inválido por el daemon; se enviaron prompts y paradas. No se registraron
   secretos. Los procesos de fixture se terminaron por handles registrados.
 - `cargo test -p fleet-protocol --locked` y `cargo fmt --all -- --check`: PASS
-  en Windows. Regresión Linux del cambio y CI del commit: UNTESTED por ahora.
+  en Windows. [CI 45238966908](https://github.com/javijec/gentle-fleet/actions/runs/45238966908)
+  sobre `50451af`: PASS en Windows, backend Linux con E2E y desktop Linux;
+  incluye la regresión de tokens W1-A.
 - Rechazo cruzado: PASS en Windows con dos runners FakeDriver de fixture
   independientes; cada runner rechazó el token del otro y aceptó su propio
-  token e identidad. No se declara cerrado W1-A hasta comprobar Linux y CI.
+  token e identidad. **W1-A: PASS**, sin afirmar que TCP/token sea IPC seguro.
 
 ## W1-B–F
 
-BLOCKED por las puertas de W1-A y seguridad. Named pipes, DACL, persistencia,
-supervivencia del runner y E2E exhaustivos aún no se implementaron ni probaron.
+W1-B está pendiente de diseño e implementación segura. El bridge depende de
+half-close y cancelación bidireccional, aún no adaptados a named pipes. La
+prueba entre usuarios está BLOCKED: la sesión no tiene token administrativo
+habilitado y no se ha configurado otra identidad de prueba. Named pipes, DACL,
+persistencia, supervivencia del runner y E2E exhaustivos no se implementaron ni
+probaron.
 No se declara compatibilidad funcional ni seguridad del transporte Windows.

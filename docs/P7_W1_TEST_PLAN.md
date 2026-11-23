@@ -8,8 +8,9 @@ token de cada runner y un token inválido. Usa timeouts y termina solo procesos
 registrados. Los tokens no se imprimen.
 
 El fixture también inicia dos runners independientes y comprueba rechazo
-cruzado y aceptación del token propio. Pendiente W1-A: confirmar regresión
-Linux y el resultado del CI del commit. La prueba actual
+cruzado y aceptación del token propio. W1-A y regresión Linux pasaron en
+[CI 45238966908](https://github.com/javijec/gentle-fleet/actions/runs/45238966908).
+La prueba actual
 utiliza TCP y deberá adaptarse explícitamente al nuevo transporte en W1-B.
 
 **W1-B:** autenticar mismo usuario y rechazar otro usuario en una instalación

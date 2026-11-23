@@ -54,7 +54,7 @@
 
 **P7-W0: CERRADO como auditoría.** El [CI 45234810431](https://github.com/javijec/gentle-fleet/actions/runs/45234810431) sobre `64dfac0` pasó en Windows, backend Linux y Desktop Linux. Ver [auditoría y plan W1–W4](P7_W0_AUDIT.md), [resultados](P7_W0_RESULTS.md) y [matriz](P7_WINDOWS_MATRIX.md). El fallo de token del runner, IPC/ACL, persistencia y supervivencia de procesos son bloqueadores de W1; la compilación no equivale a compatibilidad funcional ni a seguridad del transporte. W1–W4 y P6.2-C no se iniciaron.
 
-**P7-W1: ABIERTO.** W1-A tiene una corrección inicial y regresiones de proceso Windows, incluido rechazo cruzado entre runners; falta verificar regresión Linux y CI. IPC seguro, DACL, persistencia y recuperación siguen pendientes. Ver [diseño](P7_W1_DESIGN.md), [plan](P7_W1_TEST_PLAN.md) y [resultados](P7_W1_RESULTS.md).
+**P7-W1: ABIERTO.** W1-A pasó sus regresiones Windows, incluido rechazo cruzado entre runners, y el [CI 45238966908](https://github.com/javijec/gentle-fleet/actions/runs/45238966908) Windows y Linux. IPC seguro, DACL, persistencia y recuperación siguen pendientes. Ver [diseño](P7_W1_DESIGN.md), [plan](P7_W1_TEST_PLAN.md) y [resultados](P7_W1_RESULTS.md).
 
 ## Regla para ampliar el alcance
 

@@ -1,6 +1,6 @@
 # P7-W1 — diseño y límites actuales
 
-**ABIERTO.** W1-A está en validación; W1-B–F no están implementados.
+**ABIERTO.** W1-A pasó su regresión nativa y CI; W1-B–F no están implementados.
 Este documento registra el comportamiento real, no una garantía futura.
 
 ## Identidades actuales
@@ -24,3 +24,15 @@ Falta diseñar e implementar named pipes con DACL explícita, verificación SID,
 defensa contra apropiación del endpoint, propiedad y cierre de handles y una
 decisión probada sobre half-close. No hay fallback TCP seguro validado ni
 prueba de usuario Windows distinto. No se declara implementado W1-B.
+
+El bridge `fleet-ssh::run_bridge` necesita `Shutdown::Write` tras EOF de
+stdin mientras el hilo de salida continúa leyendo; también usa
+`Shutdown::Both` para cancelar ante errores. Un `DuplicateHandle` de una pipe
+no proporciona por sí solo ese half-close: no se puede sustituir por un cierre
+incondicional ni por un no-op sin romper EOF, drenaje o cancelación. W1-B
+requiere una estrategia explícita y pruebas de proceso para esos casos antes de
+sustituir TCP.
+
+La sesión Windows actual tiene el grupo Administradores marcado solo para
+denegar; no se ha dispuesto una segunda identidad controlada ni ejecutado una
+prueba entre usuarios. Esa prueba es **BLOCKED**, no una validación de DACL.

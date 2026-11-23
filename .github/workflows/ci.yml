@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# On the experimental Windows portability branch, keep only the newest
+# validation run. Do not cancel checks on stable branches or PRs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/feature/p7-windows-native' }}
+
 jobs:
   windows-native:
     runs-on: windows-latest

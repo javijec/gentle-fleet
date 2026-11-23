@@ -5,12 +5,21 @@
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    mpsc, Arc,
 };
+use std::time::{Duration, Instant};
 
 use fleet_client::{
     AgentSummary, ClientError, FleetClient, Host, SessionSummary, WorkspaceSummary,
 };
+
+/// Upper bound for one blocking SDK operation (connect plus three lists).
+///
+/// The GPUI worker slot is released when this deadline expires even if the
+/// underlying blocking transport has not returned yet. The abandoned thread
+/// still owns its connection and closes it when it eventually finishes.
+pub const OPERATION_DEADLINE: Duration = Duration::from_secs(20);
+const CANCELLATION_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MachineId {
@@ -66,6 +75,7 @@ pub enum FleetErrorKind {
     BridgeMissing,
     DaemonUnavailable,
     IncompatibleProtocol,
+    Timeout,
     Other,
 }
 
@@ -185,6 +195,20 @@ impl MachineRow {
             error: None,
         }
     }
+
+    /// Drop any previously loaded data: a closed or lost connection must never
+    /// keep rendering an earlier snapshot as if it were current.
+    pub fn mark_disconnected(&mut self) {
+        self.status = ConnectionStatus::Disconnected;
+        self.snapshot = None;
+        self.error = None;
+    }
+
+    pub fn mark_failed(&mut self, status: ConnectionStatus, error: SafeFleetError) {
+        self.status = status;
+        self.snapshot = None;
+        self.error = Some(error);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -238,6 +262,77 @@ impl Cancellation {
     }
 }
 
+fn cancelled_error() -> SafeFleetError {
+    SafeFleetError {
+        kind: FleetErrorKind::Other,
+        message: "La consulta fue cancelada.",
+    }
+}
+
+fn timeout_error() -> SafeFleetError {
+    SafeFleetError {
+        kind: FleetErrorKind::Timeout,
+        message: "La operación Fleet no respondió a tiempo. Puedes reintentar.",
+    }
+}
+
+/// Run a blocking SDK operation on its own thread and stop waiting once the
+/// cancellation token is set or the deadline expires. The worker permit is
+/// released on return, so a wedged transport cannot exhaust the UI workers.
+pub fn run_bounded<T, F>(cancellation: &Cancellation, operation: F) -> Result<T, SafeFleetError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, SafeFleetError> + Send + 'static,
+{
+    run_bounded_with_deadline(cancellation, OPERATION_DEADLINE, operation)
+}
+
+pub fn run_bounded_with_deadline<T, F>(
+    cancellation: &Cancellation,
+    deadline: Duration,
+    operation: F,
+) -> Result<T, SafeFleetError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, SafeFleetError> + Send + 'static,
+{
+    let (sender, receiver) = mpsc::channel();
+    let worker = std::thread::Builder::new()
+        .name("fleet-desktop-sdk".into())
+        .spawn(move || {
+            let _ = sender.send(operation());
+        })
+        .map_err(|_| SafeFleetError {
+            kind: FleetErrorKind::Other,
+            message: "No se pudo iniciar la consulta Fleet.",
+        })?;
+    let started = Instant::now();
+    loop {
+        if cancellation.is_cancelled() {
+            // The detached worker still closes its own transport when it ends.
+            return Err(cancelled_error());
+        }
+        let remaining = deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(timeout_error());
+        }
+        match receiver.recv_timeout(remaining.min(CANCELLATION_POLL)) {
+            Ok(result) => {
+                let _ = worker.join();
+                return result;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker.join();
+                return Err(SafeFleetError {
+                    kind: FleetErrorKind::Other,
+                    message: "La consulta Fleet terminó de forma inesperada.",
+                });
+            }
+        }
+    }
+}
+
 /// A tiny bounded admission controller for blocking Fleet SDK work.
 #[derive(Clone, Default)]
 pub struct FleetWorkers(Arc<std::sync::atomic::AtomicUsize>);
@@ -270,16 +365,24 @@ impl Drop for WorkerPermit {
     }
 }
 
-pub fn inspect(
+fn check_cancelled(
+    cancellation: &Cancellation,
+    client: &mut FleetClient,
+) -> Result<(), SafeFleetError> {
+    if cancellation.is_cancelled() {
+        client.disconnect();
+        return Err(cancelled_error());
+    }
+    Ok(())
+}
+
+fn inspect_blocking(
     machine: &MachineId,
     cancellation: &Cancellation,
     connection: Option<Connection>,
 ) -> Result<(MachineSnapshot, Connection), SafeFleetError> {
     if cancellation.is_cancelled() {
-        return Err(SafeFleetError {
-            kind: FleetErrorKind::Other,
-            message: "La consulta fue cancelada.",
-        });
+        return Err(cancelled_error());
     }
     let mut client = match connection {
         Some(connection) if connection.client.host() == &machine.sdk_host() => connection.client,
@@ -289,31 +392,13 @@ pub fn inspect(
         }
         None => FleetClient::connect(machine.sdk_host()).map_err(|error| safe_error(&error))?,
     };
-    if cancellation.is_cancelled() {
-        client.disconnect();
-        return Err(SafeFleetError {
-            kind: FleetErrorKind::Other,
-            message: "La consulta fue cancelada.",
-        });
-    }
+    check_cancelled(cancellation, &mut client)?;
     let agents = client.list_agents().map_err(|error| safe_error(&error))?;
-    if cancellation.is_cancelled() {
-        client.disconnect();
-        return Err(SafeFleetError {
-            kind: FleetErrorKind::Other,
-            message: "La consulta fue cancelada.",
-        });
-    }
+    check_cancelled(cancellation, &mut client)?;
     let workspaces = client
         .list_workspaces()
         .map_err(|error| safe_error(&error))?;
-    if cancellation.is_cancelled() {
-        client.disconnect();
-        return Err(SafeFleetError {
-            kind: FleetErrorKind::Other,
-            message: "La consulta fue cancelada.",
-        });
-    }
+    check_cancelled(cancellation, &mut client)?;
     let sessions = client.list_sessions().map_err(|error| safe_error(&error))?;
     Ok((
         MachineSnapshot {
@@ -323,6 +408,18 @@ pub fn inspect(
         },
         Connection { client },
     ))
+}
+
+pub fn inspect(
+    machine: &MachineId,
+    cancellation: &Cancellation,
+    connection: Option<Connection>,
+) -> Result<(MachineSnapshot, Connection), SafeFleetError> {
+    let request_machine = machine.clone();
+    let request_cancellation = cancellation.clone();
+    run_bounded(cancellation, move || {
+        inspect_blocking(&request_machine, &request_cancellation, connection)
+    })
 }
 
 #[cfg(test)]
@@ -349,6 +446,87 @@ mod tests {
         assert!(!worker_copy.is_cancelled());
         cancellation.cancel();
         assert!(worker_copy.is_cancelled());
+    }
+
+    #[test]
+    fn disconnecting_or_failing_drops_the_previous_snapshot() {
+        let mut row = MachineRow::new(MachineCatalogEntry {
+            id: MachineId::Local,
+            kind: MachineKind::Local,
+        });
+        row.status = ConnectionStatus::Connected;
+        row.snapshot = Some(MachineSnapshot {
+            agents: Vec::new(),
+            workspaces: Vec::new(),
+            sessions: Vec::new(),
+        });
+
+        row.mark_disconnected();
+        assert_eq!(row.status, ConnectionStatus::Disconnected);
+        assert!(row.snapshot.is_none());
+
+        row.snapshot = Some(MachineSnapshot {
+            agents: Vec::new(),
+            workspaces: Vec::new(),
+            sessions: Vec::new(),
+        });
+        row.mark_failed(
+            ConnectionStatus::Error,
+            SafeFleetError {
+                kind: FleetErrorKind::Transport,
+                message: "No se pudo conectar.",
+            },
+        );
+        assert_eq!(row.status, ConnectionStatus::Error);
+        assert!(row.snapshot.is_none());
+        assert!(row.error.is_some());
+    }
+
+    #[test]
+    fn bounded_operations_time_out_and_honour_cancellation() {
+        let cancellation = Cancellation::default();
+        let started = Instant::now();
+        let result = run_bounded_with_deadline(&cancellation, Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(())
+        });
+        assert_eq!(result.unwrap_err().kind, FleetErrorKind::Timeout);
+        assert!(started.elapsed() < Duration::from_millis(250));
+
+        let cancellation = Cancellation::default();
+        let worker = cancellation.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            worker.cancel();
+        });
+        let started = Instant::now();
+        let result = run_bounded_with_deadline(&cancellation, Duration::from_secs(5), || {
+            std::thread::sleep(Duration::from_millis(400));
+            Ok(())
+        });
+        assert_eq!(result.unwrap_err().message, "La consulta fue cancelada.");
+        assert!(started.elapsed() < Duration::from_millis(350));
+    }
+
+    #[test]
+    fn timed_out_operations_return_both_worker_slots() {
+        let workers = FleetWorkers::default();
+        let cancellation = Cancellation::default();
+        for _ in 0..2 {
+            let permit = workers.try_acquire().expect("two slots available");
+            let result =
+                run_bounded_with_deadline(&cancellation, Duration::from_millis(30), || {
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(())
+                });
+            assert_eq!(result.unwrap_err().kind, FleetErrorKind::Timeout);
+            drop(permit);
+        }
+        let first = workers.try_acquire().expect("slot released after timeout");
+        let second = workers
+            .try_acquire()
+            .expect("second slot released after timeout");
+        drop((first, second));
     }
 
     #[test]

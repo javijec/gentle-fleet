@@ -59,7 +59,7 @@ try {
     $bridge = [Diagnostics.Process]::Start($start)
     try {
         $bridge.StandardInput.WriteLine('{"kind":"request","request_id":"h1","request":{"type":"hello","client_id":"w1b","token":null}}')
-        $bridge.StandardInput.WriteLine('{"kind":"request","request_id":"a1","request":{"type":"list_agents"}}')
+        $bridge.StandardInput.WriteLine('{"kind":"request","request_id":"a1","request":{"type":"list_workspaces"}}')
         $bridge.StandardInput.Close()
         $outTask = $bridge.StandardOutput.ReadToEndAsync()
         $errTask = $bridge.StandardError.ReadToEndAsync()
@@ -82,8 +82,8 @@ try {
         if (@($frames | Where-Object { $_.request_id -eq 'h1' -and $_.result.Ok.type -eq 'hello' }).Count -ne 1) {
             throw 'SSH bridge dropped Hello response after half-close'
         }
-        if (@($frames | Where-Object { $_.request_id -eq 'a1' -and $_.result.Ok.type -eq 'agents' }).Count -ne 1) {
-            throw 'SSH bridge dropped Agents response after half-close'
+        if (@($frames | Where-Object { $_.request_id -eq 'a1' -and $_.result.Ok.type -eq 'workspaces' }).Count -ne 1) {
+            throw 'SSH bridge dropped Workspaces response after half-close'
         }
     } finally {
         if (-not $bridge.HasExited) {

@@ -254,11 +254,15 @@ impl Listener {
         if connected == 0
             && io::Error::last_os_error().raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32)
         {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            // Do not lose the listener after a failed connection attempt.
+            *pending = Some(create_instance(&self.name_wide, &self.sid, false)?);
+            return Err(error);
         }
-        check_peer(instance.as_raw_handle(), &self.sid, true)?;
-        // Prepare the next independent instance before handling this client.
+        let verified = check_peer(instance.as_raw_handle(), &self.sid, true);
+        // Rejecting an unauthorised peer must not disable future accepts.
         *pending = Some(create_instance(&self.name_wide, &self.sid, false)?);
+        verified?;
         Ok(Stream::new(File::from(instance)))
     }
 }
@@ -313,11 +317,13 @@ impl Stream {
                 }
             }
             std::net::Shutdown::Both => {
+                // Unlike closing an Arc clone, the logical EOF reaches the
+                // peer even when the client still owns its reader half.
+                let _ = self.shutdown(std::net::Shutdown::Write);
                 self.0.stopped.store(true, Ordering::Release);
                 self.0.read_eof.store(true, Ordering::Release);
                 self.0.write_eof.store(true, Ordering::Release);
-                // Best effort cancellation of blocked I/O issued by other
-                // threads. Return errors from future writes rather than hang.
+                // Wake pending reads/writes issued by other threads.
                 unsafe {
                     CancelIoEx(self.0.file.as_raw_handle(), ptr::null());
                 }

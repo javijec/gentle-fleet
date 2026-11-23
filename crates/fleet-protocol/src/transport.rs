@@ -153,9 +153,9 @@ impl LocalListener {
         // independent token during startup and must never rotate the daemon's.
         if name == "fleetd" {
             let token = uuid::Uuid::new_v4().to_string();
-            std::fs::write(runtime_dir().join("fleetd.token"), token.as_bytes())?;
+            windows_pipe::write_private_file(&runtime_dir().join("fleetd.token"), token.as_bytes())?;
         }
-        std::fs::write(address_file_named(name), &address)?;
+        windows_pipe::write_private_file(&address_file_named(name), address.as_bytes())?;
         Ok(Self::NamedPipe(listener))
     }
 
@@ -168,6 +168,12 @@ impl LocalListener {
     pub fn description(&self) -> String {
         format!("named-pipe:{:?}", address_file_named("fleetd"))
     }
+}
+
+/// Write a Windows Fleet credential or endpoint file with an owner-only DACL.
+#[cfg(windows)]
+pub fn write_private_file(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+    windows_pipe::write_private_file(path, contents)
 }
 
 pub fn connect() -> io::Result<LocalStream> {

@@ -12,6 +12,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Install OpenSSH server for P5/P6 E2E
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
       - run: cargo fmt --all -- --check
       - name: Validar sintaxis de scripts E2E
         run: |

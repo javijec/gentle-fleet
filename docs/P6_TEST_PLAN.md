@@ -10,11 +10,14 @@
 | Chat tipado y timeline en vivo | SDK smoke local y SSH |
 | Dos observadores / secuencias sin repetición | E2E P5 y SDK reconnect con set de `seq` |
 | Caída de bridge y reconexión por cursor | E2E SSH termina el bridge mientras SDK observa |
-| Cursor persistente por host/sesión | SDK smoke cancela y reanuda con `resume_timeline` |
+| Cursor persistente por host/sesión | SDK smoke cancela/reanuda con `resume_timeline`; test unitario separa cursor encolado y recibido |
 | ACK ambiguo sin replay automático | journal antes del envío; se verifica en E2E P5 con misma `operation_key` |
 | Aprobación ganadora única | regresiones existentes P2/P4.4 sobre el wire público |
 | Error SSH no vacío exitoso | regresión de host-key/bridge en E2E P5 |
 | Cancelar observación sin detener sesión | SDK cancela y después `stop_session` explícito |
+| Consumidor lento: no pérdida de eventos y reporte de errores con cola llena | Tests unitarios de cola acotada y error terminal no descartado |
+| CLI ante desconexión transitoria | `fleetctl watch` permanece activo y utiliza reconexión del SDK |
+| Recuperación de más de 256 eventos | `tests/e2e_long_replay.sh` (270 eventos) y diagnóstico de salida temprana |
 | Dos hosts no se mezclan | E2E P5 dos hosts; prueba unitaria de `SessionIdentity` |
 
 ## Ejecución

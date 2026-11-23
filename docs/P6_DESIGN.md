@@ -28,7 +28,7 @@ No se modifica el wire. Los IDs de solicitud `sdk-N` son independientes de `oper
 
 ## Replay, reconexión y cancelación
 
-Cada observador tiene canal acotado de 64 eventos. Errores de conexión se notifican y la observación reintenta con backoff exponencial de 100 ms a 5 s. En reconexión se suscribe desde el último `seq` aceptado y descarta secuencias ya vistas; huecos se exponen como `RetentionGap`, nunca se inventan. `resume_timeline` carga el cursor que el SDK persistió en `cursors.jsonl` por host/sesión. El cursor se sincroniza antes de entregar el evento al consumidor.
+Cada observador tiene un canal acotado de 64 eventos. La reconexión reintenta errores transitorios con backoff de 100 ms a 5 s; los huecos (`RetentionGap`) y errores permanentes necesitan intervención explícita. **Dos cursores con propósitos distintos:** el worker deduplica a partir del último `seq` encolado; el cursor público `last_sequence()` y el journal `cursors.jsonl` avanzan solo tras `recv()` y persistencia exitosos. Si se descarta la suscripción con eventos pendientes en cola, `resume_timeline` no se los salta. Un consumidor lento produce backpressure acotado, cancelable y explícito.
 
 `cancel` cierra solo el stream SSH/socket del observador, despierta el hilo lector y espera su terminación; no envía `StopSession` ni cierra el daemon/runner. Backpressure al consumidor es acotado y se informa explícitamente.
 

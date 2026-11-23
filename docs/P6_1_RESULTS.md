@@ -1,6 +1,6 @@
 # P6.1 — Resultados del SDK Rust
 
-**Estado:** **P6.1 CERRADA EN LINUX** (Linux x86_64). No se implementó GPUI.
+**Estado:** P6.1 implementada en Linux; **P6.1-H en validación CI**. No se implementó GPUI.
 
 ## Cambios
 
@@ -24,7 +24,7 @@
 | E2E regresiones P1–P5 + P6.1 | PASS, 22 scripts deterministas |
 | OpenCode real opt-in, SDK sobre daemon local | PASS (`GF_E2E_REAL=1`, `tests/e2e_p61_sdk.sh`) |
 | Linux/Windows | Linux ejecutado; Windows SDK no validado en este corte. La validación de P5 fue del CLI Windows. |
-| GitHub Actions | No ejecutado: no se hizo push por instrucción del usuario; `tests/e2e_p61_sdk.sh` agregado al workflow para CI posterior |
+| GitHub Actions | CI inicial [#45087598250](https://github.com/javijec/gentle-fleet/actions/runs/45087598250) falló en replay de 270 eventos. CI de P6.1-H pendiente. |
 
 ## Límites conocidos
 
@@ -33,8 +33,19 @@
 - `RetentionGap` se comunica explícitamente. El store actual no poda eventos ni publica earliest-retained, de modo que no se fabricó soporte de retención.
 - Las operaciones inciertas no se retransmiten automáticamente; el caller debe reconciliar mediante `get_operation` y la clave registrada.
 - No se validó aprobación interactiva real por el SDK; se mantienen las pruebas de decisión única existentes.
-- CI remota no se ejecutó porque el usuario indicó explícitamente no hacer push; las validaciones de calidad y E2E se ejecutaron localmente.
+- El push inicial sí ejecutó CI; dejó un fallo de recuperación de eventos largos. No afirmar cierre definitivo hasta CI verde de P6.1-H.
 
 ## Siguiente corte
 
 P6.2 puede integrar el SDK en un cliente GPUI mínimo de chat/timeline/permisos, con una tarea worker cancelable; evitar rehacer transporte/correlación. Antes de abrir capacidades de terminal/archivos/Git, validar una aprobación real soportada por proveedor. P6.2 no se implementó en este corte.
+
+## P6.1-H — Correcciones posteriores al primer push
+
+- El cursor de `last_sequence()` solo refleja eventos recibidos y persistidos, no la cola del worker. La deduplicación interna sigue usando el último evento encolado.
+- `fleetctl watch` continúa observando después de errores transitorios de transporte; errores de cursor local o huecos terminales no se silencian.
+- El envío al canal acotado aplica backpressure cancelable en lugar de perder mensajes cuando la cola está llena; los errores de suscripción se entregan cuando el consumidor drena el canal.
+- `RetentionGap` y los errores permanentes detienen los reintentos de reconexión.
+- La prueba P5/P6 solo termina procesos SSH pertenecientes al SDK invocado en la prueba, sin afectar bridges ajenos.
+- Se agregaron unitarias para eventos encolados sin ACK, consumidor lento y error terminal en una cola llena. `e2e_long_replay.sh` reporta errores de watch con diagnóstico en caso de fallo.
+- CI instala OpenSSH Server para ejecutar los E2E SSH deterministas, en vez de omitirlos por falta de `sshd`.
+- **Pendiente:** verificar el nuevo GitHub Actions run y actualizar aquí el resultado, sin afirmar PASS anticipadamente.

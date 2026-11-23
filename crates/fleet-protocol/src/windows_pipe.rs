@@ -428,3 +428,38 @@ pub fn connect(address: &str) -> io::Result<Stream> {
     }
     Err(io::Error::other("Fleet pipe connection failed"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Shutdown;
+
+    #[test]
+    fn half_close_drains_pending_reply_without_truncation() {
+        let runtime = std::env::temp_dir()
+            .join(format!("gentle-fleet-pipe-test-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "halfclose").unwrap();
+        let address = listener.address().to_owned();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).unwrap();
+            assert_eq!(request, b"hello\\n");
+            stream.write_all(b"goodbye\\n").unwrap();
+            stream.shutdown(Shutdown::Write).unwrap();
+        });
+        let mut client = connect(&address).unwrap();
+        client.write_all(b"hello\\n").unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        assert_eq!(reply, b"goodbye\\n");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn invalid_address_is_rejected_without_contacting_any_server() {
+        assert!(connect("127.0.0.1:4000").is_err());
+        assert!(connect(r"\\.\pipe\other-service").is_err());
+    }
+}

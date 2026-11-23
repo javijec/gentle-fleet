@@ -6,6 +6,9 @@ UNTESTED = no ejecutado o aún sin resultado. Compilar no prueba runtime.
 En la columna Compila, PASS significa `cargo check` y `cargo build` completos.
 Compilación y prueba de proceso corresponden a la base `427a5c1`; los tests
 unitarios se repitieron tras la adaptación SSH en `e31efcb`.
+El [CI definitivo de `64dfac0`](https://github.com/javijec/gentle-fleet/actions/runs/45234810431)
+terminó PASS en Windows nativo, backend Linux y Desktop Linux. Windows ejecutó
+fmt, check, clippy, tests Rust y build del workspace completo.
 
 | Componente | Compila | Tests unitarios | E2E | Validación real | Bloqueadores / siguiente etapa |
 |---|---|---|---|---|---|
@@ -34,3 +37,5 @@ Los tests de proceso Linux basados en Bash, SIGKILL y permisos Unix no están
 adaptados para ejecución Windows; su éxito en Linux no modifica esta matriz.
 `fleetd` y `fleetctl` no tienen pruebas unitarias en los binarios (0 ejecutadas).
 Los PASS de tests excluyen los probes opt-in ignorados y código `cfg(unix)`.
+W0 queda cerrado como auditoría; los FAIL y UNTESTED funcionales siguen siendo
+pendientes, no declaraciones de compatibilidad.

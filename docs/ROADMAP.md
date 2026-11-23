@@ -52,7 +52,7 @@
 
 **Salida**: límites configurables y métricas de runners/conexiones/eventos/spool; backups y migraciones; pruebas de consumo bajo carga; **validación funcional completa de Windows (daemon, runners, IPC, procesos) y macOS, más ampliación de los smokes de cliente Windows de P5** (incluyendo ALC/permisos de transporte y toolchain completo); installers/upgrades; logs seguros; documentación de recuperación y compatibilidad; versión de wire publicada. No convertir P7 en una auditoría infinita: definir presupuesto de riesgos y criterios de release medibles.
 
-**P7-W0: auditoría Windows en curso.** Ver [auditoría y plan W1–W4](P7_W0_AUDIT.md), [resultados](P7_W0_RESULTS.md) y [matriz](P7_WINDOWS_MATRIX.md). La compilación no equivale a validación funcional ni a seguridad del transporte; W1–W4 y P6.2-C no se inician en este corte.
+**P7-W0: CERRADO como auditoría.** El [CI 45234810431](https://github.com/javijec/gentle-fleet/actions/runs/45234810431) sobre `64dfac0` pasó en Windows, backend Linux y Desktop Linux. Ver [auditoría y plan W1–W4](P7_W0_AUDIT.md), [resultados](P7_W0_RESULTS.md) y [matriz](P7_WINDOWS_MATRIX.md). El fallo de token del runner, IPC/ACL, persistencia y supervivencia de procesos son bloqueadores de W1; la compilación no equivale a compatibilidad funcional ni a seguridad del transporte. W1–W4 y P6.2-C no se iniciaron.
 
 ## Regla para ampliar el alcance
 

@@ -1,6 +1,7 @@
 # P7-W0: resultados Windows nativo
 
-**Estado: ABIERTO.** Base `427a5c1`; fecha 23/11/2026. Consultar
+**Estado: CERRADO como auditoría.** Base `427a5c1`; fecha 23/11/2026. El
+cierre no implica compatibilidad funcional ni seguridad Windows. Consultar
 [matriz](P7_WINDOWS_MATRIX.md) y [auditoría](P7_W0_AUDIT.md).
 
 ## Entorno
@@ -44,12 +45,17 @@
   build completos: PASS.
 - Linux en base exacta `427a5c1`: [run 45220359567](https://github.com/javijec/gentle-fleet/actions/runs/45220359567)
   PASS en jobs principal y `desktop-gpui-linux`; no es evidencia del commit W0.
-- Se agregó job `windows-native` con los cinco comandos del workspace y pasos
-  diagnósticos independientes. En el
-  [run 45233915713](https://github.com/javijec/gentle-fleet/actions/runs/45233915713)
-  sobre `5183d32`, Linux `check` PASS; Windows y Linux GPUI seguían en curso al
-  consultar. El run de `e31efcb` también estaba en curso; no se presupone el
-  resultado final.
+- CI definitivo [run 45234810431](https://github.com/javijec/gentle-fleet/actions/runs/45234810431)
+  sobre `64dfac0`: **PASS** en
+  [Windows nativo](https://github.com/javijec/gentle-fleet/actions/runs/45234810431/job/137903576224)
+  (fmt, check, clippy, tests Rust y build completos del workspace),
+  [backend Linux](https://github.com/javijec/gentle-fleet/actions/runs/45234810431/job/137903575649)
+  y [Desktop Linux](https://github.com/javijec/gentle-fleet/actions/runs/45234810431/job/137903576299),
+  incluido su E2E GPUI. El commit que registra este cierre solo cambia documentos;
+  su propio run es independiente.
+- Los 18 crates compilan y sus suites Rust disponibles pasan en Windows; los
+  binarios `fleetd` y `fleetctl` tienen cero tests unitarios. No se cuentan
+  como ejecutados los tests `cfg(unix)` ni los dos probes opt-in ignorados.
 - Los scripts Bash de proceso existentes corren en Linux CI; no se han portado
   a Windows ni desactivado para simular éxito. Los tests `cfg(unix)` y el
   probe real opt-in no prueban Windows.
@@ -72,5 +78,19 @@ apuntando explícitamente a `fleet-runner.exe`:
    reconexión siguen UNTESTED. El descubrimiento listó Codex 0.170.0 como
    Unavailable; ningún proveedor real fue ejecutado.
 
-Sin pruebas de ventana, renderer, SSH hacia servidor Windows ni ACL multiusuario.
-No se afirma equivalencia entre loopback/token y named pipe/DACL. W0 sigue abierto.
+Sin pruebas Windows de ventana, renderer, SSH hacia servidor Windows ni ACL
+multiusuario. No se afirma equivalencia entre loopback/token y named pipe/DACL.
+
+## Bloqueadores prioritarios de W1
+
+1. **P0:** el runner sobrescribe `fleetd.token` y rompe la autenticación de
+   nuevas conexiones: reproducir con pruebas de proceso y corregir.
+2. **P0:** sustituir o resolver la brecha del IPC TCP/token frente a named
+   pipes con DACL por SID y verificar ACL de runtime y secretos entre usuarios.
+3. **P1:** persistencia por usuario, ACL de DB/WAL/spool, bloqueos, rutas con
+   espacios/unidades/UNC y recuperación tras terminación abrupta.
+4. **P1:** launcher `.exe`, handles, cierre verificado, supervivencia del
+   runner tras caída del daemon y reattach/replay sin reenvíos inciertos.
+
+Estos puntos y las pruebas funcionales fallidas o no ejecutadas no son
+criterios de éxito de W0; siguen abiertos para W1. W2–W4 y P6.2-C no se iniciaron.

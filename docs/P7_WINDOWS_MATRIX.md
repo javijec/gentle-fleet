@@ -59,3 +59,13 @@ W1-A/W1-B sobre ese transporte. Las pruebas de CI y de aislamiento entre
 usuarios distintos están pendientes; la matriz anterior contiene los fallos
 históricos de W0 y no debe interpretarse como estado funcional actual.
 **Estado W1-B: UNTESTED/BLOCKED hasta resultados concluyentes.**
+
+**Actualización ACL W1-B (código publicado, verificación pendiente):**
+`fleetd.addr`, `fleetd.token`, las direcciones y tokens de runner se
+crean ahora mediante un helper Windows que solicita DACL protegida del SID
+propietario al crear el archivo. Hay aserciones de ACL en ambos fixtures.
+Estado actual para esta corrección: **UNTESTED** en Windows tras el parche,
+porque CI está bloqueado por facturación. El FAIL histórico anterior sigue
+siendo evidencia de la vulnerabilidad de la implementación previa.
+Directorio de runtime, otra cuenta, PID reuse y backpressure: pendientes.
+W1-B permanece ABIERTA.

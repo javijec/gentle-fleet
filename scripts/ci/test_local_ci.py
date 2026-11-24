@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 from local_ci import overall, plan, validate_report, expected_ids, manual_rows
 
 
@@ -27,6 +26,14 @@ class LocalCITests(unittest.TestCase):
         self.assertEqual(validate_report(data, "windows", "a", "full"), "PASS")
         with self.assertRaises(ValueError):
             validate_report(data, "windows", "b", "full")
+        data["checks"].append(dict(data["checks"][0]))
+        with self.assertRaises(ValueError):
+            validate_report(data, "windows", "a", "full")
+        data["checks"].pop()
+        data["checks"][0]["status"] = "SKIP"
+        with self.assertRaises(ValueError):
+            validate_report(data, "windows", "a", "full")
+        data["checks"][0]["status"] = "PASS"
         data["checks"].pop()
         with self.assertRaises(ValueError):
             validate_report(data, "windows", "a", "full")

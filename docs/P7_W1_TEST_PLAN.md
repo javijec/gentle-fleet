@@ -53,8 +53,9 @@ archivos .addr y .token (sin imprimir tokens), los permisos efectivos de
 `DELETE_CHILD` del directorio y un intento real de acceso desde otra
 cuenta local. El cambio de archivo con `CREATE_NEW` debe probarse al
 reiniciar tras un archivo obsoleto y frente a un competidor de endpoint.
-Si CI sigue bloqueado por facturación, registrar BLOCKED; no usar PASS local
-como sustituto del CI. Eliminar fallas reales de seguridad antes de W1-C.
+Si Actions sigue bloqueado por facturación, registrar Actions como BLOCKED y
+aplicar el gate local equivalente de QUALITY.md. No atribuir PASS a Actions.
+Eliminar fallas reales de seguridad antes de W1-C.
 
 ## Alternativa de ejecución local
 

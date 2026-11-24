@@ -223,6 +223,8 @@ def validate_report(data, os_name, sha, profile):
     rows = data["checks"]
     ids = [x["id"] for x in rows]
     # Shell syntax rows are generated from the same clean checkout on both hosts.
+    if any(x.get("status") not in {"PASS", "FAIL", "SKIP", "BLOCKED"} for x in rows):
+        raise ValueError("Unknown check status")
     if len(ids) != len(set(ids)) or set(ids) != expected_ids(os_name, profile):
         raise ValueError("Missing, duplicate or unexpected checks")
     status = overall(rows)

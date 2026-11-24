@@ -29,7 +29,7 @@ try {
     # Reject inherited or broadly writable credential/endpoint ACLs.
     # The exact owner SID is derived at runtime (no locale-dependent group names).
     $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    foreach ($sensitive in @($addressFile, (Join-Path $runtime 'fleetd.token'))) {
+    foreach ($sensitive in @($runtime, $addressFile, (Join-Path $runtime 'fleetd.token'))) {
         $acl = Get-Acl -LiteralPath $sensitive
         if (-not $acl.AreAccessRulesProtected) {
             throw "Fleet endpoint file inherits unprotected ACL: $([IO.Path]::GetFileName($sensitive))"
@@ -42,6 +42,32 @@ try {
                 throw "Fleet endpoint file grants non-owner access: $([IO.Path]::GetFileName($sensitive))"
             }
         }
+    }
+    $runtimeAcl = Get-Acl -LiteralPath $runtime
+    if ($runtimeAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $ownerSid) {
+        throw 'runtime directory owner is not the current SID'
+    }
+    # A separate daemon must refuse an existing inherited-ACL runtime.
+    $unsafeRuntime = Join-Path $root 'unsafe-runtime'
+    New-Item -ItemType Directory -Path $unsafeRuntime | Out-Null
+    $env:FLEET_RUNTIME_DIR = $unsafeRuntime
+    $originalDb = $env:FLEET_DB_PATH
+    $env:FLEET_DB_PATH = Join-Path $root 'unsafe-data/fleet.sqlite'
+    $unsafeDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
+        -RedirectStandardOutput (Join-Path $root 'unsafe.out') `
+        -RedirectStandardError (Join-Path $root 'unsafe.err')
+    try {
+        if (-not $unsafeDaemon.WaitForExit(10000)) {
+            throw 'daemon accepted an unsafe runtime directory'
+        }
+        if ($unsafeDaemon.ExitCode -eq 0 -or (Test-Path (Join-Path $unsafeRuntime 'fleetd.addr'))) {
+            throw 'daemon did not fail closed for unsafe runtime'
+        }
+    } finally {
+        if (-not $unsafeDaemon.HasExited) { $unsafeDaemon.Kill(); $unsafeDaemon.WaitForExit() }
+        $unsafeDaemon.Dispose()
+        $env:FLEET_RUNTIME_DIR = $runtime
+        $env:FLEET_DB_PATH = $originalDb
     }
     $name = $address.Substring('\\.\pipe\'.Length)
     $client = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::InOut)

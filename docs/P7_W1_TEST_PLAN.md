@@ -55,3 +55,7 @@ cuenta local. El cambio de archivo con `CREATE_NEW` debe probarse al
 reiniciar tras un archivo obsoleto y frente a un competidor de endpoint.
 Si CI sigue bloqueado por facturación, registrar BLOCKED; no usar PASS local
 como sustituto del CI. Eliminar fallas reales de seguridad antes de W1-C.
+
+## Alternativa de ejecución local
+
+Mientras Actions no arranque, se aplica la política de CI local de QUALITY.md y LOCAL_CI.md: full en Windows y Linux sobre el mismo SHA limpio, consolidación y revisión de logs. Esto sustituye únicamente el gate automatizado; Actions sigue BLOCKED y la prueba entre usuarios, integridad del directorio, identidad y cancelación bajo backpressure continúan siendo requisitos independientes. No hay PASS de W1-B por crear estos scripts.

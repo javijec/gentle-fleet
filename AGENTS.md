@@ -30,3 +30,7 @@ Este repositorio es un reset de arquitectura. No importar código ni `Cargo.lock
 ## Reglas de entrega
 
 Reportar: archivos, API tocada, pruebas unitarias/de proceso/real, compatibilidad Linux-Windows, limitaciones, resultados desconocidos y commits. No afirmar garantías superiores a las pruebas. No hacer merge o push a repos externos sin instrucción explícita.
+
+## Validación sin GitHub Actions
+
+Usar scripts/ci/windows.ps1 y scripts/ci/linux.sh (full) sobre el mismo SHA limpio; consolidar con scripts/ci/report.py. Quick es solo diagnóstico. Registrar Actions BLOCKED por infraestructura de forma independiente. No afirmar PASS de pruebas manuales, nativas de proveedores o entre usuarios sin evidencia específica. Ver docs/LOCAL_CI.md y docs/QUALITY.md.

@@ -223,3 +223,7 @@ El framework ya no permite declarar PASS sin workspace explícito, terminal `Com
 | Daemon/runner Windows nativos, macOS y aprobación interactiva remota desde Windows | UNTESTED; fuera del alcance del cierre de P5 |
 
 Estado: **CERRADA con alcance acotado a servidor Linux + cliente Windows/Linux**; ver `docs/P5_RESULTS.md` §6–7 y CI [#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228).
+
+## CI local como alternativa explícita (P7 en adelante)
+
+Cuando Actions no pueda iniciar por facturación, registrar GitHub Actions como BLOCKED, sin atribuir el fallo al código. Se acepta evidencia local equivalente para el gate automatizado: perfiles full nativos Windows y Linux del mismo HEAD limpio, reporte conjunto PASS, revisión de logs y criterios específicos de la etapa. Quick no permite cierre. Release exige evidencia manual/real además de full; macOS y otros criterios de release conservan sus gates. No se rebajan los criterios de seguridad, no se omiten regresiones ni se convierten SKIP/BLOCKED/UNTESTED en PASS. Un fallo conocido de CI por código debe reproducirse y corregirse, no ocultarse usando CI local. Los workflows se conservan y la evidencia local no cambia los checks remotos ni las protecciones de rama. Ver [CI local](LOCAL_CI.md).

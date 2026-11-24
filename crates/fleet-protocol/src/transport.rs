@@ -146,8 +146,10 @@ impl LocalListener {
     }
 
     pub fn bind_named(name: &str) -> io::Result<Self> {
-        std::fs::create_dir_all(runtime_dir())?;
-        let listener = windows_pipe::Listener::bind(&runtime_dir(), name)?;
+        let directory = runtime_dir();
+        let guard = windows_pipe::private_runtime(&directory, true)?;
+        let mut listener = windows_pipe::Listener::bind(&directory, name)?;
+        listener.hold_runtime(guard);
         let address = listener.address().to_string();
         // Only the daemon owns fleetd.token. Runners generate their own
         // independent token during startup and must never rotate the daemon's.
@@ -181,6 +183,8 @@ pub fn connect() -> io::Result<LocalStream> {
 }
 
 pub fn connect_named(name: &str) -> io::Result<LocalStream> {
+    #[cfg(windows)]
+    let _guard = windows_pipe::private_runtime(&runtime_dir(), false)?;
     let address = std::fs::read_to_string(address_file_named(name))
         .map_err(|e| io::Error::new(e.kind(), format!("fleetd is not running: {e}")))?;
     let address = address.trim();
@@ -201,6 +205,7 @@ pub fn connect_named(name: &str) -> io::Result<LocalStream> {
 pub fn expected_token() -> io::Result<Option<String>> {
     #[cfg(windows)]
     {
+        let _guard = windows_pipe::private_runtime(&runtime_dir(), false)?;
         Ok(Some(std::fs::read_to_string(
             runtime_dir().join("fleetd.token"),
         )?))

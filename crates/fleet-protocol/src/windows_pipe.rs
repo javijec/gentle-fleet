@@ -352,6 +352,101 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     created
 }
 
+// Keep a directory handle without FILE_SHARE_DELETE for the lifetime of
+// the listener. Reject pre-existing directories with unexpected ACLs rather
+// than silently taking ownership or changing permissions on arbitrary paths.
+pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateDirectoryW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_WRITE, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_DIRECTORY,
+    };
+    if !path.is_absolute() {
+        return Err(invalid("Fleet runtime must be an absolute path"));
+    }
+    let sid = sid_string(&current_sid()?)?;
+    let expected = format!("O:{sid}D:P(A;;FA;;;{sid})");
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    if create {
+        let mut descriptor = ptr::null_mut();
+        let sddl = wide(&expected);
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut(),
+            )
+        } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor,
+            bInheritHandle: 0,
+        };
+        let ok = unsafe { CreateDirectoryW(name.as_ptr(), &attributes) };
+        let error = io::Error::last_os_error();
+        unsafe { LocalFree(descriptor); }
+        if ok == 0 && error.raw_os_error() != Some(183) {
+            return Err(error);
+        }
+    }
+    // READ_CONTROL, with no delete sharing, and do not follow a junction.
+    let raw = unsafe {
+        CreateFileW(
+            name.as_ptr(), 0x0002_0000, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(), OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(raw, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(invalid("Fleet runtime must be a real directory, not a reparse point"));
+    }
+    let flags = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut descriptor = ptr::null_mut();
+    let status = unsafe {
+        GetSecurityInfo(raw, SE_FILE_OBJECT, flags, ptr::null_mut(), ptr::null_mut(),
+            ptr::null_mut(), ptr::null_mut(), &mut descriptor)
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let mut actual = ptr::null_mut();
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor, 1, flags, &mut actual, ptr::null_mut(),
+        )
+    };
+    let error = io::Error::last_os_error();
+    unsafe { LocalFree(descriptor); }
+    if ok == 0 {
+        return Err(error);
+    }
+    let mut len = 0;
+    unsafe {
+        while *actual.add(len) != 0 { len += 1; }
+    }
+    let actual_string = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(actual, len)) };
+    unsafe { LocalFree(actual.cast()); }
+    if actual_string != expected {
+        return Err(invalid("Fleet runtime owner or DACL is not private; choose a new runtime directory"));
+    }
+    Ok(handle)
+}
+
 pub struct Listener {
     name: String,
     name_wide: Vec<u16>,

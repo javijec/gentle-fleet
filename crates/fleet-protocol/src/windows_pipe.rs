@@ -448,6 +448,7 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
 }
 
 pub struct Listener {
+    _runtime_guard: Option<OwnedHandle>,
     name: String,
     name_wide: Vec<u16>,
     sid: Vec<u8>,
@@ -474,11 +475,16 @@ impl Listener {
         let name_wide = wide(&name);
         let first = create_instance(&name_wide, &sid, true)?;
         Ok(Self {
+            _runtime_guard: None,
             name,
             name_wide,
             sid,
             pending: Mutex::new(Some(first)),
         })
+    }
+
+    pub fn hold_runtime(&mut self, guard: OwnedHandle) {
+        self._runtime_guard = Some(guard);
     }
 
     pub fn address(&self) -> &str {

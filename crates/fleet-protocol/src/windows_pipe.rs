@@ -12,11 +12,11 @@
 
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
-use std::path::Path;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -309,9 +309,13 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut descriptor = ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut(),
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            ptr::null_mut(),
         )
-    } == 0 {
+    } == 0
+    {
         return Err(io::Error::last_os_error());
     }
     let attributes = SECURITY_ATTRIBUTES {
@@ -348,7 +352,9 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()
     });
-    unsafe { LocalFree(descriptor); }
+    unsafe {
+        LocalFree(descriptor);
+    }
     created
 }
 
@@ -361,9 +367,9 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
     };
     use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_SHARE_WRITE, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_DIRECTORY,
+        CreateDirectoryW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_WRITE,
     };
     if !path.is_absolute() {
         return Err(invalid("Fleet runtime must be an absolute path"));
@@ -376,9 +382,13 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
         let sddl = wide(&expected);
         if unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut(),
+                sddl.as_ptr(),
+                1,
+                &mut descriptor,
+                ptr::null_mut(),
             )
-        } == 0 {
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
         let attributes = SECURITY_ATTRIBUTES {
@@ -388,7 +398,9 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
         };
         let ok = unsafe { CreateDirectoryW(name.as_ptr(), &attributes) };
         let error = io::Error::last_os_error();
-        unsafe { LocalFree(descriptor); }
+        unsafe {
+            LocalFree(descriptor);
+        }
         if ok == 0 && error.raw_os_error() != Some(183) {
             return Err(error);
         }
@@ -396,8 +408,11 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
     // READ_CONTROL, with no delete sharing, and do not follow a junction.
     let raw = unsafe {
         CreateFileW(
-            name.as_ptr(), 0x0002_0000, FILE_SHARE_READ | FILE_SHARE_WRITE,
-            ptr::null(), OPEN_EXISTING,
+            name.as_ptr(),
+            0x0002_0000,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             ptr::null_mut(),
         )
@@ -413,13 +428,23 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
     if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
         || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
     {
-        return Err(invalid("Fleet runtime must be a real directory, not a reparse point"));
+        return Err(invalid(
+            "Fleet runtime must be a real directory, not a reparse point",
+        ));
     }
     let flags = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
-        GetSecurityInfo(raw, SE_FILE_OBJECT, flags, ptr::null_mut(), ptr::null_mut(),
-            ptr::null_mut(), ptr::null_mut(), &mut descriptor)
+        GetSecurityInfo(
+            raw,
+            SE_FILE_OBJECT,
+            flags,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
     };
     if status != 0 {
         return Err(io::Error::from_raw_os_error(status as i32));
@@ -427,22 +452,35 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
     let mut actual = ptr::null_mut();
     let ok = unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            descriptor, 1, flags, &mut actual, ptr::null_mut(),
+            descriptor,
+            1,
+            flags,
+            &mut actual,
+            ptr::null_mut(),
         )
     };
     let error = io::Error::last_os_error();
-    unsafe { LocalFree(descriptor); }
+    unsafe {
+        LocalFree(descriptor);
+    }
     if ok == 0 {
         return Err(error);
     }
     let mut len = 0;
     unsafe {
-        while *actual.add(len) != 0 { len += 1; }
+        while *actual.add(len) != 0 {
+            len += 1;
+        }
     }
-    let actual_string = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(actual, len)) };
-    unsafe { LocalFree(actual.cast()); }
+    let actual_string =
+        unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(actual, len)) };
+    unsafe {
+        LocalFree(actual.cast());
+    }
     if actual_string != expected {
-        return Err(invalid("Fleet runtime owner or DACL is not private; choose a new runtime directory"));
+        return Err(invalid(
+            "Fleet runtime owner or DACL is not private; choose a new runtime directory",
+        ));
     }
     Ok(handle)
 }

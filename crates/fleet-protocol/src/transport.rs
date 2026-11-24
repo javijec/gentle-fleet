@@ -155,7 +155,10 @@ impl LocalListener {
         // independent token during startup and must never rotate the daemon's.
         if name == "fleetd" {
             let token = uuid::Uuid::new_v4().to_string();
-            windows_pipe::write_private_file(&runtime_dir().join("fleetd.token"), token.as_bytes())?;
+            windows_pipe::write_private_file(
+                &runtime_dir().join("fleetd.token"),
+                token.as_bytes(),
+            )?;
         }
         windows_pipe::write_private_file(&address_file_named(name), address.as_bytes())?;
         Ok(Self::NamedPipe(listener))

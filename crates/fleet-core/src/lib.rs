@@ -2472,16 +2472,56 @@ mod tests {
     }
 
     fn unique_db_path() -> std::path::PathBuf {
-        std::env::temp_dir()
-            .join(format!(
-                "gf-p2-core-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ))
-            .join("fleet.sqlite")
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        reserve_db_path(timestamp)
+    }
+
+    fn reserve_db_path(timestamp: u128) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        loop {
+            // SystemTime can return identical values in parallel tests, especially
+            // on Windows. Reserve the directory rather than trusting the clock.
+            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "gf-p2-core-{}-{timestamp}-{serial}",
+                std::process::id()
+            ));
+            match builder.create(&dir) {
+                Ok(()) => return dir.join("fleet.sqlite"),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot reserve test database directory: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_database_fixtures_are_distinct_even_with_identical_timestamps() {
+        let workers: Vec<_> = (0..16)
+            .map(|_| std::thread::spawn(|| reserve_db_path(0)))
+            .collect();
+        let paths: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        let unique: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(unique.len(), paths.len());
+        for path in paths {
+            let dir = path.parent().unwrap();
+            assert!(dir.is_dir());
+            assert!(!path.exists());
+            std::fs::remove_dir(dir).unwrap();
+        }
     }
 
     fn manager_at(config: FakeConfig, path: std::path::PathBuf) -> Arc<SessionManager> {

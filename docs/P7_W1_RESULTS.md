@@ -147,3 +147,29 @@ debe validarse/protegerse de manera atómica antes de certificar integridad del
 endpoint. Persisten la prueba desde otro usuario Windows, auditoría de
 reutilización de PID en verificación SID, cancelación bajo backpressure y CI
 Windows/Linux completo. **W1-B sigue ABIERTA.** Sin merge a main y sin W1-C.
+
+
+## CI local — regresión SQLite durante pruebas paralelas (24/11/2026)
+
+Evidencia proporcionada por el usuario: perfil full local sobre `e8b3383`
+en Windows 11 y Linux Omarchy: todas las comprobaciones salvo rustfmt PASS.
+Tras corregir formato, ambos hosts validaron `a9d1d7d`: Linux full PASS,
+Windows 10/11 checks PASS (incluidos W1-A y W1-B), pero el test
+`fleet-core::tests::ack_failure_is_reported_instead_of_silently_replaying`
+volvió a fallar al abrir SQLite con `store_config_failed: database is locked`,
+igual que el antiguo CI Windows.
+
+Hipótesis concreta: el helper de fixtures `unique_db_path` usaba PID y
+SystemTime, sin contador ni reserva exclusiva; llamadas paralelas con igual
+timestamp podían abrir la misma base de prueba. Se cambia únicamente el helper
+de tests para usar contador atómico y creación exclusiva de directorios
+(privados en Unix), con reintento solo ante colisión de nombres y una regresión
+de 16 llamadas concurrentes con timestamp idéntico. No se cambian WAL,
+busy_timeout, semántica de ACK ni paralelismo de Cargo. La causa concreta
+de la ejecución histórica no está demostrada mediante trazas de rutas;
+la corrección elimina esa posibilidad de colisión.
+
+**Validación pendiente:** repetir fleet-core con paralelismo normal en Windows
+y full local en ambos hosts sobre el nuevo SHA. Si vuelve a ocurrir el bloqueo,
+investigar apertura/configuración de SQLite en bases realmente independientes.
+GitHub Actions sigue BLOCKED; no se declara W1-B cerrada ni se inicia W1-C.

@@ -7,18 +7,60 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ("fleet-w1b-" + [guid]::NewGuid().T
 $runtime = Join-Path $root 'runtime'
 $daemon = $null
 $competitor = $null
+$previousRuntime = [Environment]::GetEnvironmentVariable('FLEET_RUNTIME_DIR', 'Process')
+$previousDb = [Environment]::GetEnvironmentVariable('FLEET_DB_PATH', 'Process')
+
+# Start console executables without attaching or creating a console window.
+# Drain both streams asynchronously so redirected output cannot block startup.
+# Keep diagnostics with the actual Process object, including early exits.
+function Start-FixtureDaemon {
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = Join-Path $bin 'fleetd.exe'
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $process | Add-Member -NotePropertyName FixtureStdout -NotePropertyValue ($process.StandardOutput.ReadToEndAsync())
+    $process | Add-Member -NotePropertyName FixtureStderr -NotePropertyValue ($process.StandardError.ReadToEndAsync())
+    return $process
+}
+
+function Get-FixtureDiagnostics([Diagnostics.Process]$Process) {
+    if ($Process.HasExited) {
+        $state = "exit=$($Process.ExitCode) (0x$($Process.ExitCode.ToString('X8')))"
+    } else {
+        $state = 'still running'
+    }
+    # A descendant could inherit a redirected pipe. Do not wait indefinitely
+    # for EOF just to print diagnostics.
+    $stderr = if ($Process.FixtureStderr.IsCompletedSuccessfully) {
+        $Process.FixtureStderr.GetAwaiter().GetResult()
+    } else { '<stderr not yet available>' }
+    $stdout = if ($Process.FixtureStdout.IsCompletedSuccessfully) {
+        $Process.FixtureStdout.GetAwaiter().GetResult()
+    } else { '<stdout not yet available>' }
+    return "$state; daemon stderr: $stderr; daemon stdout: $stdout"
+}
+
+function Assert-FixtureRejected([Diagnostics.Process]$Process, [string]$Context) {
+    # A Rust main returning Err exits with 1. External console termination
+    # (STATUS_CONTROL_C_EXIT), crashes and successful exits are not rejection.
+    if (-not $Process.HasExited -or $Process.ExitCode -ne 1) {
+        throw "$Context did not exit with the expected error: $(Get-FixtureDiagnostics $Process)"
+    }
+}
+
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
     $env:FLEET_RUNTIME_DIR = $runtime
     $env:FLEET_DB_PATH = Join-Path $root 'data/fleet.sqlite'
-    $daemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
-        -RedirectStandardOutput (Join-Path $root 'daemon.out') `
-        -RedirectStandardError (Join-Path $root 'daemon.err')
+    $daemon = Start-FixtureDaemon
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     $addressFile = Join-Path $runtime 'fleetd.addr'
     while (-not (Test-Path $addressFile)) {
         if ($daemon.HasExited -or $deadline.Elapsed.TotalSeconds -gt 30) {
-            throw 'daemon failed to publish endpoint within 30 seconds'
+            throw "daemon failed to publish endpoint within 30 seconds: $(Get-FixtureDiagnostics $daemon)"
         }
         Start-Sleep -Milliseconds 100
     }
@@ -53,14 +95,13 @@ try {
     $env:FLEET_RUNTIME_DIR = $unsafeRuntime
     $originalDb = $env:FLEET_DB_PATH
     $env:FLEET_DB_PATH = Join-Path $root 'unsafe-data/fleet.sqlite'
-    $unsafeDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
-        -RedirectStandardOutput (Join-Path $root 'unsafe.out') `
-        -RedirectStandardError (Join-Path $root 'unsafe.err')
+    $unsafeDaemon = Start-FixtureDaemon
     try {
         if (-not $unsafeDaemon.WaitForExit(10000)) {
             throw 'daemon accepted an unsafe runtime directory'
         }
-        if ($unsafeDaemon.ExitCode -eq 0 -or (Test-Path (Join-Path $unsafeRuntime 'fleetd.addr'))) {
+        Assert-FixtureRejected $unsafeDaemon 'unsafe runtime'
+        if (Test-Path (Join-Path $unsafeRuntime 'fleetd.addr')) {
             throw 'daemon did not fail closed for unsafe runtime'
         }
     } finally {
@@ -96,6 +137,7 @@ try {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = Join-Path $bin 'fleet-ssh-bridge.exe'
     $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
     $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
@@ -137,13 +179,11 @@ try {
     }
 
     $env:FLEET_DB_PATH = Join-Path $root 'competitor/fleet.sqlite'
-    $competitor = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
-        -RedirectStandardOutput (Join-Path $root 'competitor.out') `
-        -RedirectStandardError (Join-Path $root 'competitor.err')
+    $competitor = Start-FixtureDaemon
     if (-not $competitor.WaitForExit(10000)) {
         throw 'second daemon did not reject the active endpoint within 10 seconds'
     }
-    if ($competitor.ExitCode -eq 0) { throw 'second daemon unexpectedly succeeded' }
+    Assert-FixtureRejected $competitor 'endpoint competitor'
     if (Test-Path -LiteralPath $env:FLEET_DB_PATH) {
         throw 'endpoint competitor opened SQLite before reserving the endpoint'
     }
@@ -162,13 +202,13 @@ try {
         }
         $env:FLEET_RUNTIME_DIR = Join-Path $junction 'runtime'
         $env:FLEET_DB_PATH = Join-Path $root 'junction-data/fleet.sqlite'
-        $junctionDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru
+        $junctionDaemon = Start-FixtureDaemon
         try {
             if (-not $junctionDaemon.WaitForExit(10000)) {
                 throw 'daemon accepted a runtime through an ancestor junction'
             }
-            if ($junctionDaemon.ExitCode -eq 0 -or
-                (Test-Path (Join-Path $junctionTarget 'runtime/fleetd.addr'))) {
+            Assert-FixtureRejected $junctionDaemon 'ancestor junction'
+            if (Test-Path (Join-Path $junctionTarget 'runtime/fleetd.addr')) {
                 throw 'daemon did not fail closed for ancestor reparse point'
             }
         } finally {
@@ -191,12 +231,13 @@ try {
     $env:FLEET_DB_PATH = Join-Path $root 'alias-competitor/fleet.sqlite'
     $tokenFile = Join-Path $runtime 'fleetd.token'
     $originalToken = [IO.File]::ReadAllText($tokenFile)
-    $aliasDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru
+    $aliasDaemon = Start-FixtureDaemon
     try {
         if (-not $aliasDaemon.WaitForExit(10000)) {
             throw 'alternate runtime spelling bypassed endpoint reservation'
         }
-        if ($aliasDaemon.ExitCode -eq 0 -or $daemon.HasExited -or
+        Assert-FixtureRejected $aliasDaemon 'alternate runtime competitor'
+        if ($daemon.HasExited -or
             ([IO.File]::ReadAllText($addressFile)).Trim() -ne $address -or
             [IO.File]::ReadAllText($tokenFile) -ne $originalToken) {
             throw 'alternate runtime spelling affected the active endpoint'
@@ -217,14 +258,10 @@ try {
         throw 'fixture did not retain stale endpoint files'
     }
     $env:FLEET_DB_PATH = $originalDb
-    $daemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
-        -RedirectStandardOutput (Join-Path $root 'restart.out') `
-        -RedirectStandardError (Join-Path $root 'restart.err')
+    $daemon = Start-FixtureDaemon
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     $restarted = $false
     $lastProbe = 'no authenticated probe attempted'
-    $restartOut = Join-Path $root 'restart.out'
-    $restartErr = Join-Path $root 'restart.err'
     # Do not connect using the old address while the new daemon holds a
     # reserved pipe but has not completed startup. Require both publication
     # and rotation of the token, then prove authentication by actual IPC.
@@ -233,8 +270,7 @@ try {
         try {
             $ready = (Test-Path -LiteralPath $addressFile) -and
                 (Test-Path -LiteralPath $tokenFile) -and
-                ([IO.File]::ReadAllText($tokenFile) -ne $originalToken) -and
-                ((Get-Content -LiteralPath $restartOut -Raw) -match 'fleetd listening on')
+                ([IO.File]::ReadAllText($tokenFile) -ne $originalToken)
         } catch {
             # A file may be transiently unavailable during publication.
             $ready = $false
@@ -247,6 +283,7 @@ try {
         $probe = [Diagnostics.ProcessStartInfo]::new()
         $probe.FileName = Join-Path $bin 'fleet-ssh-bridge.exe'
         $probe.UseShellExecute = $false
+        $probe.CreateNoWindow = $true
         $probe.RedirectStandardInput = $true
         $probe.RedirectStandardOutput = $true
         $probe.RedirectStandardError = $true
@@ -282,13 +319,8 @@ try {
         if (-not $restarted) { Start-Sleep -Milliseconds 100 } else { break }
     }
     if (-not $restarted) {
-        $state = if ($daemon.HasExited) { "exit=$($daemon.ExitCode)" } else { 'still running' }
-        $diagnostics = if (Test-Path -LiteralPath $restartErr) {
-            Get-Content -LiteralPath $restartErr -Raw
-        } else { '<no stderr>' }
-        # Never print token or raw Hello frames. The fixture root is cleaned
-        # in finally, so preserve startup diagnostics in the CI step log.
-        throw "daemon did not authenticate after restart with stale endpoints ($state); last probe: $lastProbe; daemon stderr: $diagnostics"
+        # Never print token or raw Hello frames.
+        throw "daemon did not authenticate after restart with stale endpoints; last probe: $lastProbe; $(Get-FixtureDiagnostics $daemon)"
     }
     Write-Output 'PASS: stale endpoint files replaced after unclean daemon restart'
     Write-Output 'PASS: named pipe endpoint rejects invalid token and active endpoint collision'
@@ -305,5 +337,7 @@ try {
         [void]$daemon.WaitForExit(5000)
     }
     if ($null -ne $daemon) { $daemon.Dispose() }
+    [Environment]::SetEnvironmentVariable('FLEET_RUNTIME_DIR', $previousRuntime, 'Process')
+    [Environment]::SetEnvironmentVariable('FLEET_DB_PATH', $previousDb, 'Process')
     Remove-Item -LiteralPath $root -Recurse -Force
 }

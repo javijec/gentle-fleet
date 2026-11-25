@@ -1,6 +1,14 @@
-# Gentle Fleet 2.0 — proyecto reiniciado desde cero
+# Gentle Fleet 2.0
 
-**Estado: P0–P4 cerrados en Linux; P5 (SSH remoto) CERRADA con cliente Windows 11 → servidor Linux real y cliente Linux validado.** Fecha: 22 de noviembre de 2026. Linux x86_64 sigue como plataforma de referencia hasta P6; la prueba Windows de P5 cubre el **cliente fleetctl.exe por SSH**, no `fleetd` ni runners nativos de Windows. La validación operativa completa de Windows y macOS permanece en P7. resultados P5 en `docs/P5_RESULTS.md`; resultados finales P4.4 en `docs/P4_4_RESULTS.md`; resultados Gentle Shell en `docs/P4_3_RESULTS.md`; resultados Pi en `docs/P4_2_RESULTS.md`; los resultados de Codex están en `docs/P4_1_RESULTS.md`; las 18 decisiones funcionales de P4 están en `docs/P4_SPEC.md` y la evidencia técnica en `docs/P4_PROVIDER_MATRIX.md`, `docs/P4_RPC_RESEARCH.md`, `docs/P4_CONTRACT_DESIGN.md` y `docs/P4_TEST_PLAN.md`.
+Motor Rust de sesiones persistentes para agentes de programación, independiente de la interfaz: ejecución local y remota mediante SSH, recuperación de eventos y múltiples clientes. **Proyecto experimental, no release de producción.**
+
+| Plataforma | Servidor | Cliente |
+| --- | --- | --- |
+| Linux x86_64 | Validado para el alcance P0–P5 | CLI validado |
+| Windows 11 | Experimental; aceptación técnica P7 pendiente | CLI por SSH hacia Linux validado en P5 |
+| macOS | Sin validación funcional completa | Sin validación funcional completa |
+
+Las capacidades de cada proveedor y la evidencia por fase están en el [roadmap](docs/ROADMAP.md). P6 y P7 no están integradas en main al preparar esta rama. Los resultados históricos no acreditan automáticamente el HEAD actual. No se garantiza aislamiento entre usuarios Windows ni supervivencia al reinicio físico del host.
 
 Este es un **inicio limpio**: no se portan ni heredan los módulos de los repositorios anteriores. El historial de GitHub antiguo puede quedar archivado, pero sus decisiones y su código no son la base de esta versión. No se promete compatibilidad de bases SQLite ni del wire anterior; la compatibilidad comienza en el primer contrato publicado de v2.
 
@@ -68,3 +76,12 @@ Los repositorios y ramas previos **no son dependencias**. No copiar clases, mód
 ## Primera orden de trabajo
 
 Seguir [PLAN.md](PLAN.md). Antes de implementar Core real hay tres experimentos cortos de interoperabilidad que deben producir fixtures verificables. Consultar [AGENTS.md](AGENTS.md) para las reglas del agente de desarrollo.
+
+## Desarrollo y seguridad
+
+Con Rust estable y las dependencias de plataforma indicadas en [CI local](docs/LOCAL_CI.md), ejecutar `cargo build --workspace --locked`, `cargo fmt --all -- --check` y `cargo test --workspace --locked`. Las pruebas con proveedores reales son opt-in y requieren instalación/autenticación propias. No publicar logs, perfiles o credenciales.
+
+- [Contribuir](CONTRIBUTING.md)
+- [Reportar vulnerabilidades](SECURITY.md)
+- [Preparación para publicación](docs/PUBLIC_READINESS.md)
+- [Licencia MIT](LICENSE)

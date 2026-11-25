@@ -34,3 +34,7 @@ Estas capturas son evidencia de forma de mensaje, orden de eventos y campos
 disponibles. No son un contrato congelado: las versiones están fijadas y un
 cambio de versión obliga a repetir el spike. El detalle de qué afirmación se
 apoya en qué captura está en [`docs/research/`](../../../docs/research/).
+
+## Preparación para publicación
+
+Las capturas de Codex conservan la estructura y el orden de los eventos, pero los valores de plan, consumo, reinicio de cuotas y créditos se sustituyeron por ejemplos sintéticos. No son evidencia de la cuenta ni de sus límites reales. Las futuras capturas requieren revisión manual y escaneo de secretos antes de incorporarse: la anonimización de P0 no garantiza eliminar todos los datos personales ni credenciales presentes en mensajes de terceros.

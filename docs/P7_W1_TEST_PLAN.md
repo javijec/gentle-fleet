@@ -53,7 +53,7 @@ archivos .addr y .token (sin imprimir tokens), los permisos efectivos de
 `DELETE_CHILD` del directorio y un intento real de acceso desde otra
 cuenta local. El cambio de archivo con `CREATE_NEW` debe probarse al
 reiniciar tras un archivo obsoleto y frente a un competidor de endpoint.
-Si Actions sigue bloqueado por facturación, registrar Actions como BLOCKED y
+Si Actions sigue bloqueado por infraestructura, registrar Actions como BLOCKED y
 aplicar el gate local equivalente de QUALITY.md. No atribuir PASS a Actions.
 Eliminar fallas reales de seguridad antes de W1-C.
 
@@ -126,5 +126,5 @@ Windows 10/10 con paralelismo normal, W1-A y W1-B PASS, ACL automatizadas,
 identidad, cancelación/backpressure, runtime y reinicio sin defectos P0/P1
 confirmados. Registrar resultados de identidad y cancelación que aún no se
 puedan reproducir; no ocultar fallos ni eximirlos por el diferimiento.
-Usar `javiomarchi` para SSH con host key checking. No crear cuentas. El
+Usar `linux-test-host` para SSH con host key checking. No crear cuentas. El
 perfil release conserva `cross-user-ipc-acl` y los demás gates manuales.

@@ -1,0 +1,4 @@
+title = "Gentle Fleet secret detection"
+
+[extend]
+useDefault = true

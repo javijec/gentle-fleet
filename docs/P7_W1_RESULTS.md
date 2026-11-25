@@ -118,9 +118,7 @@ requieren evidencia adicional. **W1-B ABIERTA.**
 - **CI BLOCKED:** los runs
   [45256707164](https://github.com/javijec/gentle-fleet/actions/runs/45256707164)
   y [45256771289](https://github.com/javijec/gentle-fleet/actions/runs/45256771289)
-  no iniciaron sus jobs. GitHub informa: `The job was not started because
-  recent account payments have failed or your spending limit needs to be
-  increased`. Revisar Billing & plans; estos FAIL no son resultados de tests.
+  no iniciaron sus jobs. GitHub informa: que no pudo iniciar los jobs por una restricción de infraestructura. Estos FAIL no son resultados de tests.
 
 ## W1-B — corrección de ACL de archivos (verificación pendiente)
 
@@ -139,7 +137,7 @@ Las regresiones `tests/windows/w1a-token-isolation.ps1` y
 sensibles no sean heredadas y que ningún ACE de permiso incluya otro SID,
 sin imprimir sus contenidos. El parche está publicado, pero estas pruebas
 **NO HAN SIDO EJECUTADAS contra este commit**: GitHub Actions está rechazando
-jobs por facturación/límite de gastos. No contabilizarlo como PASS.
+jobs por infraestructura. No contabilizarlo como PASS.
 
 **Riesgos aún abiertos:** el directorio `FLEET_RUNTIME_DIR` puede permitir
 `DELETE_CHILD` a otros sujetos aun cuando cada archivo tenga DACL privada;
@@ -179,7 +177,7 @@ GitHub Actions sigue BLOCKED; no se declara W1-B cerrada ni se inicia W1-C.
 Base `175fad22ed1478d0f8d8d7822361a3c2b45d114b`: el usuario
 reporta full Windows y Linux PASS y 10/10 ejecuciones de fleet-core Windows
 PASS. Estos resultados corresponden a esa base, no al commit que añade las
-regresiones siguientes. Actions sigue **BLOCKED** por facturación.
+regresiones siguientes. Actions sigue **BLOCKED** por infraestructura.
 
 - **PASS**, Windows nativo, `cargo test -p fleet-protocol --locked`: 14 tests,
   incluido `full_shutdown_cancels_pending_write_under_backpressure`. Este
@@ -243,7 +241,7 @@ endpoint desechable. No crea cuentas ni imprime secretos. **BLOCKED** hasta
 ejecutar ambos modos en Windows y obtener evidencia. El rechazo de reparse
 points del último componente y el guard de runtime existente se conservan;
 la seguridad de antecesores/reparse points de ruta completa sigue pendiente
-de solución y pruebas. GitHub Actions sigue BLOCKED por facturación.
+de solución y pruebas. GitHub Actions sigue BLOCKED por infraestructura.
 **W1-B ABIERTA; no merge ni W1-C.**
 
 
@@ -285,7 +283,7 @@ El fixture de proceso añade además una junction real en un antecesor hacia un 
 - **BLOCKED:** dos usuarios Windows. El fixture existente aún no comprueba
   todos los accesos exigidos ni descarta denegaciones de antecesores; no debe
   aceptarse como evidencia de cierre sin corregirlo y ejecutarlo.
-- Alias SSH `linux`: **BLOCKED** por resolución de nombre; `javiomarchi`
+- Alias SSH `linux`: **BLOCKED** por resolución de nombre; `linux-test-host`
   conecta con host key checking habilitado. GitHub Actions **BLOCKED** por
   facturación. El full de ambos sistemas y consolidación de este candidato
   están pendientes. **W1-B ABIERTA; NO-GO W1-C.**
@@ -324,9 +322,9 @@ objeto; usa aperturas de handles con derechos exactos, no realiza cambios
 destructivos. Owner verifica Hello autenticado antes y después. No se han
 creado cuentas, cambiado ACL del sistema ni ejecutado la prueba. No hay
 PASS de aislamiento real hasta conservar las dos salidas nativas.
-El alias SSH funcional reportado por el agente es `javiomarchi` (no
+El alias SSH funcional reportado por el agente es `linux-test-host` (no
 `linux`); validar HEAD y checkout limpio en ambos hosts y usar
-`python scripts/ci/remote.py --host javiomarchi --remote-root /home/javijec/dev/gentle-fleet --profile full`.
+`python scripts/ci/remote.py --host linux-test-host --remote-root /home/test-user/dev/gentle-fleet --profile full`.
 No hay evidencia de ejecución del full desde esta sesión.
 
 
@@ -365,7 +363,7 @@ certificación de PID reuse, cancelación del kernel ni seguridad entre cuentas.
 Registrar alcance y riesgos residuales de identidad/CancelIoEx de forma
 explícita; si constituyen defectos reales, no diferirlos por esta decisión.
 
-GitHub Actions continúa BLOCKED por facturación. Usar alias SSH
-`javiomarchi` con verificación estricta de host key y el orquestador local.
+GitHub Actions continúa BLOCKED por infraestructura. Usar alias SSH
+`linux-test-host` con verificación estricta de host key y el orquestador local.
 W1-C puede preparar el plan ahora; su implementación se inicia tras el gate
 automatizado de entrada. No merge a main ni release autorizado.

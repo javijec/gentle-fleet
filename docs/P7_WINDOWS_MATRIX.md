@@ -65,7 +65,7 @@ históricos de W0 y no debe interpretarse como estado funcional actual.
 crean ahora mediante un helper Windows que solicita DACL protegida del SID
 propietario al crear el archivo. Hay aserciones de ACL en ambos fixtures.
 Estado actual para esta corrección: **UNTESTED** en Windows tras el parche,
-porque CI está bloqueado por facturación. El FAIL histórico anterior sigue
+porque CI está bloqueado por infraestructura. El FAIL histórico anterior sigue
 siendo evidencia de la vulnerabilidad de la implementación previa.
 Directorio de runtime, otra cuenta, PID reuse y backpressure: pendientes.
 W1-B permanece ABIERTA.
@@ -85,7 +85,7 @@ multiplataforma del SHA candidato. Ver `P7_W1_RESULTS.md`.
 | Full Windows/Linux del candidato 69f7729 y HEAD documental | UNTESTED |
 | Regresiones de identidad, ACL, cancelación y recuperación del candidato | UNTESTED |
 | Aislamiento efectivo entre dos SID | UNTESTED — diferido por decisión del propietario hasta release |
-| GitHub Actions | BLOCKED por facturación |
+| GitHub Actions | BLOCKED por infraestructura |
 
 W1-B: cierre administrativo con alcance limitado, aceptación técnica
 pendiente. W1-C: traspaso autorizado; implementar solo tras gate de entrada

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from both import coordinator, remote_command, rust_diff, sync_command, validate_native
+from both import coordinator, prepare_format, remote_command, rust_diff, sync_command, validate_native
 
 
 class BothTests(unittest.TestCase):
@@ -48,12 +48,36 @@ class BothTests(unittest.TestCase):
                 self.assertTrue(data["finished"])
 
     def test_auto_format_rejects_unexpected_paths(self):
-        for status in (b"?? stray.rs\\0", b"M  staged.rs\\0", b" M Cargo.toml\\0"):
+        for status in (b"?? stray.rs\0", b"M  staged.rs\0", b" M Cargo.toml\0"):
             with self.subTest(status=status), patch("both.subprocess.check_output", return_value=status):
                 with self.assertRaises(RuntimeError):
                     rust_diff()
-        with patch("both.subprocess.check_output", side_effect=[b" M crates/a b.rs\\0", b"patch"]):
+        with patch("both.subprocess.check_output", side_effect=[b" M crates/a b.rs\0", b"patch"]):
             self.assertEqual(rust_diff(), b"patch")
+
+    def test_clean_format_does_not_commit_or_push(self):
+        sha = "a" * 40
+        with patch("both.clean_head", return_value=sha), \
+             patch("both.git", side_effect=["feature/p7", sha]), \
+             patch("both.git_run") as git_run, \
+             patch("both.subprocess.run") as cargo, \
+             patch("both.rust_diff", return_value=b""), \
+             redirect_stdout(StringIO()):
+            self.assertEqual(prepare_format(), ("feature/p7", sha))
+        git_run.assert_called_once_with("fetch", "--no-tags", "origin", "refs/heads/feature/p7")
+        self.assertEqual(cargo.call_args.args[0], ["cargo", "fmt", "--all"])
+
+    def test_format_declined_never_stages_or_pushes(self):
+        sha = "a" * 40
+        with patch("both.clean_head", return_value=sha), \
+             patch("both.git", side_effect=["feature/p7", sha]), \
+             patch("both.git_run") as git_run, \
+             patch("both.subprocess.run"), \
+             patch("both.rust_diff", return_value=b"patch"), \
+             patch("builtins.input", return_value="n"), redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "left uncommitted"):
+                prepare_format()
+        self.assertEqual([call.args[0] for call in git_run.call_args_list], ["fetch", "--no-pager"])
 
     def test_sync_command_preserves_checkout_guards(self):
         command = sync_command("/tmp/a folder", "feature/p7", "a" * 40)

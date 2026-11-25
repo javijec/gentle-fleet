@@ -176,3 +176,5 @@ W1-C.5: PASS automatizado reportado tras 2b4e80f. Nuevo candidato de exclusivida
 W1-C: gate completo PASS reportado tras 3d2bb26; candidato adicional de identidad física de DB Windows pendiente de validación. No se modifica main ni se inicia W1-D.
 
 W1-C: W1-B 10/10 y full conjunto PASS reportados tras 2d38d1a. Guía de migración conservadora y regresiones adicionales de adopción explícita en candidato; revisar logs del gate y alcance de aceptación antes de cierre. No se inicia W1-D.
+
+W1-C: gate automatizado final 103/103 PASS (Windows 26, Linux 77) sobre `846a4b227d8f005125678bab7851c00b1c945da8`, resumen conjunto proporcionado y SHA contrastado. Implementación candidata completada, pendiente únicamente decisión de aceptación técnica tras revisión de logs y riesgos, sin nuevos subcortes por defecto. W1-D a continuación de esa revisión; sin merge a main ni release. Ver P7_W1_RESULTS.md y P7_W1_C_PLAN.md.

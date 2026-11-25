@@ -66,6 +66,7 @@ def plan(os_name, profile):
         step("check", ["cargo", "check", "--workspace", "--locked"]),
         step("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]),
         step("ci-selftest", [sys.executable, str(ROOT / "scripts/ci/test_local_ci.py")]),
+        step("ci-both-selftest", [sys.executable, str(ROOT / "scripts/ci/test_both.py")]),
     ]
     if profile == "quick":
         return items

@@ -45,7 +45,35 @@ El consolidador exige SHA del HEAD, plataforma, perfil, conjunto exacto de
 pruebas y resultados consistentes. No es una firma ni una atestación externa.
 El resultado automático no sustituye revisión de los logs ni criterios manuales.
 
-## Un comando por SSH (opcional)
+## Pruebas interactivas en ambos equipos
+
+Desde Windows: `python scripts/ci/both.py`. Desde Linux:
+`python3 scripts/ci/both.py`.
+
+El coordinador pide modo (quick/full/w1c; w1c por defecto), alias SSH de
+Windows y Linux (usar `local` para el equipo donde se ejecuta) y la ruta
+absoluta del repositorio para cada equipo remoto. También acepta ambos
+equipos por SSH. Ejemplo no interactivo desde Windows:
+
+```powershell
+python scripts/ci/both.py --mode w1c --windows local --linux linux --linux-root /home/USUARIO/dev/gentle-fleet
+```
+
+Preparar previamente los checkouts limpios en el mismo SHA que el
+coordinador; el script verifica plataforma y SHA, no hace pull ni cambia
+ramas. Se requiere OpenSSH con autenticación no interactiva y claves de host
+conocidas; en el shell remoto debe estar disponible python (Windows) o
+python3 (Linux), y las herramientas de CI nativas. Las rutas remotas admiten
+espacios. Se usa el CI existente en cada plataforma, sin WSL para Windows.
+Modo w1c añade diez ejecuciones de fleet-protocol en Windows si full pasa.
+Se intenta cada plataforma aunque la otra falle; no se declara PASS si
+falta un reporte, el SHA no coincide, hay un SKIP/BLOCKED o falla un check.
+Los informes JSON se reúnen en reports/combined/<id>/combined.json y los
+logs quedan locales a cada host. AUTOMATED_PASS no sustituye revisión
+manual del gate W1-B/W1-C ni evidencia de release. No guarda alias,
+contraseñas ni claves en una configuración nueva.
+
+## Un comando por SSH (opcional; interfaz anterior)
 
 Preparar ambos checkouts limpios en el mismo SHA y una configuración OpenSSH
 ya autenticada con host key conocida. Desde Windows:

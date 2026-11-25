@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+from console import progress, show_result, summary, status_text
+
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ("quick", "full", "release")
 PLATFORMS = ("windows", "linux")
@@ -124,6 +126,7 @@ def run_step(item, results, logs):
     missing_tools = [x for x in commands if shutil.which(x) is None]
     if missing or missing_tools:
         row["reason"] = f"Dependencies not passed: {missing}; missing tools: {missing_tools}"
+        show_result(row)
         return row
     env = os.environ.copy()
     for key in ("GF_E2E_REAL", "GF_E2E_FAKE_ONLY"):
@@ -132,7 +135,7 @@ def run_step(item, results, logs):
     # Only deterministic fixtures here. Logs are local, never uploaded automatically.
     path = logs / (name + ".log")
     start = time.monotonic()
-    print(f"RUN {name} (log: {path})", flush=True)
+    progress(name)
     try:
         with path.open("xb") as f:
             if os.name != "nt":
@@ -151,6 +154,7 @@ def run_step(item, results, logs):
     except OSError as exc:
         row["reason"] = str(exc)
     row["seconds"] = round(time.monotonic() - start, 3)
+    show_result(row, running=True)
     return row
 
 
@@ -198,16 +202,18 @@ def run(args):
             row = run_step(item, results, logs)
             rows.append(row)
             results[item["id"]] = row["status"]
-            print(f'{row["status"]}: {item["id"]}', flush=True)
             write_json(out, data)
         if args.profile == "release":
-            rows.extend(manual_rows(os_name, sha, args.manual_evidence))
+            manual = manual_rows(os_name, sha, args.manual_evidence)
+            rows.extend(manual)
+            for row in manual:
+                show_result(row)
         clean_head(sha)
         data["status"] = overall(rows)
     finally:
         data["finished"] = timestamp()
         write_json(out, data)
-    print(f'{data["status"]}: {out}', flush=True)
+    summary(f"{os_name.upper()} / {args.profile}", data["status"], rows, out)
     return 0 if data["status"] == "PASS" else 1
 
 
@@ -247,7 +253,7 @@ def main():
     try:
         return run(args)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as exc:
-        print(f"BLOCKED: {exc}", file=sys.stderr)
+        print(f"{status_text('BLOCKED')}: {exc}", file=sys.stderr)
         return 1
 
 

@@ -11,6 +11,7 @@ import sys
 import uuid
 
 from local_ci import ROOT, clean_head, current_platform, run_step, timestamp, validate_report, write_json
+from console import color_enabled, status_text, summary
 
 SSH_OPTIONS = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
                "-o", "ConnectTimeout=15"]
@@ -33,6 +34,9 @@ def remote_command(root, arguments, sha):
 
 
 def invoke(host, root, platform, args, sha, capture=False):
+    # Forward ANSI only for human-readable worker output, never JSON collection.
+    if not capture and color_enabled():
+        args = [*args, "--color-output"]
     if host == "local":
         cmd = [sys.executable, str(ROOT / "scripts/ci/both.py"), *args]
     else:
@@ -43,6 +47,10 @@ def invoke(host, root, platform, args, sha, capture=False):
 
 
 def worker(args):
+    if args.color_output:
+        os.environ["FLEET_CI_COLOR"] = "1"
+    else:
+        os.environ.pop("FLEET_CI_COLOR", None)
     if current_platform() != args.platform:
         raise RuntimeError("Native platform mismatch")
     clean_head(args.sha)
@@ -50,7 +58,7 @@ def worker(args):
         raise ValueError("Invalid run ID")
     folder = ROOT / "reports" / "both" / args.run_id
     if args.worker == "preflight":
-        print(f"READY: {args.platform} {args.sha}", flush=True)
+        print(f"{status_text('READY')}: {args.platform} {args.sha[:12]}", flush=True)
         return 0
     if args.worker == "collect":
         # ASCII JSON survives the remote Windows console code page.
@@ -95,7 +103,8 @@ def worker(args):
     finally:
         record["finished"] = timestamp()
         write_json(native, record)
-        print(f'{record["status"]}: {native}', flush=True)
+        if record["status"] != "PASS" and not record.get("ci"):
+            summary(args.platform.upper(), record["status"], report=native)
 
 
 def validate_native(record, platform, sha, mode):
@@ -174,7 +183,11 @@ def coordinator(args):
                 record = json.loads(collected.stdout)
                 status = validate_native(record, platform, sha, mode)
                 write_json(summary / f"{platform}.json", record)
-                row.update(status=status, report=f"{platform}.json", exit_code=result.returncode)
+                checks = record.get("ci", {}).get("checks", []) + record.get("protocol_runs", [])
+                counts = {key: sum(check["status"] == key for check in checks)
+                          for key in ("PASS", "FAIL", "BLOCKED", "SKIP")}
+                row.update(status=status, report=f"{platform}.json", exit_code=result.returncode,
+                           counts=counts)
                 if result.returncode != 0 and status == "PASS":
                     row.update(status="BLOCKED", reason="Worker exit code disagrees with report")
             except (OSError, ValueError, RuntimeError, KeyError, subprocess.CalledProcessError) as exc:
@@ -191,9 +204,15 @@ def coordinator(args):
     finally:
         data["finished"] = timestamp()
         write_json(output, data)
+        print("\n=== SUMMARY ===", flush=True)
         for platform, row in data["platforms"].items():
-            print(f'{platform}: {row["status"]}', flush=True)
-        print(f'{data["status"]}: {output}', flush=True)
+            counts = row.get("counts", {})
+            suffix = " | " + " | ".join(f"{status_text(key)} {value}"
+                                         for key, value in counts.items()) if counts else ""
+            print(f"{platform.upper():7s} {status_text(row['status'])}{suffix}", flush=True)
+            if row.get("reason"):
+                print(f"  Reason: {row['reason']}", flush=True)
+        summary("TOTAL", data["status"], report=output)
         print("Review native logs; no manual or release gate is certified.", flush=True)
 
 
@@ -207,6 +226,7 @@ def main():
     parser.add_argument("--platform", choices=("windows", "linux"), help=argparse.SUPPRESS)
     parser.add_argument("--sha", help=argparse.SUPPRESS)
     parser.add_argument("--run-id", help=argparse.SUPPRESS)
+    parser.add_argument("--color-output", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
         if args.worker:
@@ -215,7 +235,7 @@ def main():
             return worker(args)
         return coordinator(args)
     except (OSError, RuntimeError, ValueError, KeyError, EOFError, subprocess.CalledProcessError) as exc:
-        print(f"BLOCKED: {exc}", file=sys.stderr)
+        print(f"{status_text('BLOCKED')}: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("BLOCKED: interrupted", file=sys.stderr)

@@ -1,8 +1,26 @@
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
+
+from console import result_line, show_result, summary
 from local_ci import overall, plan, validate_report, expected_ids, manual_rows
 
 
 class LocalCITests(unittest.TestCase):
+    def test_console_colors_and_success_log_hidden(self):
+        row = dict(id="build", status="PASS", log="private.log", seconds=1.2)
+        self.assertIn("\x1b[32mPASS\x1b[0m", result_line(row, enabled=True))
+        self.assertIn("\x1b[31mFAIL\x1b[0m", result_line(dict(row, status="FAIL"), enabled=True))
+        with patch("console.color_enabled", return_value=False), redirect_stdout(StringIO()) as output:
+            show_result(row)
+            summary("TOTAL", "PASS", [row], "private.json")
+            self.assertNotIn("private", output.getvalue())
+            show_result(dict(row, status="FAIL"))
+            summary("TOTAL", "FAIL", report="private.json")
+            self.assertIn("private.log", output.getvalue())
+            self.assertIn("private.json", output.getvalue())
+
     def test_status(self):
         self.assertEqual(overall([{"status": "PASS"}]), "PASS")
         self.assertEqual(overall([{"status": "SKIP"}]), "BLOCKED")

@@ -124,3 +124,7 @@ python (Windows) o python3 (Linux) scripts/ci/test_local_ci.py comprueba
 perfiles, estados, rechazo de reportes incompletos y evidencia de release.
 También se ejecuta en quick/full/release. No constituye una prueba nativa
 de las named pipes; ejecutar full en las dos plataformas para ello.
+
+## Salida de consola
+
+El CI presenta RUN en cian, PASS en verde, FAIL en rojo y BLOCKED/SKIP en amarillo en terminales ANSI compatibles. El coordinador conserva colores en la salida SSH sin colorear JSON. Cada check muestra su duración; las rutas de logs y reportes se imprimen solo cuando el resultado no es PASS. Los logs e informes completos siguen guardándose incluso cuando todo pasa. Usar NO_COLOR para salida plana. No se modifican los criterios de aceptación ni la ejecución de pruebas.

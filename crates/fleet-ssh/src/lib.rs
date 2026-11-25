@@ -240,7 +240,10 @@ fn join_stderr_reader(
 
 impl SshWriter {
     fn drain_stderr(&mut self) {
-        join_stderr_reader(&mut self.stderr_reader, std::time::Duration::from_millis(200));
+        join_stderr_reader(
+            &mut self.stderr_reader,
+            std::time::Duration::from_millis(200),
+        );
     }
 
     pub fn close(&mut self) {

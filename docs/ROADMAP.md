@@ -1,4 +1,6 @@
-# Roadmap de implementación desde un árbol vacío
+# Roadmap — Gentle Fleet Headless Agent Session Engine
+
+**Alcance vigente (25/11/2026):** motor headless, daemon/runner, CLI, SDK y protocolo para clientes externos. No se desarrolla una interfaz gráfica propia. P6.2 gráfica queda como referencia histórica; P6 headless recupera sus mejoras de backend sin incorporar código gráfico. P6 se integra a main solo tras aceptar la validación del nuevo candidato, sin esperar P7. P7-H pasa a ser el primer corte de reorganización de P7 después de integrar P6: desacoplar el escritorio sin reducir los gates IPC, persistencia y recuperación. Hasta validar ese corte se conservan los perfiles de P7 existentes.
 
 ## P0: investigar antes de fijar contratos
 
@@ -32,21 +34,21 @@
 
 **Estado P4.1 (22/11/2026): CERRADA EN LINUX tras P4.1-H.** Driver Codex real integrado con la misma API, SessionManager, runner, aprobaciones y timeline que OpenCode; ver [`P4_1_RESULTS.md`](P4_1_RESULTS.md). Controles por turno, descubrimiento e historial importados con procedencia. La adopción con escritura sigue bloqueada: Codex no demuestra exclusividad frente a carreras. Revalidación final en `docs/P4_1_RESULTS.md` §8: 8 smokes reales PASS sobre `d1eab2a`, V3→V4 verificada y control efectivo comprobado en el thread nativo.
 
-**Estado P4.2 (22/11/2026): CERRADA EN LINUX.** Pi estándar 1.6.0 integrado como tercer proveedor con `provider_id=pi`; ver [`P4_2_RESULTS.md`](P4_2_RESULTS.md). Chat, herramientas, controles e interrupción verificados con modelo real; descubrimiento/historial y reattach deterministas en verde. Aprobaciones nativas UNSUPPORTED en esta instalación. P4.3 y P4.4 pendientes.
+**Estado P4.2 (22/11/2026): CERRADA EN LINUX.** Pi estándar 1.6.0 integrado como tercer proveedor con `provider_id=pi`; ver [`P4_2_RESULTS.md`](P4_2_RESULTS.md). Chat, herramientas, controles e interrupción verificados con modelo real; descubrimiento/historial y reattach deterministas en verde. Aprobaciones nativas UNSUPPORTED en esta instalación. P4.3 y P4.4 estaban pendientes entonces; ver cierres posteriores.
 
 ## P5: local/remoto idénticos
 
 **Salida**: bridge SSH autenticado contra fleetd remoto con los mismos envelopes; CLI puede listar workspaces/sesiones, iniciar un agente en cwd remoto, escuchar eventos, aprobar y reconectar tras cortar SSH. No compartir bases entre hosts, no abrir listener TCP público.
 
-## P6: SDK reusable + interfaz GPUI
+## P6: SDK reutilizable y cierre headless
 
-**Estado P6.1 (22/11/2026): CERRADA EN LINUX** en `feature/p6-sdk-gpui`. `fleetctl` consume `fleet-client`; el SDK comparte el wire y `fleet-ssh`, con observación cancelable, replay/reconexión y cursor durable por host/sesión. La suite unitaria y E2E determinista, chat FakeDriver local/SSH y smoke real opt-in OpenCode pasaron; ver [`P6_1_RESULTS.md`](P6_1_RESULTS.md). P6.2 GPUI no iniciado.
+**Estado P6.1 (22/11/2026): CERRADA EN LINUX** en `feature/p6-sdk-gpui`. `fleetctl` consume `fleet-client`; el SDK comparte el wire y `fleet-ssh`, con observación cancelable, replay/reconexión y cursor durable por host/sesión. La suite unitaria y E2E determinista, chat FakeDriver local/SSH y smoke real opt-in OpenCode pasaron; ver [`P6_1_RESULTS.md`](P6_1_RESULTS.md). La evidencia P6.1-H es histórica; el nuevo candidato debe revalidarse.
 
-**Salida**: SDK de cliente con gestión de hosts, stream cursors, backoff y deduplicación, consumido por CLI/GPUI. El cliente muestra lista de sesiones, timeline de chat, herramientas, panel de permisos y desconexión/reattach. GPUI no importa el runtime interno. Soporte de terminal/archivos se añade como capacidad adicional, nunca como sustituto del chat.
+**P6-H (25/11/2026): CANDIDATA, UNTESTED.** Se rescatan catálogo de hosts, tipos públicos, clasificación SSH y manejo acotado de diagnósticos; no se incluye GPUI ni P7 experimental. Gate: [plan P6](P6_TEST_PLAN.md). La interfaz de usuario es responsabilidad del consumidor externo.
 
 ## P7: robustez operacional y release
 
-**Salida**: límites configurables y métricas de runners/conexiones/eventos/spool; backups y migraciones; pruebas de consumo bajo carga; **validación funcional completa de Windows (daemon, runners, IPC, procesos) y macOS, más ampliación de los smokes de cliente Windows de P5** (incluyendo ALC/permisos de transporte y toolchain completo); installers/upgrades; logs seguros; documentación de recuperación y compatibilidad; versión de wire publicada. No convertir P7 en una auditoría infinita: definir presupuesto de riesgos y criterios de release medibles.
+**Salida**: límites configurables y métricas de runners/conexiones/eventos/spool; backups y migraciones; pruebas de consumo bajo carga; **validación funcional completa de Windows (daemon, runners, IPC, procesos) y macOS, más ampliación de los smokes de cliente Windows de P5** (incluyendo ACL/permisos de transporte y toolchain completo); installers/upgrades; logs seguros; documentación de recuperación y compatibilidad; versión de wire publicada. No convertir P7 en una auditoría infinita: definir presupuesto de riesgos y criterios de release medibles.
 
 ## Regla para ampliar el alcance
 
@@ -57,12 +59,23 @@ Nuevas capacidades como git/worktree, filesystem remoto, delegación multiagente
 No existe migración automática. No se hacen cherry-picks de M0–M4, no se arrastra su schema ni se repite su fichero `PLAN.md`. Si una pieza vieja demuestra ser útil, se reescribe con su contrato y nueva prueba, con revisión explícita. Mantener la historia anterior solo como referencia técnica accesible. No publicar Core v2 hasta que P1 tenga chat real.
 
 
-**Estado P4.3-H (22/11/2026): CERRADA EN LINUX con limitaciones explícitas.** El endurecimiento corrigió controles nativos efectivos, ACK inciertos, backpressure Desktop RPC, resets conservadores y aislamiento de lectura de historial. El CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) sobre `5ba188a` y los siete scripts Gentle Shell (lifecycle, recovery, concurrency, chat, tools, interrupt y controls) finalizaron PASS según los resultados compartidos por el usuario. Importación histórica no verificada deshabilitada, modo de permisos de solo lectura, permisos interactivos reales y perfiles UNTESTED. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md); P4.4 pendiente.
+**Estado P4.3-H (22/11/2026): CERRADA EN LINUX con limitaciones explícitas.** El endurecimiento corrigió controles nativos efectivos, ACK inciertos, backpressure Desktop RPC, resets conservadores y aislamiento de lectura de historial. El CI [`44953487212`](https://github.com/javijec/gentle-fleet/actions/runs/44953487212) sobre `5ba188a` y los siete scripts Gentle Shell (lifecycle, recovery, concurrency, chat, tools, interrupt y controls) finalizaron PASS según los resultados compartidos por el usuario. Importación histórica no verificada deshabilitada, modo de permisos de solo lectura, permisos interactivos reales y perfiles UNTESTED. Ver [`P4_3_RESULTS.md`](P4_3_RESULTS.md); P4.4 estaba pendiente entonces.
 
 
-**Estado P4.4-H (22/11/2026): CERRADA EN LINUX sobre `4c6b0e3`.** Tras la auditoría del framework común se corrigieron falsos PASS en concurrencia y terminalidad, se exigió workspace explícito, dos clientes autenticados distintos, una única ejecución de matriz y timeouts con paginación. Los nuevos E2E deterministas se incorporan al CI en modalidad FakeDriver explícita; la matriz real de 56 celdas, las 12 direcciones de aislamiento y los smokes de los cuatro proveedores se repitieron sobre `dd9a2f4` y la revalidación posterior al hotfix fue reportada con 56 comprobaciones, 12/12 direcciones y CI `44992082537` PASS. Ver [`P4_4_RESULTS.md`](P4_4_RESULTS.md). P5 pendiente.
+**Estado P4.4-H (22/11/2026): CERRADA EN LINUX sobre `4c6b0e3`.** Tras la auditoría del framework común se corrigieron falsos PASS en concurrencia y terminalidad, se exigió workspace explícito, dos clientes autenticados distintos, una única ejecución de matriz y timeouts con paginación. Los nuevos E2E deterministas se incorporan al CI en modalidad FakeDriver explícita; la matriz real de 56 celdas, las 12 direcciones de aislamiento y los smokes de los cuatro proveedores se repitieron sobre `dd9a2f4` y la revalidación posterior al hotfix fue reportada con 56 comprobaciones, 12/12 direcciones y CI `44992082537` PASS. Ver [`P4_4_RESULTS.md`](P4_4_RESULTS.md). P5 estaba pendiente entonces.
 
 
-## P5: local/remoto idénticos
+### Cierre histórico P5: local/remoto idénticos
 
-**Estado (22/11/2026): CERRADA — servidor Linux x86_64, cliente CLI Linux y Windows 11.** Bridge SSH stdio, mismo wire Fleet, `fleetctl --host`, hosts configurables y replay durable pasaron CI ([#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228)) y recorrido manual real Windows → Linux (FakeDriver, OpenCode, Codex, Pi, Gentle Shell; streaming y recuperación por cursor). Criterio «dos Linux físicos» sustituido explícitamente por **dos equipos físicos Windows → Linux**: prueba más relevante para transporte cliente multiplataforma; dos Linux físicos siguen UNTESTED. Quedan fuera del cierre daemon/runner Windows, macOS, aprobación interactiva remota en Windows y reconexión automática, documentados en [`P5_RESULTS.md`](P5_RESULTS.md) §6–7. No se fusiona en main.
+**Estado (22/11/2026): CERRADA — servidor Linux x86_64, cliente CLI Linux y Windows 11.** Bridge SSH stdio, mismo wire Fleet, `fleetctl --host`, hosts configurables y replay durable pasaron CI ([#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228)) y recorrido manual real Windows → Linux (FakeDriver, OpenCode, Codex, Pi, Gentle Shell; streaming y recuperación por cursor). Criterio «dos Linux físicos» sustituido explícitamente por **dos equipos físicos Windows → Linux**: prueba más relevante para transporte cliente multiplataforma; dos Linux físicos siguen UNTESTED. Quedan fuera del cierre daemon/runner Windows, macOS, aprobación interactiva remota en Windows y reconexión automática, documentados en [`P5_RESULTS.md`](P5_RESULTS.md) §6–7. El cierre P5 ya está integrado en main.
+
+## Orden vigente tras P6-H
+
+- P7-H: separar el workspace de P7 de GPUI, lockfile, CI y dependencias gráficas; preservar evidencia histórica y tests del motor. No eximir gates de seguridad.
+- P7-W1: validación técnica Windows IPC (incluido W1-B), persistencia, procesos y recuperación; W2: proveedores reales Windows.
+- P7-W4: SSH bidireccional sin relajar host key checking; declarar combinaciones sin probar.
+- P7-O/S: operación, distribución y SDK/wire versionado con consumidor headless externo.
+- P7-M: validación nativa macOS. Una entrega Linux limitada no certifica Windows/macOS.
+- PUBLIC-READINESS: auditoría independiente antes de abrir el repositorio; no implica aceptación técnica ni release.
+
+La rama P7 conserva su evidencia y gates específicos de plataforma; este documento no adelanta sus resultados ni autoriza su merge.

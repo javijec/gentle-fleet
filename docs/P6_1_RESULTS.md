@@ -37,7 +37,7 @@
 
 ## Siguiente corte
 
-P6.2 puede integrar el SDK en un cliente GPUI mínimo de chat/timeline/permisos, con una tarea worker cancelable; evitar rehacer transporte/correlación. Antes de abrir capacidades de terminal/archivos/Git, validar una aprobación real soportada por proveedor. P6.2 no se implementó en este corte.
+El SDK será consumido por CLI y aplicaciones externas. P6.2 gráfica se retira del alcance de producto. Antes de abrir capacidades de terminal/archivos/Git, validar una aprobación real soportada por proveedor.
 
 ## P6.1-H — Correcciones posteriores al primer push
 
@@ -49,3 +49,11 @@ P6.2 puede integrar el SDK en un cliente GPUI mínimo de chat/timeline/permisos,
 - Se agregaron unitarias para eventos encolados sin ACK, consumidor lento y error terminal en una cola llena. `e2e_long_replay.sh` reporta errores de watch con diagnóstico en caso de fallo.
 - CI instala OpenSSH Server para ejecutar los E2E SSH deterministas, en vez de omitirlos por falta de `sshd`.
 - **CI de P6.1-H: SUCCESS** en el commit de código `26a436d` (132 tests Rust; replay 270 eventos; E2E SSH uno/dos hosts; SDK local FakeDriver). Los cuatro proveedores reales no fueron revalidados en P6.1-H; el smoke OpenCode de P6.1 original permanece como evidencia anterior.
+
+## P6-H — preparación headless (25/11/2026)
+
+Base `4166c4a`; origen de mejoras reutilizadas `427a5c1`; código candidato `6a8d366`. Se incorporan solo `fleet-client`, `fleet-ssh` y una aserción E2E más estricta de identidad SSH. Se conserva catálogo de hosts sin secretos y tipos públicos, clasificación de host-key y espera acotada de stderr. Si un helper local conserva stderr abierto, se deja de esperar al lector después de 200 ms; el hilo puede permanecer vivo hasta EOF. No se declara garantía de cancelación de todos los procesos auxiliares SSH. Se añade una regresión del lector que no termina y se exige el error tipado HostKeyRejected en el fixture SSH.
+
+El workspace y lockfile se conservan de P6.1, sin GPUI. La suite de cierre usa los 21 scripts E2E explícitos del workflow heredado, más los contratos Rust y el gate de grafo headless. La cifra histórica de 22 se conserva como resultado histórico, no se inventa un script adicional. CI y ejecución local usan el mismo script; falta ejecutar el smoke real OpenCode tras el endurecimiento.
+
+**UNTESTED:** compilación, Clippy, unitarias, E2E y smoke real del nuevo SHA. No merge hasta PASS y revisión de logs; GitHub Actions puede estar BLOCKED por infraestructura, usar gate local equivalente Linux. La validación de Windows nativo sigue en P7; no se anuncia paridad. No reducir criterios de P7.

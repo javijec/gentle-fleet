@@ -222,17 +222,22 @@ impl ProcessHandle {
             match self.io.try_lock() {
                 Ok(io) => break io,
                 Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(5)),
-                Err(TryLockError::Poisoned(_)) => return Err(AgentError {
-                    code: "runner_io".into(),
-                    message: "runner RPC lock poisoned".into(),
-                }),
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(AgentError {
+                        code: "runner_io".into(),
+                        message: "runner RPC lock poisoned".into(),
+                    })
+                }
             }
         };
         let cancellation = self.cancellation.try_clone().map_err(io_error)?;
         let (done_tx, done_rx) = mpsc::channel();
         let watchdog = std::thread::Builder::new()
             .spawn(move || {
-                if done_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_err() {
+                if done_rx
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .is_err()
+                {
                     let _ = cancellation.shutdown(std::net::Shutdown::Both);
                     true
                 } else {
@@ -440,12 +445,15 @@ impl RunnerHandle for ProcessHandle {
     }
 
     fn close(&self) -> Result<(), AgentError> {
-        let response = self.rpc_bounded(RunnerRequest::Shutdown, SHUTDOWN_TIMEOUT)
+        let response = self
+            .rpc_bounded(RunnerRequest::Shutdown, SHUTDOWN_TIMEOUT)
             .map_err(|error| stop_unconfirmed(&error.to_string()))?;
         confirm_shutdown_response(response)?;
         let mut owned = self.child.lock().expect("child poisoned");
         let child = owned.as_mut().ok_or_else(|| {
-            stop_unconfirmed("driver close acknowledged but runner exit cannot be verified after reattach")
+            stop_unconfirmed(
+                "driver close acknowledged but runner exit cannot be verified after reattach",
+            )
         })?;
         // Do not force-kill a runner and convert that into a successful
         // graceful close. Retain the owned handle on uncertainty.
@@ -465,19 +473,36 @@ fn stop_unconfirmed(message: &str) -> AgentError {
 fn confirm_shutdown_response(response: RunnerResponse) -> Result<(), AgentError> {
     match response {
         RunnerResponse::Shutdown { status } if status == RUNNER_SHUTDOWN_STOPPED => Ok(()),
-        _ => Err(stop_unconfirmed("runner did not acknowledge a confirmed shutdown")),
+        _ => Err(stop_unconfirmed(
+            "runner did not acknowledge a confirmed shutdown",
+        )),
     }
 }
 
-fn confirm_child_exit(child: &mut std::process::Child, timeout: Duration) -> Result<(), AgentError> {
+fn confirm_child_exit(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<(), AgentError> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => return Err(stop_unconfirmed("runner exited unsuccessfully after shutdown")),
+            Ok(Some(_)) => {
+                return Err(stop_unconfirmed(
+                    "runner exited unsuccessfully after shutdown",
+                ))
+            }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => return Err(stop_unconfirmed("runner exit not observed after shutdown acknowledgment")),
-            Err(error) => return Err(stop_unconfirmed(&format!("cannot verify runner exit: {error}"))),
+            Ok(None) => {
+                return Err(stop_unconfirmed(
+                    "runner exit not observed after shutdown acknowledgment",
+                ))
+            }
+            Err(error) => {
+                return Err(stop_unconfirmed(&format!(
+                    "cannot verify runner exit: {error}"
+                )))
+            }
         }
     }
 }
@@ -596,13 +621,23 @@ mod tests {
     fn shutdown_requires_typed_stopped_response() {
         confirm_shutdown_response(RunnerResponse::Shutdown {
             status: RUNNER_SHUTDOWN_STOPPED.into(),
-        }).unwrap();
+        })
+        .unwrap();
         for response in [
-            RunnerResponse::Shutdown { status: "running".into() },
-            RunnerResponse::Shutdown { status: "Stopped".into() },
-            RunnerResponse::Accepted { operation_id: "wrong-response".into() },
+            RunnerResponse::Shutdown {
+                status: "running".into(),
+            },
+            RunnerResponse::Shutdown {
+                status: "Stopped".into(),
+            },
+            RunnerResponse::Accepted {
+                operation_id: "wrong-response".into(),
+            },
         ] {
-            assert_eq!(confirm_shutdown_response(response).unwrap_err().code, "StopUnconfirmed");
+            assert_eq!(
+                confirm_shutdown_response(response).unwrap_err().code,
+                "StopUnconfirmed"
+            );
         }
     }
 
@@ -636,8 +671,16 @@ mod tests {
                 .spawn().unwrap())
         };
         let mut live = spawn("live");
-        assert_eq!(confirm_child_exit(&mut live.0, Duration::from_millis(30)).unwrap_err().code, "StopUnconfirmed");
-        assert!(live.0.try_wait().unwrap().is_none(), "confirmation must not kill the child");
+        assert_eq!(
+            confirm_child_exit(&mut live.0, Duration::from_millis(30))
+                .unwrap_err()
+                .code,
+            "StopUnconfirmed"
+        );
+        assert!(
+            live.0.try_wait().unwrap().is_none(),
+            "confirmation must not kill the child"
+        );
         let mut failed = spawn("error");
         let error = confirm_child_exit(&mut failed.0, Duration::from_secs(5)).unwrap_err();
         assert!(error.message.contains("exited unsuccessfully"));
@@ -653,28 +696,43 @@ mod tests {
             let stream = LocalStream::Unix(stream);
             let cancellation = stream.try_clone().unwrap();
             let reader = BufReader::new(stream.try_clone().unwrap());
-            (ProcessHandle {
-                identity: RunnerIdentity {
-                    runner_id: "runner-test".into(), session_id: "ses-test".into(),
-                    provider_id: "fake".into(), host_id: "local-host".into(),
-                    boot_id: "boot".into(), pid: 1, protocol_version: RUNNER_WIRE.into(), generation: 1,
+            (
+                ProcessHandle {
+                    identity: RunnerIdentity {
+                        runner_id: "runner-test".into(),
+                        session_id: "ses-test".into(),
+                        provider_id: "fake".into(),
+                        host_id: "local-host".into(),
+                        boot_id: "boot".into(),
+                        pid: 1,
+                        protocol_version: RUNNER_WIRE.into(),
+                        generation: 1,
+                    },
+                    io: Mutex::new(RunnerIo {
+                        writer: stream,
+                        reader,
+                    }),
+                    cancellation,
+                    buffered: Mutex::new(VecDeque::new()),
+                    next_request: AtomicU64::new(1),
+                    child: Mutex::new(None),
+                    last_seq: AtomicU64::new(0),
                 },
-                io: Mutex::new(RunnerIo { writer: stream, reader }),
-                cancellation,
-                buffered: Mutex::new(VecDeque::new()),
-                next_request: AtomicU64::new(1),
-                child: Mutex::new(None),
-                last_seq: AtomicU64::new(0),
-            }, peer)
+                peer,
+            )
         }
         let (handle, _peer) = pair();
         let held = handle.io.lock().unwrap();
-        let error = handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50)).unwrap_err();
+        let error = handle
+            .rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50))
+            .unwrap_err();
         assert_eq!(error.code, "runner_rpc_timeout");
         drop(held);
 
         let (handle, _peer) = pair();
-        let error = handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50)).unwrap_err();
+        let error = handle
+            .rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50))
+            .unwrap_err();
         assert_eq!(error.code, "runner_rpc_timeout");
     }
 

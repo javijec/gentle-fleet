@@ -8,7 +8,7 @@ use std::time::Duration;
 use fleet_agent::ProviderRegistry;
 use fleet_core::runner::{InProcessRunnerLauncher, RunnerLauncher};
 use fleet_core::{SessionManager, Subscription, SubscriptionHandle, SUBSCRIBER_LIMIT};
-use fleet_protocol::transport::{expected_token, LocalListener, LocalStream};
+use fleet_protocol::transport::{database_path, expected_token, LocalListener, LocalStream};
 use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response, WIRE};
 use fleet_providers::builtin_registry_from_env;
 use fleet_store_sqlite::SqliteStore;
@@ -21,27 +21,6 @@ fn to_api_error(error: fleet_agent::AgentError) -> fleet_protocol::ApiError {
         code: error.code,
         message: error.message,
     }
-}
-
-fn database_path() -> std::io::Result<std::path::PathBuf> {
-    use std::path::PathBuf;
-
-    if let Some(path) = std::env::var_os("FLEET_DB_PATH") {
-        return Ok(PathBuf::from(path));
-    }
-    #[cfg(windows)]
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-    #[cfg(unix)]
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-    let base = base.filter(|path| path.is_absolute()).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No absolute durable data root; set FLEET_DB_PATH",
-        )
-    })?;
-    Ok(base.join("gentle-fleet").join("fleet.sqlite"))
 }
 
 fn main() -> std::io::Result<()> {

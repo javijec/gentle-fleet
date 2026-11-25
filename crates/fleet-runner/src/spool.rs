@@ -10,11 +10,30 @@ use rusqlite::{params, Connection, TransactionBehavior};
 
 pub struct Spool {
     connection: Mutex<Connection>,
+    #[cfg(windows)]
+    _directory: fleet_protocol::transport::DataDirectory,
 }
 
 impl Spool {
     pub fn open(path: &Path) -> Result<Self, String> {
+        #[cfg(windows)]
+        let directory = {
+            let parent = path.parent().ok_or("spool requires a private parent")?;
+            let directory = fleet_protocol::transport::DataDirectory::open(parent)
+                .map_err(|error| error.to_string())?;
+            directory
+                .validate_sqlite_files(path)
+                .map_err(|error| error.to_string())?;
+            directory
+        };
         let connection = Connection::open(path).map_err(|error| error.to_string())?;
+        #[cfg(windows)]
+        directory
+            .validate_sqlite_files(path)
+            .map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|error| error.to_string())?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|error| error.to_string())?;
@@ -39,8 +58,14 @@ impl Spool {
                  );",
             )
             .map_err(|error| error.to_string())?;
+        #[cfg(windows)]
+        directory
+            .validate_sqlite_files(path)
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             connection: Mutex::new(connection),
+            #[cfg(windows)]
+            _directory: directory,
         })
     }
 
@@ -103,15 +128,17 @@ impl Spool {
     /// el llamado debe reducir la presión antes de seguir produciendo.
     pub fn append(&self, event: &AgentEvent) -> Result<u64, String> {
         let mut connection = self.connection.lock().expect("spool poisoned");
-        let (count, bytes) = self.unacked_count_locked(&connection)?;
         let payload = serde_json::to_string(event).map_err(|error| error.to_string())?;
-        if count + 1 > MAX_SPOOL_EVENTS || bytes + payload.len() > MAX_SPOOL_BYTES {
-            return Err("spool_full".into());
-        }
-        let seq = self.next_seq_locked(&connection)?;
+        // The SQLite write lock covers the limit check and sequence allocation,
+        // not just INSERT. Separate connections must observe one ordered spool.
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
+        let (count, bytes) = self.unacked_count_locked(&tx)?;
+        if count + 1 > MAX_SPOOL_EVENTS || bytes + payload.len() > MAX_SPOOL_BYTES {
+            return Err("spool_full".into());
+        }
+        let seq = self.next_seq_locked(&tx)?;
         tx.execute(
             "INSERT INTO spool(runner_seq,event,bytes) VALUES(?1,?2,?3)",
             params![seq as i64, payload, payload.len() as i64],
@@ -227,7 +254,24 @@ mod tests {
     use std::path::PathBuf;
 
     fn path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("gf-p3-spool-{}-{name}.sqlite", std::process::id()))
+        let root = std::env::temp_dir().join(format!("gf-p3-spool-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        #[cfg(windows)]
+        return root.join("data").join("spool.sqlite");
+        #[cfg(unix)]
+        root.join("spool.sqlite")
+    }
+
+    fn cleanup(db: &Path) {
+        let parent = db.parent().unwrap();
+        #[cfg(windows)]
+        let parent = parent.parent().unwrap();
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     fn event(seq: u64) -> AgentEvent {
@@ -242,7 +286,6 @@ mod tests {
     #[test]
     fn saturation_never_loses_events_or_hides_backpressure() {
         let db = path("saturation");
-        let _ = std::fs::remove_file(&db);
         let spool = Spool::open(&db).unwrap();
         // Simula daemon caído: nadie hace ACK mientras se produce.
         for seq in 1..=MAX_SPOOL_EVENTS {
@@ -269,13 +312,13 @@ mod tests {
         assert_eq!(pending.first().unwrap().0, 2);
         assert_eq!(pending.last().unwrap().0, MAX_SPOOL_EVENTS as u64);
 
-        let _ = std::fs::remove_file(&db);
+        drop(spool);
+        cleanup(&db);
     }
 
     #[test]
     fn byte_limit_is_enforced_without_partial_writes() {
         let db = path("bytes");
-        let _ = std::fs::remove_file(&db);
         let spool = Spool::open(&db).unwrap();
         let big = AgentEvent {
             kind: DomainEvent::AssistantDelta {
@@ -286,17 +329,84 @@ mod tests {
         assert_eq!(spool.append(&big).unwrap_err(), "spool_full");
         assert_eq!(spool.pending_count().unwrap(), 0);
         assert_eq!(spool.last_ack().unwrap(), 0);
-        let _ = std::fs::remove_file(&db);
+        drop(spool);
+        cleanup(&db);
+    }
+
+    #[test]
+    fn reopen_preserves_pending_ack_and_operation_reservations() {
+        let db = path("reopen");
+        {
+            let spool = Spool::open(&db).unwrap();
+            assert_eq!(spool.append(&event(1)).unwrap(), 1);
+            assert_eq!(spool.append(&event(2)).unwrap(), 2);
+            spool.ack(1).unwrap();
+            assert!(!spool.reserve_operation("key", "operation").unwrap());
+            spool.record_notice("durable notice").unwrap();
+        }
+        let spool = Spool::open(&db).unwrap();
+        assert_eq!(spool.last_ack().unwrap(), 1);
+        assert_eq!(spool.pending(0, 10).unwrap()[0].0, 2);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+        assert_eq!(spool.append(&event(3)).unwrap(), 3);
+        assert!(spool.reserve_operation("key", "operation").unwrap());
+        assert_eq!(spool.notices().unwrap(), vec!["durable notice".to_string()]);
+        drop(spool);
+        cleanup(&db);
+    }
+
+    #[test]
+    fn concurrent_connections_allocate_one_sequence() {
+        let db = path("concurrent");
+        let first = Spool::open(&db).unwrap();
+        let second = Spool::open(&db).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker = {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for index in 0..32 {
+                    first.append(&event(index)).unwrap();
+                }
+            })
+        };
+        barrier.wait();
+        for index in 32..64 {
+            second.append(&event(index)).unwrap();
+        }
+        worker.join().unwrap();
+        let pending = second.pending(0, 100).unwrap();
+        assert_eq!(
+            pending.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
+            (1..=64).collect::<Vec<_>>()
+        );
+        drop(second);
+        cleanup(&db);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_spool_rejects_hardlinked_sidecar() {
+        let db = path("hardlink");
+        drop(Spool::open(&db).unwrap());
+        let sentinel = db.parent().unwrap().join("sentinel");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        let mut journal = db.as_os_str().to_os_string();
+        journal.push("-journal");
+        std::fs::hard_link(&sentinel, &journal).unwrap();
+        assert!(Spool::open(&db).is_err());
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        cleanup(&db);
     }
 
     #[test]
     fn operation_reservation_is_idempotent() {
         let db = path("operations");
-        let _ = std::fs::remove_file(&db);
         let spool = Spool::open(&db).unwrap();
         assert!(!spool.reserve_operation("key-1", "op-1").unwrap());
         assert!(spool.reserve_operation("key-1", "op-1").unwrap());
         assert!(!spool.reserve_operation("key-2", "op-2").unwrap());
-        let _ = std::fs::remove_file(&db);
+        drop(spool);
+        cleanup(&db);
     }
 }

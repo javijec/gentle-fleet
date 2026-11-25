@@ -18,6 +18,26 @@ mod windows_pipe;
 #[cfg(windows)]
 pub use windows_pipe::DataDirectory;
 
+/// Resolve the daemon database path and the root for durable runner state.
+pub fn database_path() -> io::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("FLEET_DB_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(unix)]
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    let base = base.filter(|path| path.is_absolute()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No absolute durable data root; set FLEET_DB_PATH",
+        )
+    })?;
+    Ok(base.join("gentle-fleet").join("fleet.sqlite"))
+}
+
 pub fn runtime_dir() -> PathBuf {
     std::env::var_os("FLEET_RUNTIME_DIR")
         .map(PathBuf::from)

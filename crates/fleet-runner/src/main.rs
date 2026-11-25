@@ -98,14 +98,62 @@ fn prepare_token(runner_id: &str) -> io::Result<String> {
     Ok(token)
 }
 
+#[cfg(windows)]
+fn durable_spool_path(runner_id: &str, runtime: &std::path::Path) -> io::Result<PathBuf> {
+    use fleet_protocol::transport::database_path;
+
+    // Restrict identifiers to a canonical Windows filename alphabet. In
+    // particular, case aliases, path traversal and alternate streams must
+    // never cause two logical runner IDs to address the same spool.
+    if runner_id.is_empty()
+        || runner_id.len() > 128
+        || !runner_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Windows runner identifier",
+        ));
+    }
+    let name = format!("fleet-runner-{runner_id}.spool.sqlite");
+    let legacy = runtime.join(&name);
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut candidate = legacy.as_os_str().to_os_string();
+        candidate.push(suffix);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "legacy runner spool exists; explicit migration required",
+                ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let database = database_path()?;
+    let directory = database
+        .parent()
+        .ok_or_else(|| io::Error::other("durable database requires a parent directory"))?;
+    let spool = directory.join(name);
+    if database
+        .file_name()
+        .is_some_and(|file| file.to_string_lossy().eq_ignore_ascii_case(&spool.file_name().unwrap().to_string_lossy()))
+    {
+        return Err(io::Error::other("runner spool conflicts with daemon database"));
+    }
+    Ok(spool)
+}
+
 fn main() -> io::Result<()> {
     let args = parse_args();
+    #[cfg(windows)]
+    let spool_path = durable_spool_path(&args.runner_id, &runtime_dir())?;
     let listener = LocalListener::bind_named(&format!("fleet-runner-{}", args.runner_id))?;
     let token = prepare_token(&args.runner_id)?;
-    let spool = Arc::new(
-        Spool::open(&runtime_dir().join(format!("fleet-runner-{}.spool.sqlite", args.runner_id)))
-            .map_err(io::Error::other)?,
-    );
+    #[cfg(unix)]
+    let spool_path = runtime_dir().join(format!("fleet-runner-{}.spool.sqlite", args.runner_id));
+    let spool = Arc::new(Spool::open(&spool_path).map_err(io::Error::other)?);
     let identity = RunnerIdentity {
         runner_id: args.runner_id.clone(),
         session_id: args.session_id.clone(),

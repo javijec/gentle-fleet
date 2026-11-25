@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use fleet_client::{FleetClient, Host};
 use fleet_domain::EventKind;
 use fleet_protocol::{Request, Response};
-use fleet_ssh::{find_host, load_hosts, save_hosts, HostConfig};
+use fleet_ssh::{add_host, find_host, load_hosts, remove_host, HostConfig};
 
 /// Keep an operation key durably on the CLIENT before sending any remote
 /// effect. SSH can fail after the daemon accepts a request but before its ACK.
@@ -206,11 +206,7 @@ fn host_command(args: &[String]) -> Result<(), String> {
                     other => return Err(format!("unknown host option: {other}")),
                 }
             }
-            let mut hosts = load_hosts().map_err(|error| error.to_string())?;
-            if hosts.iter().any(|host| host.alias == alias) {
-                return Err(format!("host `{alias}` already exists"));
-            }
-            hosts.push(HostConfig {
+            add_host(HostConfig {
                 alias: alias.clone(),
                 destination,
                 bridge_path: bridge.unwrap_or_else(|| "/usr/local/bin/fleet-ssh-bridge".into()),
@@ -219,8 +215,8 @@ fn host_command(args: &[String]) -> Result<(), String> {
                 expected_host_key: None,
                 last_status: None,
                 protocol_version: None,
-            });
-            save_hosts(&hosts).map_err(|error| error.to_string())?;
+            })
+            .map_err(|error| error.to_string())?;
             println!("added\t{alias}");
             Ok(())
         }
@@ -228,12 +224,7 @@ fn host_command(args: &[String]) -> Result<(), String> {
             let alias = args
                 .get(1)
                 .ok_or_else(|| "host remove <alias>".to_string())?;
-            let hosts: Vec<HostConfig> = load_hosts()
-                .map_err(|error| error.to_string())?
-                .into_iter()
-                .filter(|host| &host.alias != alias)
-                .collect();
-            save_hosts(&hosts).map_err(|error| error.to_string())?;
+            remove_host(alias).map_err(|error| error.to_string())?;
             println!("removed\t{alias}");
             Ok(())
         }

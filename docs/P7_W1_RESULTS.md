@@ -397,3 +397,7 @@ El operador compartió SUMMARY: Windows 24 PASS, Linux 77 PASS, cero FAIL/BLOCKE
 ### W1-C.2 y auto-format — PASS reportado
 
 El operador confirmó que pasó todo tras activar --auto-format. HEAD remoto comprobado: `84f219eb6dd48571308b643b8e14800280082443`. El resumen nuevo/JSON/SHA ejecutado y logs no fueron adjuntados; se registra PASS reportado, no número exacto de checks ni evidencia independiente de ejecución o release. Se avanza al primer candidato W1-C.3, manteniendo los pendientes de exclusividad, migración y pruebas de recuperación del spool. Ver P7_W1_C_PLAN.md.
+
+### W1-C.3 — gate automatizado reportado PASS
+
+El operador compartió SUMMARY: Windows 24 PASS, Linux 77 PASS, cero FAIL/BLOCKED/SKIP, TOTAL AUTOMATED_PASS. HEAD remoto comprobado 63534b91c336e957e7965ff81ea5fbcd663b786d; resumen no incluye SHA ni logs. Se registra PASS automatizado reportado, no certificación independiente ni de release. Se avanza al candidato W1-C.4. Pendientes y límites de W1-C.3 conservados en el plan.

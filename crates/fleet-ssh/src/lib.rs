@@ -4,6 +4,8 @@
 //! mismos en ambos transportes. SSH solo transporta bytes y realiza la
 //! autenticación local al `fleetd` remoto dentro del bridge.
 
+mod config;
+
 use std::collections::VecDeque;
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
@@ -102,41 +104,33 @@ impl std::fmt::Display for SshError {
 
 impl std::error::Error for SshError {}
 
-pub fn config_path() -> PathBuf {
-    std::env::var_os("FLEET_SSH_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-                .join(".config/gentle-fleet/hosts.json")
-        })
+/// Resolve a durable configuration path; never fall back to a shared temp directory.
+pub fn config_path() -> Result<PathBuf, SshError> {
+    config::path()
 }
 
 pub fn load_hosts() -> Result<Vec<HostConfig>, SshError> {
-    let path = config_path();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text =
-        std::fs::read_to_string(&path).map_err(|error| SshError::Protocol(error.to_string()))?;
-    let hosts: Vec<HostConfig> =
-        serde_json::from_str(&text).map_err(|error| SshError::Protocol(error.to_string()))?;
-    for host in &hosts {
-        host.validate()?;
-    }
-    Ok(hosts)
+    config::load(&config_path()?)
 }
 
+/// Explicit whole-catalog replacement. For read-modify-write operations,
+/// use add_host/remove_host, which hold the lock across the entire update.
 pub fn save_hosts(hosts: &[HostConfig]) -> Result<(), SshError> {
-    let path = config_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| SshError::Protocol(error.to_string()))?;
-    }
-    for host in hosts {
-        host.validate()?;
-    }
-    let text = serde_json::to_string_pretty(hosts)
-        .map_err(|error| SshError::Protocol(error.to_string()))?;
-    std::fs::write(&path, text).map_err(|error| SshError::Protocol(error.to_string()))
+    config::update(&config_path()?, |current| {
+        *current = hosts.to_vec();
+        Ok(())
+    })
+}
+
+pub fn add_host(host: HostConfig) -> Result<(), SshError> {
+    config::add(&config_path()?, host)
+}
+
+pub fn remove_host(alias: &str) -> Result<(), SshError> {
+    config::update(&config_path()?, |hosts| {
+        hosts.retain(|host| host.alias != alias);
+        Ok(())
+    })
 }
 
 pub fn find_host(alias: &str) -> Result<HostConfig, SshError> {

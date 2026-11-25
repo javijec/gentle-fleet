@@ -10,11 +10,16 @@ import subprocess
 import sys
 import uuid
 
-from local_ci import ROOT, clean_head, current_platform, run_step, timestamp, validate_report, write_json
+from local_ci import ROOT, clean_head, current_platform, git, run_step, timestamp, validate_report, write_json
 from console import color_enabled, status_text, summary
 
 SSH_OPTIONS = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
                "-o", "ConnectTimeout=15"]
+
+
+def encoded_command(source):
+    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    return " -c \"import base64;exec(base64.b64decode('" + encoded + "'))\""
 
 
 def remote_command(root, arguments, sha):
@@ -29,8 +34,7 @@ def remote_command(root, arguments, sha):
         "    sys.exit('BLOCKED: remote checkout dirty')\n"
         f"sys.exit(subprocess.call([sys.executable, 'scripts/ci/both.py', *{arguments!r}]))\n"
     )
-    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
-    return " -c \"import base64;exec(base64.b64decode('" + encoded + "'))\""
+    return encoded_command(source)
 
 
 def invoke(host, root, platform, args, sha, capture=False):
@@ -133,6 +137,97 @@ def ask(label, value, default=None):
     return answer or default or ""
 
 
+def git_run(*args):
+    subprocess.run(["git", *args], cwd=ROOT, check=True)
+
+
+def rust_diff():
+    # -z is essential for filenames containing spaces or quoting characters.
+    # Only tracked, unstaged modifications to Rust sources may be committed.
+    raw = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=ROOT
+    )
+    entries = raw.split(b"\0")
+    if entries[-1] != b"" or any(
+        not entry.startswith(b" M ") or not entry.endswith(b".rs")
+        for entry in entries[:-1]
+    ):
+        raise RuntimeError("Unexpected changes after cargo fmt; review manually")
+    return subprocess.check_output(["git", "diff", "--binary", "HEAD", "--"], cwd=ROOT)
+
+
+def prepare_format():
+    sha = clean_head()
+    branch = git("symbolic-ref", "--short", "HEAD")
+    ref = "refs/heads/" + branch
+    # Explicit ref also works with an old single-branch fetch configuration.
+    git_run("fetch", "--no-tags", "origin", ref)
+    if git("rev-parse", "FETCH_HEAD") != sha:
+        raise RuntimeError("Local branch is not at origin HEAD; pull --ff-only first")
+    clean_head(sha)
+    subprocess.run(["cargo", "fmt", "--all"], cwd=ROOT, check=True)
+    diff = rust_diff()
+    if not diff:
+        clean_head(sha)
+        print(f"{status_text('PASS')}: format already clean", flush=True)
+        return branch, sha
+    git_run("--no-pager", "diff", "HEAD", "--")
+    print(f"Format changes will be committed and pushed to origin/{branch}.", flush=True)
+    if input("Commit and push these formatting changes? [y/N]: ").strip().lower() not in ("y", "yes", "s", "si", "sí"):
+        raise RuntimeError("Formatting changes left uncommitted; no tests started")
+    if git("rev-parse", "HEAD") != sha or git("symbolic-ref", "--short", "HEAD") != branch or rust_diff() != diff:
+        raise RuntimeError("Checkout changed during confirmation; review manually")
+    git_run("add", "-u", "--", "*.rs")
+    # Verify the staged patch matches the reviewed patch byte for byte.
+    staged = subprocess.check_output(["git", "diff", "--cached", "--binary", "HEAD", "--"], cwd=ROOT)
+    if staged != diff:
+        raise RuntimeError("Staged changes differ from reviewed formatting")
+    git_run("commit", "-m", "style: apply rustfmt")
+    new_sha = clean_head()
+    if git("rev-parse", "HEAD^") != sha or git("symbolic-ref", "--short", "HEAD") != branch:
+        raise RuntimeError("Unexpected commit parent or branch; no push")
+    committed = subprocess.check_output(["git", "diff", "--binary", sha, new_sha, "--"], cwd=ROOT)
+    if committed != diff:
+        raise RuntimeError("Committed changes differ from reviewed formatting; no push")
+    git_run("push", "origin", "HEAD:" + ref)
+    print(f"{status_text('PASS')}: format published {new_sha[:12]}", flush=True)
+    return branch, new_sha
+
+
+def sync_command(root, branch, sha):
+    # Bootstrap independently of the remote version of both.py. Never reset,
+    # stash, clean or force checkout. Preserve the remote's local branches.
+    source = (
+        "import os, subprocess, sys\n"
+        f"os.chdir({root!r})\n"
+        "def git(*args):\n"
+        "    return subprocess.check_output(['git', *args], text=True).strip()\n"
+        "def run(*args):\n"
+        "    subprocess.run(['git', *args], check=True)\n"
+        "if git('status', '--porcelain', '--untracked-files=normal'):\n"
+        "    sys.exit('BLOCKED: remote checkout dirty')\n"
+        f"run('fetch', '--no-tags', 'origin', {'refs/heads/' + branch!r})\n"
+        f"if git('rev-parse', 'FETCH_HEAD') != {sha!r}:\n"
+        "    sys.exit('BLOCKED: remote origin branch differs from tested SHA')\n"
+        f"run('merge-base', '--is-ancestor', 'HEAD', {sha!r})\n"
+        "if git('status', '--porcelain', '--untracked-files=normal'):\n"
+        "    sys.exit('BLOCKED: remote checkout changed during fetch')\n"
+        f"run('checkout', '--detach', '--no-overwrite-ignore', {sha!r})\n"
+        f"if git('rev-parse', 'HEAD') != {sha!r} or git('status', '--porcelain', '--untracked-files=normal'):\n"
+        "    sys.exit('BLOCKED: remote sync did not produce clean expected HEAD')\n"
+    )
+    return encoded_command(source)
+
+
+def sync_remote(host, root, platform, branch, sha):
+    python = "python" if platform == "windows" else "python3"
+    subprocess.run(
+        ["ssh", *SSH_OPTIONS, host, python + sync_command(root, branch, sha)],
+        cwd=ROOT, check=True,
+    )
+    print(f"{status_text('PASS')}: {platform} synced {sha[:12]}", flush=True)
+
+
 def coordinator(args):
     sha = clean_head()
     local = current_platform()
@@ -156,6 +251,14 @@ def coordinator(args):
             if not pure.is_absolute() or ".." in pure.parts:
                 raise ValueError("Use an absolute checkout path without parent traversal")
         hosts[platform] = (host, root)
+    if getattr(args, "auto_format", False):
+        if not any(host == "local" for host, _ in hosts.values()):
+            raise ValueError("--auto-format requires the coordinator to be a local test host")
+        branch, sha = prepare_format()
+        for platform, (host, root) in hosts.items():
+            if host != "local":
+                sync_remote(host, root, platform, branch, sha)
+        clean_head(sha)
     run_id = uuid.uuid4().hex
     # The local worker owns the run folder on this machine if selected.
     # Keep coordinator reports in a separate directory.
@@ -219,6 +322,8 @@ def coordinator(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("quick", "full", "w1c"))
+    parser.add_argument("--auto-format", action="store_true",
+                        help="Format clean local branch, confirm commit/push and sync SSH checkout")
     for platform in ("windows", "linux"):
         parser.add_argument("--" + platform, help="SSH alias or local")
         parser.add_argument("--" + platform + "-root", help="Absolute remote checkout path")
@@ -230,6 +335,8 @@ def main():
     args = parser.parse_args()
     try:
         if args.worker:
+            if args.auto_format:
+                parser.error("--auto-format is only for the coordinator")
             if not all((args.platform, args.sha, args.run_id, args.mode)):
                 parser.error("Incomplete worker arguments")
             return worker(args)

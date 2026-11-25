@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from both import coordinator, remote_command, validate_native
+from both import coordinator, remote_command, rust_diff, sync_command, validate_native
 
 
 class BothTests(unittest.TestCase):
@@ -46,6 +46,27 @@ class BothTests(unittest.TestCase):
                 self.assertEqual(data["status"], expected)
                 self.assertEqual(data["commit"], sha)
                 self.assertTrue(data["finished"])
+
+    def test_auto_format_rejects_unexpected_paths(self):
+        for status in (b"?? stray.rs\\0", b"M  staged.rs\\0", b" M Cargo.toml\\0"):
+            with self.subTest(status=status), patch("both.subprocess.check_output", return_value=status):
+                with self.assertRaises(RuntimeError):
+                    rust_diff()
+        with patch("both.subprocess.check_output", side_effect=[b" M crates/a b.rs\\0", b"patch"]):
+            self.assertEqual(rust_diff(), b"patch")
+
+    def test_sync_command_preserves_checkout_guards(self):
+        command = sync_command("/tmp/a folder", "feature/p7", "a" * 40)
+        encoded = command.split("b64decode('", 1)[1].split("')", 1)[0]
+        source = base64.b64decode(encoded).decode("utf-8")
+        compile(source, "<remote-sync>", "exec")
+        self.assertIn("remote checkout dirty", source)
+        self.assertIn("refs/heads/feature/p7", source)
+        self.assertIn("merge-base", source)
+        self.assertIn("--no-overwrite-ignore", source)
+        self.assertIn("--detach", source)
+        self.assertNotIn("--force", source)
+        self.assertNotIn("reset", source)
 
     def test_remote_shell_quoting(self):
         root = "C:\\a folder\\repo & (test)"

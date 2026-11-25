@@ -128,3 +128,13 @@ de las named pipes; ejecutar full en las dos plataformas para ello.
 ## Salida de consola
 
 El CI presenta RUN en cian, PASS en verde, FAIL en rojo y BLOCKED/SKIP en amarillo en terminales ANSI compatibles. El coordinador conserva colores en la salida SSH sin colorear JSON. Cada check muestra su duración; las rutas de logs y reportes se imprimen solo cuando el resultado no es PASS. Los logs e informes completos siguen guardándose incluso cuando todo pasa. Usar NO_COLOR para salida plana. No se modifican los criterios de aceptación ni la ejecución de pruebas.
+
+## Formato previo y sincronización opt-in
+
+Desde una rama local limpia y publicada en origin, ejecutar:
+
+```powershell
+python scripts/ci/both.py --mode w1c --windows local --linux javiomarchi --linux-root /home/javijec/dev/gentle-fleet --auto-format
+```
+
+Antes del gate, verifica que HEAD coincide con la rama origin, ejecuta cargo fmt --all y, si hay cambios exclusivamente rastreados .rs, muestra el diff y pide confirmación para commit/push. Si se rechaza, deja los cambios para revisión y no ejecuta CI. Si no hay cambios, no crea commit. Luego sincroniza el checkout SSH limpio al SHA exacto publicado mediante fetch de la rama explícita y checkout detached sin sobrescribir archivos ignorados. Rechaza HEAD remoto divergente, cambios locales, fallos SSH y push rechazado; no usa force, reset, clean ni stash. No modifica ramas locales remotas, incluida main. Mantiene cargo fmt --check obligatorio en ambos equipos y el gate mismo SHA. Sin --auto-format conserva el modo anterior sin modificar Git. Primero actualizar el coordinador local con git pull --ff-only. La sincronización no instala herramientas ni modifica host keys.

@@ -154,14 +154,20 @@ fn durable_spool_path(
 /// Caller holds the exclusive spool lease.
 #[cfg(windows)]
 fn reserve_fresh_spool(path: &std::path::Path) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| io::Error::other("spool requires a parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("spool requires a parent"))?;
     let directory = fleet_protocol::transport::DataDirectory::open(parent)?;
     directory.validate_sqlite_files(path)?;
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let mut candidate = path.as_os_str().to_os_string();
         candidate.push(suffix);
         match std::fs::symlink_metadata(&candidate) {
-            Ok(_) => return Err(io::Error::other("previous runner spool exists; explicit recovery required")),
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "previous runner spool exists; explicit recovery required",
+                ))
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
@@ -185,7 +191,9 @@ fn fresh_spool_never_adopts_previous_boot_or_sidecar() {
     std::fs::create_dir(&root).unwrap();
     let data = root.join("data");
     let path = data.join("fleet-runner-one.spool.sqlite");
-    let lease = fleet_protocol::transport::DataLease::acquire(&data, "fleet-runner-one.spool.lease").unwrap();
+    let lease =
+        fleet_protocol::transport::DataLease::acquire(&data, "fleet-runner-one.spool.lease")
+            .unwrap();
     reserve_fresh_spool(&path).unwrap();
     std::fs::write(&path, b"previous boot").unwrap();
     assert!(reserve_fresh_spool(&path).is_err());

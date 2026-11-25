@@ -812,9 +812,7 @@ fn durable_lease_rejects_alias_and_reopens_after_release() {
 // closes. Windows may return ACCESS_DENIED or DELETE_PENDING while that
 // deletion completes. Retry the full validation, never interpret these
 // errors as absence. A persistent denial still fails closed.
-fn retry_sqlite_sidecar_validation(
-    mut validate: impl FnMut() -> io::Result<()>,
-) -> io::Result<()> {
+fn retry_sqlite_sidecar_validation(mut validate: impl FnMut() -> io::Result<()>) -> io::Result<()> {
     use windows_sys::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING, ERROR_SHARING_VIOLATION,
     };
@@ -905,7 +903,11 @@ impl DataDirectory {
                 retry_sqlite_sidecar_validation(|| self.validate_file(path))
             };
             result.map_err(|error| {
-                let file = if suffix.is_empty() { "database" } else { suffix };
+                let file = if suffix.is_empty() {
+                    "database"
+                } else {
+                    suffix
+                };
                 io::Error::new(error.kind(), format!("SQLite {file} validation: {error}"))
             })?;
         }

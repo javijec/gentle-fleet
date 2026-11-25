@@ -1590,10 +1590,7 @@ mod tests {
                     for index in 0..64 {
                         let connection = store.connection().unwrap();
                         connection
-                            .execute(
-                                "INSERT INTO churn_probe VALUES (?1)",
-                                [worker * 64 + index],
-                            )
+                            .execute("INSERT INTO churn_probe VALUES (?1)", [worker * 64 + index])
                             .unwrap();
                     }
                 })

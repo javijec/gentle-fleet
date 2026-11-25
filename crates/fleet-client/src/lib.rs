@@ -864,27 +864,30 @@ pub fn recorded_operation_attempts() -> Result<Vec<OperationAttempt>> {
 }
 
 fn parse_operation_attempts(content: &str) -> Result<Vec<OperationAttempt>> {
-    content.lines().map(|line| {
-        let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|_| ClientError::Protocol("corrupt operation journal record".into()))?;
-        let invalid = || ClientError::Protocol("invalid operation journal record".into());
-        let field = |name: &str| value[name].as_str().map(str::to_owned).ok_or_else(invalid);
-        let record = OperationAttempt {
-            host: field("host")?,
-            kind: field("kind")?,
-            target: field("target")?,
-            operation_key: field("operation_key")?,
-            created_at_unix_ms: value["created_at_unix_ms"].as_u64().ok_or_else(invalid)?,
-        };
-        if record.host.is_empty()
-            || record.target.is_empty()
-            || record.operation_key.is_empty()
-            || !matches!(record.kind.as_str(), "prompt" | "answer" | "import-history")
-        {
-            return Err(invalid());
-        }
-        Ok(record)
-    }).collect()
+    content
+        .lines()
+        .map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line)
+                .map_err(|_| ClientError::Protocol("corrupt operation journal record".into()))?;
+            let invalid = || ClientError::Protocol("invalid operation journal record".into());
+            let field = |name: &str| value[name].as_str().map(str::to_owned).ok_or_else(invalid);
+            let record = OperationAttempt {
+                host: field("host")?,
+                kind: field("kind")?,
+                target: field("target")?,
+                operation_key: field("operation_key")?,
+                created_at_unix_ms: value["created_at_unix_ms"].as_u64().ok_or_else(invalid)?,
+            };
+            if record.host.is_empty()
+                || record.target.is_empty()
+                || record.operation_key.is_empty()
+                || !matches!(record.kind.as_str(), "prompt" | "answer" | "import-history")
+            {
+                return Err(invalid());
+            }
+            Ok(record)
+        })
+        .collect()
 }
 
 fn cursor_journal_path() -> Result<PathBuf> {

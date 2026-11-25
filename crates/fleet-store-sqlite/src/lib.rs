@@ -1613,11 +1613,13 @@ mod tests {
             let path = PathBuf::from(path);
             let store = SqliteStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
-            connection.execute_batch(
-                "CREATE TABLE crash_probe (id INTEGER PRIMARY KEY);
+            connection
+                .execute_batch(
+                    "CREATE TABLE crash_probe (id INTEGER PRIMARY KEY);
                  BEGIN IMMEDIATE; INSERT INTO crash_probe VALUES (1); COMMIT;
                  BEGIN IMMEDIATE; INSERT INTO crash_probe VALUES (2);",
-            ).unwrap();
+                )
+                .unwrap();
             std::fs::write(path.with_file_name("ready"), b"ready").unwrap();
             // Keep the connection and its transaction live until killed.
             std::thread::sleep(std::time::Duration::from_secs(60));
@@ -1627,7 +1629,11 @@ mod tests {
         drop(store);
         let ready = path.with_file_name("ready");
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tests::native_process_crash_preserves_only_committed_transactions", "--nocapture"])
+            .args([
+                "--exact",
+                "tests::native_process_crash_preserves_only_committed_transactions",
+                "--nocapture",
+            ])
             .env(CHILD_DB, &path)
             .spawn()
             .unwrap();
@@ -1652,13 +1658,19 @@ mod tests {
         assert!(!status.success());
         let store = SqliteStore::open(&path).unwrap();
         let connection = store.connection().unwrap();
-        let ids = connection.prepare("SELECT id FROM crash_probe ORDER BY id")
-            .unwrap().query_map([], |row| row.get::<_, i64>(0))
-            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let ids = connection
+            .prepare("SELECT id FROM crash_probe ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(ids, vec![1]);
         assert!(SqliteStore::integrity(&connection).unwrap());
         let violations: i64 = connection
-            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(violations, 0);
         drop(connection);

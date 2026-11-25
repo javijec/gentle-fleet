@@ -148,9 +148,42 @@ try {
     if (([IO.File]::ReadAllText($addressFile)).Trim() -ne $address) {
         throw 'second daemon replaced the active endpoint'
     }
+    # A junction in an ancestor must be rejected before endpoint creation.
+    $junctionTarget = Join-Path $root 'junction-target'
+    $junction = Join-Path $root 'junction'
+    New-Item -ItemType Directory -Path $junctionTarget | Out-Null
+    New-Item -ItemType Junction -Path $junction -Target $junctionTarget | Out-Null
+    try {
+        if (-not ((Get-Item -LiteralPath $junction).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'fixture did not create a real reparse point'
+        }
+        $env:FLEET_RUNTIME_DIR = Join-Path $junction 'runtime'
+        $env:FLEET_DB_PATH = Join-Path $root 'junction-data/fleet.sqlite'
+        $junctionDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru
+        try {
+            if (-not $junctionDaemon.WaitForExit(10000)) {
+                throw 'daemon accepted a runtime through an ancestor junction'
+            }
+            if ($junctionDaemon.ExitCode -eq 0 -or
+                (Test-Path (Join-Path $junctionTarget 'runtime/fleetd.addr'))) {
+                throw 'daemon did not fail closed for ancestor reparse point'
+            }
+        } finally {
+            if (-not $junctionDaemon.HasExited) { $junctionDaemon.Kill(); [void]$junctionDaemon.WaitForExit(5000) }
+            $junctionDaemon.Dispose()
+        }
+    } finally {
+        # Delete the junction itself, never recursively traverse its target.
+        [IO.Directory]::Delete($junction)
+        $env:FLEET_RUNTIME_DIR = $runtime
+    }
+    Write-Output 'PASS: runtime rejects ancestor junction'
     # The same physical directory reached with an alternate spelling must
     # not reserve a distinct pipe and replace the original credentials.
     $aliasRuntime = Join-Path $root 'RUNTIME'
+    if (-not [IO.File]::Exists((Join-Path $aliasRuntime 'fleetd.addr'))) {
+        throw 'fixture requires a case-insensitive alias of the same runtime'
+    }
     $env:FLEET_RUNTIME_DIR = $aliasRuntime
     $env:FLEET_DB_PATH = Join-Path $root 'alias-competitor/fleet.sqlite'
     $tokenFile = Join-Path $runtime 'fleetd.token'

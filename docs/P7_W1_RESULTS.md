@@ -261,3 +261,5 @@ esto cubra todas las mutaciones de namespace/ACL por identidades privilegiadas,
 ni rutas UNC o filesystem no probado. Se añade regresión de Shutdown::Read
 con escritura pendiente para exigir que la escritura sobreviva.
 Todos estos cambios requieren ejecución Windows nativa y full en ambos hosts.
+
+El fixture de proceso añade además una junction real en un antecesor hacia un runtime nuevo: exige rechazo sin publicar endpoint. La prueba de alias verifica previamente que el spelling alternativo llega a los archivos activos. Ambos casos siguen UNTESTED en este commit.

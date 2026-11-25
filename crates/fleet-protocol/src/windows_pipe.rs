@@ -75,6 +75,7 @@ fn overlapped_op(
     let event = unsafe { OwnedHandle::from_raw_handle(event) };
     let mut operation: OVERLAPPED = unsafe { std::mem::zeroed() };
     operation.hEvent = event.as_raw_handle();
+    let operation_ptr = &raw mut operation;
     let mut transferred = 0u32;
     // Serialize only submission, never the blocking wait. Shutdown takes
     // this same gate, so it cannot miss an operation registered after cancel.
@@ -90,7 +91,7 @@ fn overlapped_op(
             ));
         }
     }
-    if start(&mut operation, &mut transferred) != 0 {
+    if start(operation_ptr, &mut transferred) != 0 {
         return Ok(transferred);
     }
     let error = io::Error::last_os_error();
@@ -98,7 +99,7 @@ fn overlapped_op(
         return Err(error);
     }
     if let (Some((_, true)), Some(gate)) = (stream, gate.as_mut()) {
-        **gate = Some((&mut operation as *mut OVERLAPPED) as usize);
+        **gate = Some(operation_ptr as usize);
     }
     drop(gate);
     let milliseconds = timeout.map_or(INFINITE, |duration| {
@@ -114,11 +115,11 @@ fn overlapped_op(
         // The operation's stack-backed OVERLAPPED and buffer must remain
         // alive until the kernel reports completion, even if it raced timeout.
         unsafe {
-            CancelIoEx(handle, &operation);
-            GetOverlappedResult(handle, &operation, &mut transferred, 1);
+            CancelIoEx(handle, operation_ptr);
+            GetOverlappedResult(handle, operation_ptr, &mut transferred, 1);
         }
         Err(wait_error)
-    } else if unsafe { GetOverlappedResult(handle, &operation, &mut transferred, 1) } == 0 {
+    } else if unsafe { GetOverlappedResult(handle, operation_ptr, &mut transferred, 1) } == 0 {
         Err(io::Error::last_os_error())
     } else {
         Ok(transferred)

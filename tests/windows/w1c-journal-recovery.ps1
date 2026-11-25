@@ -51,12 +51,26 @@ try {
     if ($output.Trim() -ne '' -or [IO.File]::ReadAllText($journal) -ne $torn) {
         throw 'CLI exposed partial result or changed the torn operation journal'
     }
+    # Explicit inspection returns the verified prefix, but still exits
+    # nonzero because the journal remains damaged and must not accept writes.
+    $prefix = Invoke-Cli @('--host', 'fixture', 'pending', '--inspect-torn') $false
+    if ($prefix.Trim() -ne (@('fixture', 'prompt', 'ses_1', 'uncertain-1') -join [char]9) -or
+        [IO.File]::ReadAllText($journal) -ne $torn) {
+        throw 'explicit inspection failed to preserve or recover the verified prefix'
+    }
+    [IO.File]::WriteAllText($journal, ($record + [char]10 + '{}' + [char]10 + '{"host":'), $utf8)
+    $output = Invoke-Cli @('pending', '--inspect-torn') $false
+    if ($output.Trim() -ne '') { throw 'inspection accepted corrupt complete record' }
     [IO.File]::WriteAllText($journal, $clean, $utf8)
     $alias = Join-Path $data 'linked.jsonl'
     New-Item -ItemType HardLink -Path $alias -Target $journal | Out-Null
     $output = Invoke-Cli @('pending') $false
     if ($output.Trim() -ne '' -or [IO.File]::ReadAllText($alias) -ne $clean) {
         throw 'CLI read or modified a hardlinked operation journal'
+    }
+    $output = Invoke-Cli @('pending', '--inspect-torn') $false
+    if ($output.Trim() -ne '' -or [IO.File]::ReadAllText($alias) -ne $clean) {
+        throw 'inspection bypassed hardlink protection'
     }
     Write-Output 'PASS: CLI recovers host-scoped operation keys and rejects torn or linked journals'
 } finally {

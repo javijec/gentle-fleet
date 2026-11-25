@@ -863,6 +863,24 @@ pub fn recorded_operation_attempts() -> Result<Vec<OperationAttempt>> {
     parse_operation_attempts(&content)
 }
 
+/// Read complete operation attempts for manual reconciliation, even if an
+/// interrupted final write exists. This does not repair or truncate anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationJournalInspection {
+    pub attempts: Vec<OperationAttempt>,
+    pub incomplete_tail_bytes: usize,
+}
+
+pub fn inspect_operation_journal() -> Result<OperationJournalInspection> {
+    let path = operation_journal_path()?;
+    let (prefix, incomplete_tail_bytes) = journal::read_complete_prefix(&path)
+        .map_err(|error| ClientError::State(format!("operation journal: {error}")))?;
+    Ok(OperationJournalInspection {
+        attempts: parse_operation_attempts(&prefix)?,
+        incomplete_tail_bytes,
+    })
+}
+
 fn parse_operation_attempts(content: &str) -> Result<Vec<OperationAttempt>> {
     content
         .lines()

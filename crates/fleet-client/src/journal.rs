@@ -161,6 +161,23 @@ pub(super) fn read(path: &Path) -> io::Result<String> {
     Ok(content)
 }
 
+/// Operator-only inspection of complete records, without changing the file.
+/// The final bytes are deliberately not interpreted or returned as a record.
+pub(super) fn read_complete_prefix(path: &Path) -> io::Result<(String, usize)> {
+    let mut journal = match Journal::open(path, false) {
+        Ok(journal) => journal,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((String::new(), 0)),
+        Err(error) => return Err(error),
+    };
+    let mut bytes = Vec::new();
+    journal.file.read_to_end(&mut bytes)?;
+    let end = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let trailing = bytes.len() - end;
+    bytes.truncate(end);
+    let prefix = String::from_utf8(bytes).map_err(|_| invalid("invalid UTF-8 in complete journal records"))?;
+    Ok((prefix, trailing))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +249,67 @@ mod tests {
             .to_string()
             .contains("incomplete final"));
         assert!(append(&path, b"{\"next\":2}\n").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn journal_lock_released_after_native_writer_termination() {
+        const CHILD_PATH: &str = "GF_TEST_JOURNAL_CRASH_CHILD";
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let path = PathBuf::from(path);
+            let mut journal = Journal::open(&path, true).unwrap();
+            journal.verify_tail().unwrap();
+            journal.file.seek(SeekFrom::End(0)).unwrap();
+            journal.file.write_all(b"{\"confirmed\":2}\n").unwrap();
+            journal.file.sync_data().unwrap();
+            journal.file.write_all(b"{\"torn\":").unwrap();
+            journal.file.sync_data().unwrap();
+            std::fs::write(path.with_file_name("ready"), b"ready").unwrap();
+            // Keep the exclusive lock held until the parent terminates us.
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            drop(journal);
+            panic!("fixture process was not terminated");
+        }
+
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        append(&path, b"{\"confirmed\":1}\n").unwrap();
+        let mut child = ChildGuard(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "journal::tests::journal_lock_released_after_native_writer_termination"])
+                .env(CHILD_PATH, &path)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !path.with_file_name("ready").exists() {
+            assert!(child.0.try_wait().unwrap().is_none(), "fixture child exited before ready");
+            assert!(std::time::Instant::now() < deadline, "fixture child timed out");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(child.0.try_wait().unwrap().is_none());
+        let probe = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        assert!(probe.try_lock().is_err(), "writer lock was not exclusive across processes");
+        child.0.kill().unwrap();
+        assert!(!child.0.wait().unwrap().success());
+        probe.try_lock().unwrap();
+        drop(probe);
+
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(before, b"{\"confirmed\":1}\n{\"confirmed\":2}\n{\"torn\":");
+        assert!(read(&path).is_err());
+        assert!(append(&path, b"{}\n").is_err());
+        let (prefix, trailing) = read_complete_prefix(&path).unwrap();
+        assert_eq!(prefix, "{\"confirmed\":1}\n{\"confirmed\":2}\n");
+        assert_eq!(trailing, b"{\"torn\":".len());
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 

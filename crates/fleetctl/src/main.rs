@@ -1,12 +1,17 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
-use fleet_client::{operation_journal_path, recorded_operation_attempts, FleetClient, Host};
+use fleet_client::{inspect_operation_journal, operation_journal_path, recorded_operation_attempts, FleetClient, Host};
 use fleet_domain::EventKind;
 use fleet_protocol::{Request, Response};
 use fleet_ssh::{add_host, find_host, load_hosts, remove_host, HostConfig};
 
-fn show_pending(selected_host: Option<&str>) -> Result<(), String> {
-    let attempts = recorded_operation_attempts().map_err(|error| error.to_string())?;
+fn show_pending(selected_host: Option<&str>, inspect: bool) -> Result<(), String> {
+    let (attempts, incomplete_tail_bytes) = if inspect {
+        let result = inspect_operation_journal().map_err(|error| error.to_string())?;
+        (result.attempts, result.incomplete_tail_bytes)
+    } else {
+        (recorded_operation_attempts().map_err(|error| error.to_string())?, 0)
+    };
     for record in attempts {
         if selected_host.is_some_and(|selected| selected != record.host) {
             continue;
@@ -15,6 +20,11 @@ fn show_pending(selected_host: Option<&str>) -> Result<(), String> {
             "{}\t{}\t{}\t{}",
             record.host, record.kind, record.target, record.operation_key
         );
+    }
+    if incomplete_tail_bytes != 0 {
+        return Err(format!(
+            "inspection only: {incomplete_tail_bytes} incomplete tail bytes preserved; journal still blocked; reconcile recorded keys without resending"
+        ));
     }
     Ok(())
 }
@@ -80,7 +90,11 @@ fn run() -> Result<(), String> {
         return host_command(&args[1..]);
     }
     if command == "pending" {
-        return show_pending(selected_host.as_deref());
+        return match args.as_slice() {
+            [_] => show_pending(selected_host.as_deref(), false),
+            [_, flag] if flag == "--inspect-torn" => show_pending(selected_host.as_deref(), true),
+            _ => Err("usage: fleetctl [--host alias] pending [--inspect-torn]".into()),
+        };
     }
     match command.as_str() {
         "workspace" => workspace(&args[1..], selected_host.as_deref()),
@@ -214,7 +228,7 @@ fn host_command(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents\n  fleetctl [--host alias] pending  # list durable remote operation keys"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents\n  fleetctl [--host alias] pending [--inspect-torn]  # list durable remote operation keys"
         .into()
 }
 

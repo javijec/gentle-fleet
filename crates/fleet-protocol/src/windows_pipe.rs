@@ -718,9 +718,7 @@ impl DataLease {
         // The callers supply canonical, reserved filenames, not paths.
         if name.is_empty()
             || !name.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || b"-_.".contains(&byte)
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_.".contains(&byte)
             })
             || !name.ends_with(".lease")
         {

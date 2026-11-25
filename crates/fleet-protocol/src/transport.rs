@@ -28,7 +28,9 @@ pub fn daemon_data_lease(database: &std::path::Path) -> io::Result<DataLease> {
         .to_string_lossy()
         .to_ascii_lowercase();
     if filename.starts_with("fleet-runner-") || filename == "fleetd.lease" {
-        return Err(io::Error::other("database conflicts with reserved durable storage namespace"));
+        return Err(io::Error::other(
+            "database conflicts with reserved durable storage namespace",
+        ));
     }
     let parent = database
         .parent()

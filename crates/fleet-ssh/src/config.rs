@@ -39,7 +39,9 @@ fn validate_path(path: &Path) -> Result<(), SshError> {
         || path.file_name().is_none()
         || path.components().any(|part| part == Component::ParentDir)
     {
-        return Err(error("SSH catalog requires an absolute path without parent traversal"));
+        return Err(error(
+            "SSH catalog requires an absolute path without parent traversal",
+        ));
     }
     Ok(())
 }
@@ -53,7 +55,9 @@ struct Directory {
 impl Directory {
     fn open(path: &Path, create: bool) -> Result<Option<Self>, SshError> {
         validate_path(path)?;
-        let parent = path.parent().ok_or_else(|| error("catalog needs a parent"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| error("catalog needs a parent"))?;
         if !create {
             match std::fs::symlink_metadata(parent) {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -181,7 +185,11 @@ fn write_atomic(directory: &Directory, path: &Path, hosts: &[HostConfig]) -> Res
     let (temp, mut file) = loop {
         let temp = sibling(
             path,
-            &format!(".tmp-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)),
+            &format!(
+                ".tmp-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ),
         );
         match options().write(true).create_new(true).open(&temp) {
             Ok(file) => break (temp, file),
@@ -203,7 +211,9 @@ fn write_atomic(directory: &Directory, path: &Path, hosts: &[HostConfig]) -> Res
         // on supported local filesystems, but power-loss durability is not
         // certified by this API.
         #[cfg(unix)]
-        File::open(&directory.path).and_then(|dir| dir.sync_all()).map_err(io_error)?;
+        File::open(&directory.path)
+            .and_then(|dir| dir.sync_all())
+            .map_err(io_error)?;
         Ok(())
     });
     if result.is_err() {
@@ -234,7 +244,8 @@ pub(super) fn update(
     path: &Path,
     change: impl FnOnce(&mut Vec<HostConfig>) -> Result<(), SshError>,
 ) -> Result<(), SshError> {
-    let directory = Directory::open(path, true)?.ok_or_else(|| error("catalog directory missing"))?;
+    let directory =
+        Directory::open(path, true)?.ok_or_else(|| error("catalog directory missing"))?;
     let _lock = lock_catalog(&directory, path, true)?;
     let mut hosts = load_in(&directory, path)?;
     change(&mut hosts)?;
@@ -261,7 +272,11 @@ mod tests {
     fn fixture() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         loop {
-            let path = std::env::temp_dir().join(format!("gf-ssh-catalog-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let path = std::env::temp_dir().join(format!(
+                "gf-ssh-catalog-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             match std::fs::create_dir(&path) {
                 Ok(()) => return path,
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -293,14 +308,19 @@ mod tests {
             let path = path.clone();
             std::thread::spawn(move || {
                 for _ in 0..24 {
-                    assert!(load(&path).unwrap().iter().any(|host| host.alias == "initial"));
+                    assert!(load(&path)
+                        .unwrap()
+                        .iter()
+                        .any(|host| host.alias == "initial"));
                 }
             })
         };
-        let workers: Vec<_> = (0..12).map(|index| {
-            let path = path.clone();
-            std::thread::spawn(move || add(&path, host(format!("host-{index}"))).unwrap())
-        }).collect();
+        let workers: Vec<_> = (0..12)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || add(&path, host(format!("host-{index}"))).unwrap())
+            })
+            .collect();
         for worker in workers {
             worker.join().unwrap();
         }

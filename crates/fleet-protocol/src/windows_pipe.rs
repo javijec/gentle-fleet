@@ -60,6 +60,19 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message)
 }
 
+fn timeout_completion(wait_error: io::Error, completion: io::Result<u32>) -> io::Result<u32> {
+    match completion {
+        Ok(transferred) => Ok(transferred),
+        Err(error)
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32) =>
+        {
+            Err(wait_error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn overlapped_op(
     handle: HANDLE,
     timeout: Option<std::time::Duration>,
@@ -114,11 +127,16 @@ fn overlapped_op(
         };
         // The operation's stack-backed OVERLAPPED and buffer must remain
         // alive until the kernel reports completion, even if it raced timeout.
-        unsafe {
+        let completed = unsafe {
             CancelIoEx(handle, operation_ptr);
-            GetOverlappedResult(handle, operation_ptr, &mut transferred, 1);
-        }
-        Err(wait_error)
+            GetOverlappedResult(handle, operation_ptr, &mut transferred, 1)
+        };
+        let completion = if completed != 0 {
+            Ok(transferred)
+        } else {
+            Err(io::Error::last_os_error())
+        };
+        timeout_completion(wait_error, completion)
     } else if unsafe { GetOverlappedResult(handle, operation_ptr, &mut transferred, 1) } == 0 {
         Err(io::Error::last_os_error())
     } else {
@@ -904,6 +922,30 @@ pub fn connect(address: &str) -> io::Result<Stream> {
 mod tests {
     use super::*;
     use std::net::Shutdown;
+
+    #[test]
+    fn timeout_racing_success_reports_transferred_bytes() {
+        let timeout = io::Error::new(io::ErrorKind::TimedOut, "timeout");
+        assert_eq!(timeout_completion(timeout, Ok(37)).unwrap(), 37);
+        let timeout = io::Error::new(io::ErrorKind::TimedOut, "timeout");
+        let aborted = io::Error::from_raw_os_error(
+            windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED as i32,
+        );
+        assert_eq!(
+            timeout_completion(timeout, Err(aborted))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        let timeout = io::Error::new(io::ErrorKind::TimedOut, "timeout");
+        let other = io::Error::from_raw_os_error(ERROR_BROKEN_PIPE as i32);
+        assert_eq!(
+            timeout_completion(timeout, Err(other))
+                .unwrap_err()
+                .raw_os_error(),
+            Some(ERROR_BROKEN_PIPE as i32)
+        );
+    }
 
     #[test]
     fn full_shutdown_cancels_pending_write_under_backpressure() {

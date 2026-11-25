@@ -83,3 +83,8 @@ control positivo posterior. Conservar ambas salidas sin credenciales.
 No crear cuentas ni alterar ACL del sistema sin autorización. Si no existe
 la segunda sesión autorizada, registrar BLOCKED. La prueba no certifica
 reparse points en antecesores ni el caso PID reutilizado.
+
+El fixture actual no cubre todos los intentos requeridos de modificación,
+reemplazo, DACL y renombrado, ni verifica que un antecesor no cause la
+denegación. Debe ampliarse antes de utilizarlo como evidencia de cierre.
+Además falta una prueba sincronizada de la carrera real timeout/completado.

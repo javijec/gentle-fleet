@@ -69,3 +69,8 @@ porque CI está bloqueado por facturación. El FAIL histórico anterior sigue
 siendo evidencia de la vulnerabilidad de la implementación previa.
 Directorio de runtime, otra cuenta, PID reuse y backpressure: pendientes.
 W1-B permanece ABIERTA.
+
+**Revisión posterior a 4342725:** timeout/completado tiene corrección candidata
+y prueba unitaria Windows; PID reuse y aislamiento real de dos SID siguen
+pendientes. El estado histórico de esta matriz no sustituye las corridas
+multiplataforma del SHA candidato. Ver `P7_W1_RESULTS.md`.

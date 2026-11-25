@@ -263,3 +263,29 @@ con escritura pendiente para exigir que la escritura sobreviva.
 Todos estos cambios requieren ejecución Windows nativa y full en ambos hosts.
 
 El fixture de proceso añade además una junction real en un antecesor hacia un runtime nuevo: exige rechazo sin publicar endpoint. La prueba de alias verifica previamente que el spelling alternativo llega a los archivos activos. Ambos casos siguen UNTESTED en este commit.
+
+## W1-B — revisión de timeout (candidato posterior a 4342725)
+
+- **P1, sin cerrar:** PID reutilizado entre consulta de pipe y apertura de
+  proceso; el propietario del objeto y la DACL son defensas adicionales, no
+  demuestran la identidad efectiva del peer. No se ha implementado aún una
+  verificación vinculada al token efectivo de la conexión.
+- **P2, corrección candidata:** tras timeout o fallo de espera, una operación
+  overlapped puede completar antes de `CancelIoEx`. Antes se devolvía siempre
+  el error de espera aunque `GetOverlappedResult` informase éxito. Ahora se
+  devuelve la cantidad realmente transferida; `ERROR_OPERATION_ABORTED`
+  conserva el error de espera y otro error de operación se propaga. Se mantiene
+  vivo OVERLAPPED y buffer hasta la finalización. No se añade reintento.
+- **PASS parcial en Windows:** 10/10 ejecuciones de `cargo test -p
+  fleet-protocol --locked --quiet` con 17 tests, incluyendo clasificación de
+  éxito/cancelación/error y pruebas nativas existentes. La nueva prueba es
+  unitaria; una carrera real del kernel y fallos de CancelIoEx siguen
+  **UNTESTED**. La prueba se añadió antes de la función y falló compilación
+  por símbolo ausente; esto no es una reproducción de proceso del defecto.
+- **BLOCKED:** dos usuarios Windows. El fixture existente aún no comprueba
+  todos los accesos exigidos ni descarta denegaciones de antecesores; no debe
+  aceptarse como evidencia de cierre sin corregirlo y ejecutarlo.
+- Alias SSH `linux`: **BLOCKED** por resolución de nombre; `javiomarchi`
+  conecta con host key checking habilitado. GitHub Actions **BLOCKED** por
+  facturación. El full de ambos sistemas y consolidación de este candidato
+  están pendientes. **W1-B ABIERTA; NO-GO W1-C.**

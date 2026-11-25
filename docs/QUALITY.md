@@ -227,3 +227,7 @@ Estado: **CERRADA con alcance acotado a servidor Linux + cliente Windows/Linux**
 ## CI local como alternativa explícita (P7 en adelante)
 
 Cuando Actions no pueda iniciar por facturación, registrar GitHub Actions como BLOCKED, sin atribuir el fallo al código. Se acepta evidencia local equivalente para el gate automatizado: perfiles full nativos Windows y Linux del mismo HEAD limpio, reporte conjunto PASS, revisión de logs y criterios específicos de la etapa. Quick no permite cierre. Release exige evidencia manual/real además de full; macOS y otros criterios de release conservan sus gates. No se rebajan los criterios de seguridad, no se omiten regresiones ni se convierten SKIP/BLOCKED/UNTESTED en PASS. Un fallo conocido de CI por código debe reproducirse y corregirse, no ocultarse usando CI local. Los workflows se conservan y la evidencia local no cambia los checks remotos ni las protecciones de rama. Ver [CI local](LOCAL_CI.md).
+
+Para W1-B, una prueba entre SID debe distinguir denegación del objeto protegido
+de falta de acceso a un antecesor y verificar controles positivos y negativos;
+un fixture incompleto o sin ejecución real permanece BLOCKED.

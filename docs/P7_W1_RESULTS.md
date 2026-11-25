@@ -457,3 +457,7 @@ Informe combined.json aportado por el operador: commit `846a4b227d8f005125678bab
 ### Candidato previo al cierre — StopUnconfirmed
 
 Tras informe del agente en bfccbb9, se confirmó por inspección el descarte de error de close en launcher en proceso y el falso Stopped sin handle. Se publicó candidato de corrección y regresiones, conservando StopUnconfirmed tras reinicio y no reattachando sesiones detenidas o inciertas de parada. No se ejecutaron tests ni se revisaron logs adicionales en esta sesión (sin acceso directo a los equipos); ejecutar primero regresiones core, luego full Windows/Linux del nuevo SHA limpio si pasan. Los otros candidatos P1 de proceso permanecen abiertos. No se modifica main ni se declara cierre técnico o release.
+
+### StopUnconfirmed — revalidación reportada y candidato de startup
+
+Operador confirmó que pasó todo tras 6e6499f (HEAD remoto observado d61c96fd693f64f535f960f57dd0f4bfe546d3bb). Sin nuevos informes asociados al SHA ni logs originales, PASS reportado. Se prepara corrección de startup con Child propio retenido, plazo de identidad y Hello, validación de contexto y cleanup acotado. Regresiones nuevas no ejecutadas. Mantener pendiente revisión de shutdown, evidencia de ciclo de vida real y cierre técnico W1-C.

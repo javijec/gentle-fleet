@@ -1,11 +1,11 @@
 //! Runner real: lanza y reconecta procesos `fleet-runner` mediante IPC local.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
 
 use fleet_agent::AgentError;
 use fleet_core::runner::{
@@ -38,11 +38,117 @@ fn io_error(error: std::io::Error) -> AgentError {
     }
 }
 
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(70);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_IDENTITY_BYTES: u64 = 16 * 1024;
+
+fn read_identity(stdout: impl Read) -> Result<RunnerIdentity, AgentError> {
+    let mut line = Vec::new();
+    BufReader::new(stdout)
+        .take(MAX_IDENTITY_BYTES + 1)
+        .read_until(b'\n', &mut line)
+        .map_err(io_error)?;
+    if line.len() as u64 > MAX_IDENTITY_BYTES || !line.ends_with(b"\n") {
+        return Err(AgentError {
+            code: "runner_identity_invalid".into(),
+            message: "runner identity missing, truncated or oversized".into(),
+        });
+    }
+    serde_json::from_slice(&line).map_err(|_| AgentError {
+        code: "runner_identity_invalid".into(),
+        message: "runner identity is not valid JSON".into(),
+    })
+}
+
+fn wait_identity(
+    receiver: mpsc::Receiver<Result<RunnerIdentity, AgentError>>,
+    timeout: Duration,
+) -> Result<RunnerIdentity, AgentError> {
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError {
+            code: "runner_startup_timeout".into(),
+            message: "runner did not announce identity before the startup deadline".into(),
+        }),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(AgentError {
+            code: "runner_identity_invalid".into(),
+            message: "runner identity reader ended without a result".into(),
+        }),
+    }
+}
+
+fn validate_new_identity(
+    identity: &RunnerIdentity,
+    ctx: &RunnerLaunchContext,
+    runner_id: &str,
+    pid: u32,
+    host_id: &str,
+) -> Result<(), AgentError> {
+    if identity.runner_id != runner_id
+        || identity.session_id != ctx.session_id
+        || identity.provider_id != ctx.provider_id
+        || identity.host_id != host_id
+        || identity.pid != pid
+        || identity.boot_id.is_empty()
+        || identity.generation != 1
+        || identity.protocol_version != RUNNER_WIRE
+    {
+        return Err(AgentError {
+            code: "runner_identity_invalid".into(),
+            message: "runner startup identity does not match the owned child or launch context".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Only used for an owned child before launch is accepted. Never kill by
+/// persisted PID. A stopped runner is not proof of provider/descendant closure.
+fn terminate_startup_child(child: &mut std::process::Child) -> std::io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    if let Err(error) = child.kill() {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "owned runner termination not observed",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn startup_failure(child: &mut std::process::Child, error: AgentError) -> AgentError {
+    match terminate_startup_child(child) {
+        Ok(()) => AgentError {
+            code: error.code,
+            message: format!(
+                "{}; owned runner exited; provider effects may remain uncertain",
+                fleet_agent::redact_provider_error(&error.message)
+            ),
+        },
+        Err(cleanup) => AgentError {
+            code: "runner_startup_unconfirmed".into(),
+            message: format!(
+                "{}; owned runner termination unconfirmed: {cleanup}",
+                fleet_agent::redact_provider_error(&error.message)
+            ),
+        },
+    }
+}
+
 impl ProcessHandle {
-    fn connect(
-        identity: RunnerIdentity,
-        child: Option<std::process::Child>,
-    ) -> Result<Self, AgentError> {
+    fn connect(identity: RunnerIdentity) -> Result<Self, AgentError> {
         let name = format!("fleet-runner-{}", identity.runner_id);
         let stream = connect_named(&name).map_err(io_error)?;
         let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
@@ -54,15 +160,36 @@ impl ProcessHandle {
             }),
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
-            child: Mutex::new(child),
+            child: Mutex::new(None),
             last_seq: AtomicU64::new(0),
         };
         let token = std::fs::read_to_string(runtime_dir().join(format!("{name}.token")))
             .map_err(io_error)?;
-        match handle.rpc(RunnerRequest::Hello {
+        // Cancel a stalled Hello on the actual connection, not by abandoning
+        // an RPC thread. The clone shares the Windows cancellation state.
+        let cancellation = handle.io.lock().expect("runner stream poisoned")
+            .writer.try_clone().map_err(io_error)?;
+        let (done_tx, done_rx) = mpsc::channel();
+        let watchdog = std::thread::Builder::new().spawn(move || {
+            if done_rx.recv_timeout(HELLO_TIMEOUT).is_err() {
+                let _ = cancellation.shutdown(std::net::Shutdown::Both);
+                true
+            } else {
+                false
+            }
+        }).map_err(io_error)?;
+        let response = handle.rpc(RunnerRequest::Hello {
             identity: handle.identity.clone(),
             token,
-        })? {
+        });
+        let _ = done_tx.send(());
+        if watchdog.join().unwrap_or(true) {
+            return Err(AgentError {
+                code: "runner_hello_timeout".into(),
+                message: "runner Hello did not finish before the deadline".into(),
+            });
+        }
+        match response? {
             RunnerResponse::Hello {
                 identity,
                 protocol_version,
@@ -71,10 +198,10 @@ impl ProcessHandle {
             } if identity == handle.identity && protocol_version == RUNNER_WIRE => {
                 handle.last_seq.store(last_ack_seq, Ordering::SeqCst);
             }
-            other => {
+            _ => {
                 return Err(AgentError {
                     code: "runner_identity_invalid".into(),
-                    message: format!("unexpected runner hello response: {other:?}"),
+                    message: "unexpected runner hello response or identity mismatch".into(),
                 })
             }
         }
@@ -304,16 +431,17 @@ impl RunnerLauncher for ProcessRunnerLauncher {
             .map(|record| record.identity.runner_id.clone())
             .unwrap_or_else(|| format!("runner-{}", ctx.session_id));
         let name = format!("fleet-runner-{runner_id}");
-        let (identity, child) = if let Some(record) = &ctx.existing {
-            (record.identity.clone(), None)
-        } else {
-            let binary = std::env::var("FLEET_RUNNER_BIN")
+        if let Some(record) = &ctx.existing {
+            return Ok(Box::new(ProcessHandle::connect(record.identity.clone())?));
+        }
+        {
+            let binary = std::env::var_os("FLEET_RUNNER_BIN")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| {
+                .unwrap_or_else(|| {
                     std::env::current_exe()
                         .ok()
-                        .and_then(|path| path.parent().map(|parent| parent.join("fleet-runner")))
-                        .unwrap_or_else(|| PathBuf::from("fleet-runner"))
+                        .and_then(|path| path.parent().map(|parent| parent.join(format!("fleet-runner{}", std::env::consts::EXE_SUFFIX))))
+                        .unwrap_or_else(|| PathBuf::from(format!("fleet-runner{}", std::env::consts::EXE_SUFFIX)))
                 });
             let mut command = std::process::Command::new(binary);
             command
@@ -325,6 +453,7 @@ impl RunnerLauncher for ProcessRunnerLauncher {
                 .arg(&ctx.provider_id)
                 .arg("--workspace")
                 .arg(&ctx.workspace)
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(
                     std::fs::File::create(runtime_dir().join(format!("{name}.err")))
@@ -339,21 +468,120 @@ impl RunnerLauncher for ProcessRunnerLauncher {
                 command.env("FLEET_FAKE_FAIL_ANSWER", "1");
             }
             let mut child = command.spawn().map_err(io_error)?;
-            let stdout = child.stdout.take().ok_or_else(|| AgentError {
-                code: "runner_launch".into(),
-                message: "runner stdout is not piped".into(),
-            })?;
-            let mut line = String::new();
-            BufReader::new(stdout)
-                .read_line(&mut line)
-                .map_err(io_error)?;
-            let identity: RunnerIdentity =
-                serde_json::from_str(line.trim()).map_err(|error| AgentError {
-                    code: "runner_identity_invalid".into(),
-                    message: error.to_string(),
+            let result = (|| -> Result<ProcessHandle, AgentError> {
+                let stdout = child.stdout.take().ok_or_else(|| AgentError {
+                    code: "runner_launch".into(),
+                    message: "runner stdout is not piped".into(),
                 })?;
-            (identity, Some(child))
+                let (sender, receiver) = mpsc::channel();
+                // The worker owns only the startup read pipe, not the Child.
+                // On timeout the parent terminates the owned runner; it does
+                // not wait indefinitely for EOF from inherited descendants.
+                std::thread::Builder::new().spawn(move || {
+                    let _ = sender.send(read_identity(stdout));
+                }).map_err(io_error)?;
+                let identity = wait_identity(receiver, STARTUP_TIMEOUT)?;
+                let host_id = std::env::var("FLEET_HOST_ID").unwrap_or_else(|_| "local-host".into());
+                validate_new_identity(&identity, &ctx, &runner_id, child.id(), &host_id)?;
+                let handle = ProcessHandle::connect(identity)?;
+                if child.try_wait().map_err(io_error)?.is_some() {
+                    return Err(AgentError {
+                        code: "runner_gone".into(),
+                        message: "owned runner exited during startup".into(),
+                    });
+                }
+                Ok(handle)
+            })();
+            match result {
+                Ok(handle) => {
+                    *handle.child.lock().expect("child poisoned") = Some(child);
+                    Ok(Box::new(handle))
+                }
+                Err(error) => Err(startup_failure(&mut child, error)),
+            }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_identity_requires_complete_bounded_frame() {
+        for bytes in [b"".to_vec(), b"{}".to_vec(), b"invalid\n".to_vec(), vec![b'x'; MAX_IDENTITY_BYTES as usize + 1]] {
+            assert_eq!(read_identity(bytes.as_slice()).unwrap_err().code, "runner_identity_invalid");
+        }
+        let identity = RunnerIdentity {
+            runner_id: "runner-ses_1".into(),
+            session_id: "ses_1".into(),
+            provider_id: "fake".into(),
+            host_id: "local-host".into(),
+            boot_id: "boot".into(),
+            pid: 42,
+            protocol_version: RUNNER_WIRE.into(),
+            generation: 1,
         };
-        Ok(Box::new(ProcessHandle::connect(identity, child)?))
+        let mut bytes = serde_json::to_vec(&identity).unwrap();
+        bytes.push(b'\n');
+        assert_eq!(read_identity(bytes.as_slice()).unwrap(), identity);
+        let ctx = RunnerLaunchContext {
+            session_id: "ses_1".into(),
+            provider_id: "fake".into(),
+            workspace: PathBuf::new(),
+            mode: fleet_domain::RunnerMode::Auto,
+            existing: None,
+            ask_shell: false,
+            fail_answer: false,
+        };
+        validate_new_identity(&identity, &ctx, "runner-ses_1", 42, "local-host").unwrap();
+        assert!(validate_new_identity(&identity, &ctx, "runner-ses_1", 43, "local-host").is_err());
+        assert!(validate_new_identity(&identity, &ctx, "runner-other", 42, "local-host").is_err());
+        assert!(validate_new_identity(&identity, &ctx, "runner-ses_1", 42, "other-host").is_err());
+    }
+
+    #[test]
+    fn silent_startup_identity_is_bounded() {
+        let (_sender, receiver) = mpsc::channel();
+        let error = wait_identity(receiver, Duration::from_millis(20)).unwrap_err();
+        assert_eq!(error.code, "runner_startup_timeout");
+    }
+
+    #[test]
+    fn startup_cleanup_terminates_only_owned_child() {
+        const CHILD: &str = "GF_TEST_STARTUP_CLEANUP_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // Parent owns stdin and keeps the pipe open until cleanup.
+            let mut byte = [0];
+            let _ = std::io::stdin().read(&mut byte);
+            return;
+        }
+        struct Guard(std::process::Child);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = terminate_startup_child(&mut self.0);
+            }
+        }
+        let spawn = || {
+            Guard(std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "process_runner::tests::startup_cleanup_terminates_only_owned_child"])
+                .env(CHILD, "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap())
+        };
+        let mut owned = spawn();
+        let mut sentinel = spawn();
+        let failure = startup_failure(&mut owned.0, AgentError {
+            code: "runner_startup_timeout".into(),
+            message: "fixture".into(),
+        });
+        assert_eq!(failure.code, "runner_startup_timeout");
+        assert!(owned.0.try_wait().unwrap().is_some());
+        assert!(sentinel.0.try_wait().unwrap().is_none());
+        terminate_startup_child(&mut sentinel.0).unwrap();
     }
 }

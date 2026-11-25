@@ -97,10 +97,8 @@ fn overlapped_op(
     if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
         return Err(error);
     }
-    if let Some((_, true)) = stream {
-        if let Some(gate) = gate.as_mut() {
-            **gate = Some((&mut operation as *mut OVERLAPPED) as usize);
-        }
+    if let (Some((_, true)), Some(gate)) = (stream, gate.as_mut()) {
+        **gate = Some((&mut operation as *mut OVERLAPPED) as usize);
     }
     drop(gate);
     let milliseconds = timeout.map_or(INFINITE, |duration| {
@@ -425,21 +423,78 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     created
 }
 
-// Keep a directory handle without FILE_SHARE_DELETE for the lifetime of
-// the listener. Reject pre-existing directories with unexpected ACLs rather
-// than silently taking ownership or changing permissions on arbitrary paths.
-pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
+// Keep directory handles without FILE_SHARE_DELETE for the lifetime of the
+// listener. Identity is derived from the open directory, not path spelling.
+pub struct RuntimeGuard {
+    _ancestors: Vec<OwnedHandle>,
+    _directory: OwnedHandle,
+    identity: (u32, u32, u32),
+}
+
+fn open_runtime_directory(
+    path: &Path,
+    access: u32,
+) -> io::Result<(
+    OwnedHandle,
+    windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
+)> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_WRITE,
+    };
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let raw = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(raw, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(invalid(
+            "Fleet runtime path must contain real directories, not reparse points",
+        ));
+    }
+    Ok((handle, info))
+}
+
+// Reject pre-existing directories with unexpected ACLs rather than taking
+// ownership or changing permissions on arbitrary paths.
+pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_WRITE,
-    };
-    if !path.is_absolute() {
-        return Err(invalid("Fleet runtime must be an absolute path"));
+    use std::path::Component;
+    use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, FILE_READ_ATTRIBUTES};
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return Err(invalid(
+            "Fleet runtime must be an absolute path without parent traversal",
+        ));
+    }
+    // Open ancestors from the root down, without following a reparse point at
+    // each step. Retain the handles to prevent ancestor rename/delete races.
+    let mut parents: Vec<_> = path.ancestors().skip(1).collect();
+    parents.reverse();
+    let mut ancestors = Vec::with_capacity(parents.len());
+    for parent in parents {
+        let (handle, _) = open_runtime_directory(parent, FILE_READ_ATTRIBUTES)?;
+        ancestors.push(handle);
     }
     let sid = sid_string(&current_sid()?)?;
     let expected = format!("O:{sid}D:P(A;;FA;;;{sid})");
@@ -472,33 +527,9 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
             return Err(error);
         }
     }
-    // READ_CONTROL, with no delete sharing, and do not follow a junction.
-    let raw = unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            0x0002_0000,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            ptr::null_mut(),
-        )
-    };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    if unsafe { GetFileInformationByHandle(raw, &mut info) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
-        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    {
-        return Err(invalid(
-            "Fleet runtime must be a real directory, not a reparse point",
-        ));
-    }
+    // READ_CONTROL; hold the validated directory for the listener lifetime.
+    let (handle, info) = open_runtime_directory(path, 0x0002_0000)?;
+    let raw = handle.as_raw_handle();
     let flags = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
@@ -549,11 +580,19 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<OwnedHandle> {
             "Fleet runtime owner or DACL is not private; choose a new runtime directory",
         ));
     }
-    Ok(handle)
+    Ok(RuntimeGuard {
+        _ancestors: ancestors,
+        _directory: handle,
+        identity: (
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ),
+    })
 }
 
 pub struct Listener {
-    _runtime_guard: Option<OwnedHandle>,
+    _runtime_guard: Option<RuntimeGuard>,
     name: String,
     name_wide: Vec<u16>,
     sid: Vec<u8>,
@@ -561,7 +600,18 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn bind(runtime: &std::path::Path, instance: &str) -> io::Result<Self> {
+    #[cfg(test)]
+    fn bind(runtime: &Path, instance: &str) -> io::Result<Self> {
+        Self::bind_key(runtime, instance)
+    }
+
+    pub fn bind_runtime(guard: RuntimeGuard, instance: &str) -> io::Result<Self> {
+        let mut listener = Self::bind_key(guard.identity, instance)?;
+        listener._runtime_guard = Some(guard);
+        Ok(listener)
+    }
+
+    fn bind_key(key: impl Hash, instance: &str) -> io::Result<Self> {
         if instance.is_empty()
             || !instance
                 .bytes()
@@ -574,7 +624,7 @@ impl Listener {
         }
         let sid = current_sid()?;
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        runtime.hash(&mut hash);
+        key.hash(&mut hash);
         sid.hash(&mut hash);
         let name = format!(r"\\.\pipe\gentle-fleet-{:016x}-{instance}", hash.finish());
         let name_wide = wide(&name);
@@ -586,10 +636,6 @@ impl Listener {
             sid,
             pending: Mutex::new(Some(first)),
         })
-    }
-
-    pub fn hold_runtime(&mut self, guard: OwnedHandle) {
-        self._runtime_guard = Some(guard);
     }
 
     pub fn address(&self) -> &str {
@@ -947,6 +993,62 @@ mod tests {
         server.join().unwrap();
         assert_eq!(read.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(write.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn read_shutdown_does_not_cancel_pending_write() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-read-close-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "read-close").unwrap();
+        let address = listener.address().to_owned();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (drain_tx, drain_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            drain_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![0u8; 8 * 1024 * 1024];
+            stream.read_exact(&mut bytes).unwrap();
+            assert!(bytes.iter().all(|byte| *byte == b'x'));
+        });
+        let client = connect(&address).unwrap();
+        accepted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let file = client.file().unwrap();
+        let shared = Arc::clone(&client.0);
+        let (pending_tx, pending_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let bytes = vec![b'x'; 8 * 1024 * 1024];
+            let handle = file.as_raw_handle();
+            let result = overlapped_op(
+                handle,
+                Some(Duration::from_secs(8)),
+                Some((&shared, false)),
+                |operation, count| {
+                    let result = unsafe {
+                        WriteFile(handle, bytes.as_ptr(), bytes.len() as u32, count, operation)
+                    };
+                    let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                    let _ = pending_tx.send(result == 0 && error == ERROR_IO_PENDING);
+                    unsafe { windows_sys::Win32::Foundation::SetLastError(error) };
+                    result
+                },
+            );
+            let _ = done_tx.send(result);
+        });
+        assert!(pending_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        client.shutdown(Shutdown::Read).unwrap();
+        drain_tx.send(()).unwrap();
+        let result = done_rx.recv_timeout(Duration::from_secs(8));
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(result.unwrap().unwrap(), 8 * 1024 * 1024);
     }
 
     #[test]

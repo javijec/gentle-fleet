@@ -148,6 +148,29 @@ try {
     if (([IO.File]::ReadAllText($addressFile)).Trim() -ne $address) {
         throw 'second daemon replaced the active endpoint'
     }
+    # The same physical directory reached with an alternate spelling must
+    # not reserve a distinct pipe and replace the original credentials.
+    $aliasRuntime = Join-Path $root 'RUNTIME'
+    $env:FLEET_RUNTIME_DIR = $aliasRuntime
+    $env:FLEET_DB_PATH = Join-Path $root 'alias-competitor/fleet.sqlite'
+    $tokenFile = Join-Path $runtime 'fleetd.token'
+    $originalToken = [IO.File]::ReadAllText($tokenFile)
+    $aliasDaemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru
+    try {
+        if (-not $aliasDaemon.WaitForExit(10000)) {
+            throw 'alternate runtime spelling bypassed endpoint reservation'
+        }
+        if ($aliasDaemon.ExitCode -eq 0 -or $daemon.HasExited -or
+            ([IO.File]::ReadAllText($addressFile)).Trim() -ne $address -or
+            [IO.File]::ReadAllText($tokenFile) -ne $originalToken) {
+            throw 'alternate runtime spelling affected the active endpoint'
+        }
+    } finally {
+        if (-not $aliasDaemon.HasExited) { $aliasDaemon.Kill(); [void]$aliasDaemon.WaitForExit(5000) }
+        $aliasDaemon.Dispose()
+        $env:FLEET_RUNTIME_DIR = $runtime
+    }
+    Write-Output 'PASS: alternate runtime spelling cannot replace active endpoint'
     # An unclean shutdown leaves both files behind. The next daemon must
     # replace them only after reserving the endpoint, and remain usable.
     $daemon.Kill()

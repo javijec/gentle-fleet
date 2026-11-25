@@ -245,3 +245,19 @@ points del último componente y el guard de runtime existente se conservan;
 la seguridad de antecesores/reparse points de ruta completa sigue pendiente
 de solución y pruebas. GitHub Actions sigue BLOCKED por facturación.
 **W1-B ABIERTA; no merge ni W1-C.**
+
+
+### Endurecimiento adicional (candidato, UNTESTED)
+
+El nombre de pipe derivado de la ruta textual podía distinguir alias de la
+misma carpeta (por ejemplo distinto casing en NTFS), dejando que un daemon
+competidor reservara otro pipe y modificara los archivos de endpoint. Se usa
+ahora la identidad de directorio del handle (volumen e índice de archivo)
+para el nombre, con SID e instancia, y se conserva el guard durante el
+listener. Se añade intento de colisión con spelling alternativo del runtime.
+El guard abre los antecesores de raíz a hoja y rechaza reparse points en
+cada componente; retiene handles sin compartir DELETE. No se afirma que
+esto cubra todas las mutaciones de namespace/ACL por identidades privilegiadas,
+ni rutas UNC o filesystem no probado. Se añade regresión de Shutdown::Read
+con escritura pendiente para exigir que la escritura sobreviva.
+Todos estos cambios requieren ejecución Windows nativa y full en ambos hosts.

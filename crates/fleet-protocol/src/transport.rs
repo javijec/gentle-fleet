@@ -148,8 +148,7 @@ impl LocalListener {
     pub fn bind_named(name: &str) -> io::Result<Self> {
         let directory = runtime_dir();
         let guard = windows_pipe::private_runtime(&directory, true)?;
-        let mut listener = windows_pipe::Listener::bind(&directory, name)?;
-        listener.hold_runtime(guard);
+        let listener = windows_pipe::Listener::bind_runtime(guard, name)?;
         let address = listener.address().to_string();
         // Only the daemon owns fleetd.token. Runners generate their own
         // independent token during startup and must never rotate the daemon's.

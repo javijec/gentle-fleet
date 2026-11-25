@@ -262,9 +262,13 @@ mod tests {
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         #[cfg(windows)]
-        return root.join("data").join("spool.sqlite");
+        {
+            root.join("data").join("spool.sqlite")
+        }
         #[cfg(unix)]
-        root.join("spool.sqlite")
+        {
+            root.join("spool.sqlite")
+        }
     }
 
     fn cleanup(db: &Path) {
@@ -381,6 +385,22 @@ mod tests {
             (1..=64).collect::<Vec<_>>()
         );
         drop(second);
+        cleanup(&db);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_live_spool_sidecars_are_private() {
+        let db = path("sidecars");
+        let spool = Spool::open(&db).unwrap();
+        spool.append(&event(1)).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = db.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            assert!(Path::new(&sidecar).is_file(), "missing live spool sidecar");
+        }
+        spool._directory.validate_sqlite_files(&db).unwrap();
+        drop(spool);
         cleanup(&db);
     }
 

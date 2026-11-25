@@ -213,6 +213,30 @@ try {
     Assert-RunnerToken $identity2 $token1 $false
     Assert-RunnerToken $identity1 $token1 $true
     Assert-RunnerToken $identity2 $token2 $true
+    # Both live standalone runners must use distinct durable databases, not
+    # the endpoint directory. Their SQLite files inherit owner-only access.
+    $ownerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    foreach ($id in @('w1a-one', 'w1a-two')) {
+        $name = "fleet-runner-$id.spool.sqlite"
+        $spoolPath = Join-Path (Split-Path -Parent $env:FLEET_DB_PATH) $name
+        if (-not (Test-Path -LiteralPath $spoolPath -PathType Leaf)) {
+            throw "durable runner spool missing: $name"
+        }
+        if (Test-Path -LiteralPath (Join-Path $runtime $name)) {
+            throw "runner spool unexpectedly stored in runtime: $name"
+        }
+        $acl = Get-Acl -LiteralPath $spoolPath
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $ownerSid) {
+            throw "spool owner mismatch: $name"
+        }
+        foreach ($rule in $acl.Access) {
+            if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ne $ownerSid) {
+                throw "spool grants access to another SID: $name"
+            }
+        }
+    }
+    Write-Output 'PASS: distinct durable runner spools have owner-only access'
     Write-Output 'PASS: daemon and runner credentials are isolated and invalid tokens are rejected'
 } finally {
     if ($null -ne $daemon -and -not $daemon.HasExited) {

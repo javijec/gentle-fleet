@@ -99,9 +99,11 @@ fn prepare_token(runner_id: &str) -> io::Result<String> {
 }
 
 #[cfg(windows)]
-fn durable_spool_path(runner_id: &str, runtime: &std::path::Path) -> io::Result<PathBuf> {
-    use fleet_protocol::transport::database_path;
-
+fn durable_spool_path(
+    runner_id: &str,
+    runtime: &std::path::Path,
+    database: &std::path::Path,
+) -> io::Result<PathBuf> {
     // Restrict identifiers to a canonical Windows filename alphabet. In
     // particular, case aliases, path traversal and alternate streams must
     // never cause two logical runner IDs to address the same spool.
@@ -131,24 +133,54 @@ fn durable_spool_path(runner_id: &str, runtime: &std::path::Path) -> io::Result<
             Err(error) => return Err(error),
         }
     }
-    let database = database_path()?;
     let directory = database
         .parent()
         .ok_or_else(|| io::Error::other("durable database requires a parent directory"))?;
-    let spool = directory.join(name);
-    if database
-        .file_name()
-        .is_some_and(|file| file.to_string_lossy().eq_ignore_ascii_case(&spool.file_name().unwrap().to_string_lossy()))
-    {
-        return Err(io::Error::other("runner spool conflicts with daemon database"));
+    // Reserve the entire spool filename namespace, including SQLite sidecars.
+    if database.file_name().is_some_and(|file| {
+        file.to_string_lossy()
+            .to_ascii_lowercase()
+            .starts_with("fleet-runner-")
+    }) {
+        return Err(io::Error::other(
+            "daemon database conflicts with reserved runner spool namespace",
+        ));
     }
-    Ok(spool)
+    Ok(directory.join(name))
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn durable_spool_names_and_legacy_rejection() {
+    let root = std::env::temp_dir().join(format!("gf-spool-path-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let runtime = root.join("runtime");
+    std::fs::create_dir(&runtime).unwrap();
+    let database = root.join("data").join("fleet.sqlite");
+    let first = durable_spool_path("runner-one", &runtime, &database).unwrap();
+    let second = durable_spool_path("runner-two", &runtime, &database).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(first.parent(), database.parent());
+    for invalid in ["", "Runner-one", "../other", "runner:stream"] {
+        assert!(durable_spool_path(invalid, &runtime, &database).is_err());
+    }
+    let collision = database.with_file_name("FLEET-RUNNER-one.spool.sqlite-wal");
+    assert!(durable_spool_path("one", &runtime, &collision).is_err());
+    let legacy = runtime.join("fleet-runner-runner-one.spool.sqlite-wal");
+    std::fs::write(&legacy, b"preserve").unwrap();
+    assert!(durable_spool_path("runner-one", &runtime, &database).is_err());
+    assert_eq!(std::fs::read(&legacy).unwrap(), b"preserve");
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 fn main() -> io::Result<()> {
     let args = parse_args();
     #[cfg(windows)]
-    let spool_path = durable_spool_path(&args.runner_id, &runtime_dir())?;
+    let spool_path = durable_spool_path(
+        &args.runner_id,
+        &runtime_dir(),
+        &fleet_protocol::transport::database_path()?,
+    )?;
     let listener = LocalListener::bind_named(&format!("fleet-runner-{}", args.runner_id))?;
     let token = prepare_token(&args.runner_id)?;
     #[cfg(unix)]

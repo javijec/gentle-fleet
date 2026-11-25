@@ -1,87 +1,97 @@
-# Gentle Fleet 2.0
+# Gentle Fleet 2.0 — Headless Agent Session Engine
 
-Motor Rust de sesiones persistentes para agentes de programación, independiente de la interfaz: ejecución local y remota mediante SSH, recuperación de eventos y múltiples clientes. **Proyecto experimental, no release de producción.**
+Motor de sesiones persistentes, locales y remotas para agentes de programación, escrito en Rust. Gestiona procesos, eventos, persistencia y reconexión independientemente de cualquier interfaz gráfica. **Proyecto experimental: no es todavía un release de producción.**
+
+## Qué permite
+
+Crear y observar sesiones de Gentle Shell, Pi, Codex y OpenCode, enviar prompts, recibir eventos y herramientas, resolver permisos cuando el proveedor los soporta y reconectar sin depender del ciclo de vida del cliente. El mismo contrato Fleet funciona localmente y por SSH; la ejecución y los datos permanecen en el host correspondiente.
+
+La meta es que aplicaciones como Gentle Shell GPUI puedan utilizar Fleet como backend opcional de ejecución, no construir otra interfaz gráfica.
+
+## Arquitectura
+
+```text
+fleetctl / clientes externos (por ejemplo Gentle Shell GPUI)
+                       |
+                  fleet-client
+                       |
+              IPC local / SSH
+                       |
+                    fleetd
+                 /         \
+            SQLite      fleet-runner
+                            |
+                   Driver / agente real
+```
+
+| Entregable | Responsabilidad |
+| --- | --- |
+| `fleetd` | Daemon por usuario y host; sesiones, operaciones y eventos |
+| `fleet-runner` | Proceso independiente; ejecución y recuperación según proveedor |
+| `fleetctl` | Cliente CLI y administración |
+| `fleet-client` | SDK Rust sin dependencia gráfica |
+| `fleet-protocol` | Contrato de comunicación versionable |
+
+No compartir SQLite entre hosts. No abrir listeners TCP públicos por defecto. El usuario local es la frontera de confianza: procesos del mismo UID/SID no están aislados entre sí. No autoaprobar solicitudes ni reenviar prompts inciertos.
+
+## Estado actual
 
 | Plataforma | Servidor | Cliente |
 | --- | --- | --- |
-| Linux x86_64 | Validado para el alcance P0–P5 | CLI validado |
-| Windows 11 | Experimental; aceptación técnica P7 pendiente | CLI por SSH hacia Linux validado en P5 |
+| Linux x86_64 | Validado en el alcance P0–P5 | CLI validado; SDK P6.1 validado en Linux |
+| Windows 11 | Experimental, aceptación técnica P7 pendiente | CLI por SSH hacia Linux validado en P5 |
 | macOS | Sin validación funcional completa | Sin validación funcional completa |
 
-Las capacidades de cada proveedor y la evidencia por fase están en el [roadmap](docs/ROADMAP.md). P6 y P7 no están integradas en main al preparar esta rama. Los resultados históricos no acreditan automáticamente el HEAD actual. No se garantiza aislamiento entre usuarios Windows ni supervivencia al reinicio físico del host.
+P0–P5 están integrados en main. P6 y P7 se desarrollan en ramas; los resultados históricos no acreditan automáticamente HEAD. Ver [roadmap](docs/ROADMAP.md) y [matriz Windows](docs/P7_WINDOWS_MATRIX.md) en la rama de desarrollo. La supervivencia a cierre del cliente y caída del daemon está validada en Linux dentro del alcance probado; no equivale a garantizar supervivencia al reinicio del host o resume de todos los proveedores.
 
-Este es un **inicio limpio**: no se portan ni heredan los módulos de los repositorios anteriores. El historial de GitHub antiguo puede quedar archivado, pero sus decisiones y su código no son la base de esta versión. No se promete compatibilidad de bases SQLite ni del wire anterior; la compatibilidad comienza en el primer contrato publicado de v2.
+| Proveedor | Estado Linux |
+| --- | --- |
+| OpenCode | Driver real, chat, herramientas y aprobaciones verificadas en alcance P1–P4 |
+| Codex | Driver real; adopción con escritura bloqueada hasta demostrar exclusividad |
+| Pi | Driver real; aprobaciones nativas no soportadas en instalación probada |
+| Gentle Shell | Driver real; permisos interactivos y perfiles sin validar, cambio de modo e importación no verificada restringidos |
 
-## Producto
+## Desarrollo sin GUI como objetivo
 
-Gentle Fleet es un gestor multiplataforma, independiente de la interfaz, para sesiones conversacionales de agentes de programación. Una persona puede iniciar varios agentes, enviar prompts, ver mensajes y herramientas, aprobar solicitudes, cerrar una interfaz sin terminar el trabajo y reconectar desde otro cliente. El mismo modelo de sesión sirve localmente y en máquinas remotas.
+La compilación actual todavía conserva `apps/desktop` como cliente experimental histórico. P6.2-A/B quedan como evidencia; P6.2-C y P7-W3 gráfico se retiran del roadmap. P7-H separará el workspace y las dependencias gráficas del build/test/release obligatorio del motor. **Ese desacople aún no está implementado**: los gates existentes se mantienen hasta validarlo.
 
-### Prioridades
+Para desarrollar el motor, con Rust estable y las dependencias de plataforma descritas en [CI local](docs/LOCAL_CI.md):
 
-1. **Linux y Windows** como plataformas objetivo desde el primer diseño; desarrollo inicial sobre Linux. macOS después de las primeras pruebas de portabilidad.
-2. **Gentle Shell (Pi), Codex y OpenCode** como integraciones previstas. Se implementa un único driver vertical primero y después los otros, sin modificar la lógica de sesiones.
-3. **CLI y SDK primero**, cliente GPUI después. Todos hablan una única API Fleet; ni Desktop ni CLI gestionan procesos de agentes directamente.
-4. **Daemon por usuario y por host**. Procesos con el mismo UID/SID forman parte de un entorno personal de confianza; no se promete aislamiento entre ellos.
-5. **Persistencia y reconexión reales**, distinguiendo desconexión de cliente, caída de daemon, muerte del runner, reinicio de host y capacidad nativa de reanudar un proveedor.
-6. **Core independiente de Herdr**. Herdr puede administrar las terminales del entorno de desarrollo, no el runtime de Fleet.
+```sh
+cargo build -p fleetd -p fleet-runner -p fleetctl --locked
+cargo test -p fleet-client --locked
+```
 
-## Entrega primera (MVP verificable)
+Estos comandos son un punto de entrada al backend, no sustituyen las pruebas full vigentes ni demuestran todavía un build completamente libre de resolución gráfica. Consultar [AGENTS.md](AGENTS.md) y [QUALITY.md](docs/QUALITY.md) para los checks obligatorios. Las pruebas con proveedores reales son opt-in; requieren su propia instalación y autenticación. No publicar logs, perfiles o credenciales.
 
-Abrir un proyecto local → iniciar un agente → escribir un prompt → ver texto y herramientas en orden → recibir/contestar un permiso → cerrar CLI → reabrir CLI y recuperar timeline → detener sesión. Debe funcionar con **dos clientes a la vez** y sobrevivir a la caída de la interfaz. No se anuncia supervivencia a daemon/host crash hasta que sus pruebas pasen.
+## Camino al primer release
 
-## Qué NO se implementa en el primer corte
+1. P7-W1: cerrar IPC, persistencia, ciclo de vida y recuperación Windows sin reducir seguridad.
+2. P7-W2: validar proveedores nativos.
+3. P7-H: desacoplar GPUI y demostrar build/test headless.
+4. P7-W4: SSH bidireccional y configuración portable.
+5. P7-O/S: operación, distribución y contrato público/SDK.
+6. P7-M: macOS con evidencia nativa.
 
-Orquestación autónoma multiagente, worktrees automáticos, CI/CD, navegador, soporte móvil, sincronización entre hosts, sistema de plugins de terceros, cuentas centralizadas, servidor público TCP, aislamiento contra procesos del mismo usuario y compatibilidad con el antiguo Protocol v1.
+Puede planificarse una entrega preliminar de alcance Linux con cliente SSH Windows, sujeta a sus propios criterios de seguridad, operación, API, instalación y publicación. Windows nativo y macOS se anunciarán únicamente con sus gates aceptados. El cierre administrativo W1-B no equivale a aceptación técnica; no se inicia W1-C antes de su gate. El aislamiento efectivo entre usuarios Windows sigue pendiente para release.
 
-## Documentos normativos
+## Documentación
 
-- [Producto y alcance](docs/PRODUCT.md)
-- [Arquitectura y límites](docs/ARCHITECTURE.md)
-- [Contratos y flujo de eventos](docs/API.md)
-- [Sesiones, operaciones y recuperación](docs/LIFECYCLE.md)
-- [Drivers para agentes](docs/DRIVERS.md)
-- [Persistencia y consistencia](docs/PERSISTENCE.md)
-- [Seguridad y plataformas](docs/SECURITY_AND_PLATFORMS.md)
-- [Pruebas y aceptación](docs/QUALITY.md)
-- [Ruta de implementación](docs/ROADMAP.md)
-- [Decisiones y alternativas](docs/DECISIONS.md)
-- [Referencias investigadas](docs/REFERENCES.md)
-- [Ejemplo conceptual de flujo](examples/chat-flow.jsonl)
+- [Producto y alcance](docs/PRODUCT.md), [arquitectura](docs/ARCHITECTURE.md), [roadmap vigente](docs/ROADMAP.md), [decisiones](docs/DECISIONS.md).
+- [API](docs/API.md), [ciclo de vida](docs/LIFECYCLE.md), [drivers](docs/DRIVERS.md), [persistencia](docs/PERSISTENCE.md).
+- [Seguridad y plataformas](docs/SECURITY_AND_PLATFORMS.md), [calidad](docs/QUALITY.md), [CI local](docs/LOCAL_CI.md).
+- Evidencia: [P0](docs/P0_FINDINGS.md), [P1](docs/P1_RESULTS.md), [P2](docs/P2_RESULTS.md), [P3](docs/P3_RESULTS.md), [P4](docs/P4_4_RESULTS.md), [P5](docs/P5_RESULTS.md), [P6.1](docs/P6_1_RESULTS.md), [P7-W1](docs/P7_W1_RESULTS.md).
+- [Ejemplo conceptual de eventos](examples/chat-flow.jsonl), [pruebas de proceso](tests/), [referencias](docs/REFERENCES.md).
 
-### Investigación P0 (evidencia de motores reales)
+## Fuera de alcance
 
-- [Resumen ejecutivo y cierre](docs/P0_FINDINGS.md)
-- [Gentle Shell / Pi](docs/research/PI.md)
-- [Codex](docs/research/CODEX.md)
-- [OpenCode](docs/research/OPENCODE.md)
-- [Comparación y contratos de `AgentDriver`](docs/research/PROVIDER_COMPARISON.md)
-- [Limitaciones conocidas](docs/research/KNOWN_LIMITATIONS.md)
-- [Programas y fixtures de los spikes](spikes/p0/README.md)
+No desarrollar una GPUI propia ni convertir Fleet en IDE completo. Git/worktrees, filesystem y PTY remotos, orquestación autónoma, plugins y automatizaciones requieren una decisión posterior y prueba vertical. Integraciones de clientes externos son opcionales y no bloquean el producto headless. No prometer compatibilidad con el antiguo wire o las bases de datos previas al reset de v2.
 
-### Implementación P1
+No importar ni borrar historiales anteriores por fuerza. Los contratos y resultados ya documentados permanecen como evidencia; la decisión headless en el roadmap prevalece sobre objetivos gráficos históricos, sin alterar criterios de seguridad.
 
-- [Resultados reales de P1](docs/P1_RESULTS.md)
-- [Estabilización y concurrencia P1.1](docs/P1_1_RESULTS.md)
-- [Persistencia y aprobaciones P2](docs/P2_RESULTS.md)
-- [Runner persistente y recuperación P3](docs/P3_RESULTS.md)
-- [Código de los crates](crates/)
-- [Pruebas de proceso](tests/)
+## Colaboración y preparación pública
 
-P0-D1…D6 están **ratificadas** en [`docs/DECISIONS.md`](docs/DECISIONS.md). P1 usa OpenCode como primer driver; Codex y Gentle Shell/Pi están previstos para P4.
+- [Contribuir](CONTRIBUTING.md) · [Código de conducta](CODE_OF_CONDUCT.md) · [Licencia MIT](LICENSE).
+- [Reportar vulnerabilidades](SECURITY.md) · [Auditoría de publicación](docs/PUBLIC_READINESS.md).
 
-## Política de código heredado
-
-Los repositorios y ramas previos **no son dependencias**. No copiar clases, módulos, protocolos, migraciones o patrones de recuperación sin una decisión explícita respaldada por un test vertical. El desarrollo nuevo empieza sobre un repositorio o rama de árbol limpio. **Nunca eliminar historiales antiguos por fuerza ni mezclar automáticamente las ramas anteriores**.
-
-## Primera orden de trabajo
-
-Seguir [PLAN.md](PLAN.md). Antes de implementar Core real hay tres experimentos cortos de interoperabilidad que deben producir fixtures verificables. Consultar [AGENTS.md](AGENTS.md) para las reglas del agente de desarrollo.
-
-## Desarrollo y seguridad
-
-Con Rust estable y las dependencias de plataforma indicadas en [CI local](docs/LOCAL_CI.md), ejecutar `cargo build --workspace --locked`, `cargo fmt --all -- --check` y `cargo test --workspace --locked`. Las pruebas con proveedores reales son opt-in y requieren instalación/autenticación propias. No publicar logs, perfiles o credenciales.
-
-- [Contribuir](CONTRIBUTING.md)
-- [Reportar vulnerabilidades](SECURITY.md)
-- [Preparación para publicación](docs/PUBLIC_READINESS.md)
-- [Licencia MIT](LICENSE)
+La publicación sigue condicionada a la auditoría del historial, credenciales, metadatos y demás criterios de PUBLIC-READINESS. No cambiar la visibilidad antes de aceptar ese gate.

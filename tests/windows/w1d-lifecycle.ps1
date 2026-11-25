@@ -169,7 +169,18 @@ try {
         }
         Start-Sleep -Milliseconds 100
     }
-    $workspaceId = (Invoke-FixtureCli @('workspace', 'add', $workspace) -split "\t")[0]
+    # Evaluate the function call before applying the split operator. Inside
+    # command argument mode -split is not the intended binary expression.
+    $workspaceReceipt = Invoke-FixtureCli @('workspace', 'add', $workspace)
+    $workspaceFields = $workspaceReceipt -split "\t", 2
+    if ($workspaceFields.Count -ne 2 -or [string]::IsNullOrWhiteSpace($workspaceFields[0]) -or
+        [string]::IsNullOrWhiteSpace($workspaceFields[1])) {
+        throw 'workspace registration did not return an ID and path'
+    }
+    $workspaceId = $workspaceFields[0]
+    $registered = @((Invoke-FixtureCli @('workspace', 'list')) -split "\r?\n" |
+        Where-Object { ($_ -split "\t", 2)[0] -ceq $workspaceId })
+    if ($registered.Count -ne 1) { throw 'registered workspace ID not found in catalog' }
     $first = New-FixtureSession $workspaceId
     $second = New-FixtureSession $workspaceId
     if ($first.Session -eq $second.Session -or $first.Process.Id -eq $second.Process.Id) {

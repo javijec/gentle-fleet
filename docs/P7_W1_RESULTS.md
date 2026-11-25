@@ -473,3 +473,7 @@ El operador ejecutó cargo test -p fleetd --locked tras 09b2b9c: FAIL E0599 en p
 ### Shutdown — revalidación reportada y fixture vertical candidato
 
 Operador confirmó que pasó todo después de ca787ce. HEAD remoto observado b0f5a9bb92354386498ea7c03cddd4d75dc237f6. No se adjuntaron nuevos JSON ni logs asociados; se registra PASS reportado de las cuatro correcciones prioritarias, no ejecución independiente. Se añade primera regresión vertical de proceso Windows con FakeDriver, ruta con espacios, dos runners, parada verificada y centinela. Integración en full local y workflow sin quitar pruebas existentes. UNTESTED: ejecutar fixture y full del mismo SHA limpio; revisar logs antes de cierre técnico de W1-C, sin declarar W1-D aceptada. Main intacta.
+
+### W1-D fixture — parsing de workspace
+
+Primera ejecución nativa reportada: FAIL en session create, `not_found: unknown workspace w`. El fixture aplicaba -split en modo argumento de PowerShell dentro de la llamada a Invoke-FixtureCli y luego indexaba el resultado como texto. Se separa recepción y split, exige dos campos y verifica ID exacto en catálogo antes de crear sesión. Solo fixture/documentación, sin cambio de producción ni criterios reducidos. Reejecución pendiente.

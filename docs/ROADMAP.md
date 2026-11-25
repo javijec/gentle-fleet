@@ -172,3 +172,5 @@ PASS reportado del gate full conjunto y protocolo Windows 10/10 en `c1b3d77`, tr
 Subcortes C.1 SQLite, C.2 spool, C.3 journals y C.4 catálogo SSH: gates automatizados PASS reportados por el operador. C.5 candidato de recuperación integral: unificación CLI/SDK y regresión de terminación SQLite, pendiente de validación. Ver P7_W1_C_PLAN.md para pendientes y límites; no se acepta W1-C completa ni se inicia W1-D.
 
 W1-C.5: PASS automatizado reportado tras 2b4e80f. Nuevo candidato de exclusividad durable Windows pendiente de validación. Los cinco subcortes tienen PASS reportado, pero los pendientes de aceptación enumerados en P7_W1_C_PLAN.md mantienen W1-C abierta.
+
+W1-C: gate completo PASS reportado tras 3d2bb26; candidato adicional de identidad física de DB Windows pendiente de validación. No se modifica main ni se inicia W1-D.

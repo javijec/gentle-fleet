@@ -790,6 +790,90 @@ impl DataLease {
             _directory: guard,
         })
     }
+
+    /// Persist the physical database identity in the already exclusively
+    /// locked daemon lease. A new name, replacement file or missing database
+    /// must not silently become the authority for existing runner spools.
+    /// Retain the returned handle until daemon exit to prevent replacement.
+    pub fn bind_database(&mut self, database: &Path) -> io::Result<File> {
+        use std::io::{Seek, SeekFrom};
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_SHARE_WRITE,
+        };
+
+        self._directory.validate_sqlite_files(database)?;
+        self._file.seek(SeekFrom::Start(0))?;
+        let mut marker = Vec::new();
+        (&mut self._file).take(16_385).read_to_end(&mut marker)?;
+        if marker.len() > 16_384 {
+            return Err(invalid("invalid durable database identity marker"));
+        }
+
+        let exists = match std::fs::symlink_metadata(database) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        if marker.is_empty() {
+            // A legacy root with runner evidence cannot be adopted by
+            // guessing which database owns those records.
+            for entry in std::fs::read_dir(&self._directory.path)? {
+                let name = entry?.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.starts_with("fleet-runner-") {
+                    return Err(invalid("unbound legacy runner state; explicit recovery required"));
+                }
+            }
+            if exists && std::env::var_os("FLEET_ADOPT_LEGACY_DB").as_deref() != Some(OsStr::new("1")) {
+                return Err(invalid("unbound legacy database; explicit adoption after backup required"));
+            }
+            if !exists {
+                for suffix in ["-wal", "-shm", "-journal"] {
+                    let mut name = database.as_os_str().to_os_string();
+                    name.push(suffix);
+                    match std::fs::symlink_metadata(Path::new(&name)) {
+                        Ok(_) => return Err(invalid("orphan SQLite sidecar; explicit recovery required")),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                let fresh = std::fs::OpenOptions::new().write(true).create_new(true).open(database)?;
+                fresh.sync_all()?;
+            }
+        } else if !exists {
+            return Err(invalid("bound durable database is missing; explicit recovery required"));
+        }
+
+        let database_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(database)?;
+        self._directory.validate_private_file(database)?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(database_handle.as_raw_handle(), &mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Include the exact filename as UTF-16 (lossless), because SQLite
+        // sidecars are name-scoped even if the same DB is renamed.
+        let filename = database.file_name().ok_or_else(|| invalid("missing database filename"))?;
+        let mut identity = format!(
+            "fleet-db-v1:{:08x}:{:08x}:{:08x}:",
+            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+        );
+        for unit in filename.encode_wide() {
+            use std::fmt::Write as _;
+            write!(&mut identity, "{unit:04x}").expect("writing to String cannot fail");
+        }
+        identity.push('\n');
+        if marker.is_empty() {
+            self._file.seek(SeekFrom::Start(0))?;
+            self._file.write_all(identity.as_bytes())?;
+            self._file.sync_all()?;
+        } else if marker != identity.as_bytes() {
+            return Err(invalid("durable database identity mismatch; explicit recovery required"));
+        }
+        Ok(database_handle)
+    }
 }
 
 #[cfg(test)]

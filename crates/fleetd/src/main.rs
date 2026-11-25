@@ -28,7 +28,7 @@ fn main() -> std::io::Result<()> {
     // Reserve the durable root before opening SQLite or performing recovery.
     // The OS releases this lease when the daemon is terminated.
     #[cfg(windows)]
-    let _data_lease = fleet_protocol::transport::daemon_data_lease(&database).map_err(|error| {
+    let mut data_lease = fleet_protocol::transport::daemon_data_lease(&database).map_err(|error| {
         std::io::Error::new(error.kind(), format!("reserve durable data: {error}"))
     })?;
     // Reserve both authorities before opening SQLite. Publishing credentials
@@ -37,6 +37,11 @@ fn main() -> std::io::Result<()> {
     let reserved_listener = LocalListener::reserve_daemon().map_err(|error| {
         std::io::Error::new(error.kind(), format!("reserve daemon endpoint: {error}"))
     })?;
+    // Bind the durable root to the same physical database across restarts.
+    // Reserve the endpoint first so a rejected endpoint competitor cannot
+    // create a database or change the persistent identity.
+    #[cfg(windows)]
+    let _database_identity_guard = data_lease.bind_database(&database)?;
     let registry = builtin_registry_from_env();
     let store = Arc::new(
         SqliteStore::open(database)

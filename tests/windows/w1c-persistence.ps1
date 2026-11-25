@@ -135,6 +135,46 @@ try {
     if (-not $daemon.WaitForExit(10000)) { throw 'fixture daemon did not terminate' }
     $daemon.Dispose()
     $daemon = $null
+
+    function Assert-IdentityRejected([string]$Label) {
+        $candidate = Start-FixtureDaemon $Label
+        try {
+            if (-not $candidate.WaitForExit(10000)) { throw 'identity competitor did not exit' }
+            if ($candidate.ExitCode -eq 0 -or
+                (Get-Content -LiteralPath (Join-Path $root "$Label.err") -Raw) -notmatch 'bound durable database is missing|durable database identity mismatch') {
+                throw 'identity competitor was not rejected for database identity'
+            }
+            if (Test-Path -LiteralPath (Join-Path $env:FLEET_RUNTIME_DIR 'fleetd.addr')) {
+                throw 'identity competitor published an endpoint'
+            }
+        } finally {
+            if (-not $candidate.HasExited) { $candidate.Kill(); [void]$candidate.WaitForExit(5000) }
+            $candidate.Dispose()
+        }
+    }
+
+    $env:FLEET_RUNTIME_DIR = Join-Path $root 'identity-runtime'
+    $env:FLEET_DB_PATH = Join-Path $data 'other.sqlite'
+    Assert-IdentityRejected 'different-db'
+    if (Test-Path -LiteralPath $env:FLEET_DB_PATH) { throw 'identity rejection created an alternate DB' }
+
+    # Even the same filename must not adopt a different physical file.
+    # Move the original aside temporarily in this disposable fixture only.
+    $backup = Join-Path $data 'fixture-original.sqlite'
+    Move-Item -LiteralPath $db -Destination $backup
+    try {
+        Copy-Item -LiteralPath $backup -Destination $db
+        $env:FLEET_DB_PATH = $db
+        $hash = (Get-FileHash -LiteralPath $db).Hash
+        Assert-IdentityRejected 'replacement-db'
+        if ((Get-FileHash -LiteralPath $db).Hash -ne $hash) { throw 'replacement DB was modified' }
+    } finally {
+        if (Test-Path -LiteralPath $db) { Remove-Item -LiteralPath $db }
+        Move-Item -LiteralPath $backup -Destination $db
+    }
+    $env:FLEET_RUNTIME_DIR = $runtime
+    $env:FLEET_DB_PATH = $db
+    Write-Output 'PASS: durable root refuses alternate or replaced database after shutdown'
     $daemon = Start-FixtureDaemon 'restart'
     Wait-Ready $daemon
     $after = @( (Invoke-FixtureCli @('workspace', 'list')) -split "`r?`n" |

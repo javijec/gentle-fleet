@@ -34,9 +34,7 @@ fn database_path() -> std::io::Result<std::path::PathBuf> {
     #[cfg(unix)]
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
-        });
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
     let base = base.filter(|path| path.is_absolute()).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,

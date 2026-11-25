@@ -2500,7 +2500,9 @@ mod tests {
                 std::process::id()
             ));
             match builder.create(&dir) {
-                Ok(()) => return dir.join("fleet.sqlite"),
+                // Reserve a unique fixture root, but let SqliteStore create
+                // its own private data directory with platform-native ACLs.
+                Ok(()) => return dir.join("data").join("fleet.sqlite"),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!("cannot reserve test database directory: {error}"),
             }
@@ -2519,10 +2521,12 @@ mod tests {
         let unique: std::collections::HashSet<_> = paths.iter().collect();
         assert_eq!(unique.len(), paths.len());
         for path in paths {
-            let dir = path.parent().unwrap();
-            assert!(dir.is_dir());
+            let data = path.parent().unwrap();
+            let root = data.parent().unwrap();
+            assert!(root.is_dir());
+            assert!(!data.exists());
             assert!(!path.exists());
-            std::fs::remove_dir(dir).unwrap();
+            std::fs::remove_dir(root).unwrap();
         }
     }
 

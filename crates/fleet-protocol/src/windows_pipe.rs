@@ -593,8 +593,7 @@ fn private_directory(path: &Path, create: bool, inheritable: bool) -> io::Result
     let actual = owner_dacl_string(handle.as_raw_handle())?;
     // Auto-inheritance control flags can be set by the filesystem. In both
     // accepted forms the protected DACL contains exactly the owner ACE.
-    if actual != expected
-        && !(inheritable && actual == format!("O:{sid}D:PAI(A;OICI;FA;;;{sid})"))
+    if actual != expected && !(inheritable && actual == format!("O:{sid}D:PAI(A;OICI;FA;;;{sid})"))
     {
         return Err(invalid(
             "Fleet directory owner or DACL is not private; choose a new private directory",
@@ -686,11 +685,15 @@ fn validate_data_path(path: &Path) -> io::Result<()> {
                 if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
         )
     {
-        return Err(invalid("Fleet data path must be an absolute local drive path"));
+        return Err(invalid(
+            "Fleet data path must be an absolute local drive path",
+        ));
     }
     for component in path.components() {
         match component {
-            Component::ParentDir => return Err(invalid("Fleet data path contains parent traversal")),
+            Component::ParentDir => {
+                return Err(invalid("Fleet data path contains parent traversal"))
+            }
             Component::Normal(name) => {
                 let name = name.to_string_lossy();
                 if name.contains(':') || name.ends_with(['.', ' ']) {
@@ -721,7 +724,9 @@ impl DataDirectory {
     pub fn validate_sqlite_files(&self, database: &Path) -> io::Result<()> {
         validate_data_path(database)?;
         if database.parent() != Some(self.path.as_path()) || database.file_name().is_none() {
-            return Err(invalid("SQLite path must be inside its guarded data directory"));
+            return Err(invalid(
+                "SQLite path must be inside its guarded data directory",
+            ));
         }
         for suffix in ["", "-wal", "-shm", "-journal"] {
             let mut name = database.as_os_str().to_os_string();

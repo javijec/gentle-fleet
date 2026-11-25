@@ -1,6 +1,6 @@
 # Roadmap — Gentle Fleet Headless Agent Session Engine
 
-**Alcance vigente (25/11/2026):** motor headless, daemon/runner, CLI, SDK y protocolo para clientes externos. No se desarrolla una interfaz gráfica propia. P6.2 gráfica queda como referencia histórica; P6 headless recupera sus mejoras de backend sin incorporar código gráfico. P6 se integra a main solo tras aceptar la validación del nuevo candidato, sin esperar P7. P7-H pasa a ser el primer corte de reorganización de P7 después de integrar P6: desacoplar el escritorio sin reducir los gates IPC, persistencia y recuperación. Hasta validar ese corte se conservan los perfiles de P7 existentes.
+**Alcance vigente (25/11/2026):** motor headless, daemon/runner, CLI, SDK y protocolo para clientes externos. No se desarrolla una interfaz gráfica propia. P6.2 gráfica queda como referencia histórica; P6 headless recupera sus mejoras de backend sin incorporar código gráfico. P6-H queda cerrada para Linux con PASS local reportado, sin esperar P7. P7-H pasa a ser el primer corte de reorganización de P7 después de integrar P6: desacoplar el escritorio sin reducir los gates IPC, persistencia y recuperación. Hasta validar ese corte se conservan los perfiles de P7 existentes.
 
 ## P0: investigar antes de fijar contratos
 
@@ -42,9 +42,9 @@
 
 ## P6: SDK reutilizable y cierre headless
 
-**Estado P6.1 (22/11/2026): CERRADA EN LINUX** en `feature/p6-sdk-gpui`. `fleetctl` consume `fleet-client`; el SDK comparte el wire y `fleet-ssh`, con observación cancelable, replay/reconexión y cursor durable por host/sesión. La suite unitaria y E2E determinista, chat FakeDriver local/SSH y smoke real opt-in OpenCode pasaron; ver [`P6_1_RESULTS.md`](P6_1_RESULTS.md). La evidencia P6.1-H es histórica; el nuevo candidato debe revalidarse.
+**Estado P6.1 (22/11/2026): CERRADA EN LINUX** en `feature/p6-sdk-gpui`. `fleetctl` consume `fleet-client`; el SDK comparte el wire y `fleet-ssh`, con observación cancelable, replay/reconexión y cursor durable por host/sesión. La suite unitaria y E2E determinista, chat FakeDriver local/SSH y smoke real opt-in OpenCode pasaron; ver [`P6_1_RESULTS.md`](P6_1_RESULTS.md). La evidencia P6.1-H es histórica; ver cierre P6-H siguiente.
 
-**P6-H (25/11/2026): CANDIDATA, UNTESTED.** Se rescatan catálogo de hosts, tipos públicos, clasificación SSH y manejo acotado de diagnósticos; no se incluye GPUI ni P7 experimental. Gate: [plan P6](P6_TEST_PLAN.md). La interfaz de usuario es responsabilidad del consumidor externo.
+**P6-H (25/11/2026): CERRADA EN LINUX — PASS local reportado.** Se rescatan catálogo de hosts, tipos públicos, clasificación SSH y manejo acotado de diagnósticos; no se incluye GPUI ni P7 experimental. Gate determinista y smoke OpenCode real reportados PASS tras la corrección de formato `b366f96`; ver [resultados P6](P6_1_RESULTS.md). La interfaz de usuario es responsabilidad del consumidor externo.
 
 ## P7: robustez operacional y release
 

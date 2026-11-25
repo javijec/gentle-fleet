@@ -42,7 +42,7 @@ No compartir SQLite entre hosts. No abrir listeners TCP públicos por defecto. E
 | Windows 11 | Experimental, aceptación técnica P7 pendiente | CLI por SSH hacia Linux validado en P5 |
 | macOS | Sin validación funcional completa | Sin validación funcional completa |
 
-P0–P5 están integrados en main; P6 headless está preparado para integración tras sus gates. P7 se desarrolla por separado. Los resultados históricos no acreditan automáticamente HEAD. Ver [roadmap](docs/ROADMAP.md). La supervivencia a cierre del cliente y caída del daemon está validada en Linux dentro del alcance probado; no equivale a garantizar supervivencia al reinicio del host o resume de todos los proveedores.
+P0–P6 constituyen la base headless Linux; el cierre de P6-H se apoya en la validación local reportada por el operador. P7 se desarrolla por separado. Los resultados históricos no acreditan automáticamente HEAD. Ver [roadmap](docs/ROADMAP.md). La supervivencia a cierre del cliente y caída del daemon está validada en Linux dentro del alcance probado; no equivale a garantizar supervivencia al reinicio del host o resume de todos los proveedores.
 
 | Proveedor | Estado Linux |
 | --- | --- |
@@ -66,7 +66,7 @@ Estos comandos son un punto de entrada al backend. El gate completo Linux de P6 
 
 ## Camino al primer release
 
-1. Cerrar P6 headless en Linux e integrar tras PASS.
+1. P6 headless: cerrado en alcance Linux, con PASS local reportado.
 2. P7-H: desacoplar GPUI en la rama P7 y conservar sus gates de seguridad.
 3. P7-W1/W2: cerrar IPC, persistencia, procesos, recuperación y proveedores Windows.
 4. P7-W4: SSH bidireccional y configuración portable.

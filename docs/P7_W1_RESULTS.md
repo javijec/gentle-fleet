@@ -477,3 +477,7 @@ Operador confirmó que pasó todo después de ca787ce. HEAD remoto observado b0f
 ### W1-D fixture — parsing de workspace
 
 Primera ejecución nativa reportada: FAIL en session create, `not_found: unknown workspace w`. El fixture aplicaba -split en modo argumento de PowerShell dentro de la llamada a Invoke-FixtureCli y luego indexaba el resultado como texto. Se separa recepción y split, exige dos campos y verifica ID exacto en catálogo antes de crear sesión. Solo fixture/documentación, sin cambio de producción ni criterios reducidos. Reejecución pendiente.
+
+### W1-D fixture — entorno del hijo y resolución sibling
+
+Operador reportó nueva ejecución FAIL después de fe2b34f: session create `runner_io: program path has no file name`. El launcher consulta var_os(FLEET_RUNNER_BIN), por lo que una cadena vacía no activa el default sibling. El fixture intentaba retirar variables con SetEnvironmentVariable(name, $null, 'Process'); posible conversión a string vacío en PowerShell, causa exacta no comprobada en el entorno nativo. Se elimina esa ambigüedad retirando overrides directamente del diccionario ProcessStartInfo.Environment de cada hijo, verificando ausencia de FLEET_RUNNER_BIN y suministrando únicamente runtime/DB de fixture y operation key cuando corresponda. No se cambia entorno padre, launcher productivo ni criterios. Pendiente reejecución; si persiste, diagnosticar resolución real de ejecutable sin habilitar fallback inseguro.

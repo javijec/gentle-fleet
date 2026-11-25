@@ -11,16 +11,13 @@ $runnerExe = Join-Path $bin 'fleet-runner.exe'
 $daemon = $null
 $sentinel = $null
 $runners = @{}
-$previous = @{}
+$script:fixtureOperationKey = $null
 # Inherit no fake fault flags or prior storage/catalog overrides.
 $names = @('FLEET_RUNTIME_DIR', 'FLEET_DB_PATH', 'FLEET_RUNNER_BIN',
     'FLEET_ADOPT_LEGACY_DB', 'FLEET_OPERATION_KEY', 'FLEET_OPERATION_JOURNAL',
     'FLEET_CURSOR_JOURNAL', 'FLEET_SSH_CONFIG', 'FLEET_HOST_ID')
 $names += @(Get-ChildItem Env: | Where-Object { $_.Name -like 'FLEET_FAKE_*' } |
     ForEach-Object { $_.Name })
-foreach ($name in $names) {
-    $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-}
 
 function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
     $info = [Diagnostics.ProcessStartInfo]::new()
@@ -29,6 +26,20 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    # Remove inherited entries from the child environment dictionary itself.
+    # Assigning a PowerShell $null through a .NET string parameter can leave
+    # an empty environment value instead of an absent variable.
+    foreach ($name in $names) {
+        [void]$info.Environment.Remove($name)
+    }
+    $info.Environment['FLEET_RUNTIME_DIR'] = $runtime
+    $info.Environment['FLEET_DB_PATH'] = Join-Path $root 'private data/fleet.sqlite'
+    if ($null -ne $script:fixtureOperationKey) {
+        $info.Environment['FLEET_OPERATION_KEY'] = $script:fixtureOperationKey
+    }
+    if ($info.Environment.ContainsKey('FLEET_RUNNER_BIN')) {
+        throw 'fixture must not pass a runner binary override'
+    }
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($info)
     $process | Add-Member -NotePropertyName FixtureStdout -NotePropertyValue ($process.StandardOutput.ReadToEndAsync())
@@ -112,7 +123,7 @@ function New-FixtureSession([string]$WorkspaceId) {
 
 function Assert-CompletedTurn([string]$Session, [string]$Message) {
     $key = [guid]::NewGuid().ToString('N')
-    $env:FLEET_OPERATION_KEY = $key
+    $script:fixtureOperationKey = $key
     $receipt = (Invoke-FixtureCli @('prompt', $Session, $Message)) -split "\t"
     if ($receipt.Count -ne 3 -or $receipt[1] -ne $Session -or -not $receipt[2]) {
         throw 'prompt receipt does not identify the expected session/turn'
@@ -150,15 +161,10 @@ function Assert-Stopped($Fixture) {
 
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
-    foreach ($name in $names) {
-        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
-    }
     New-Item -ItemType Directory -Path $bin, $workspace | Out-Null
     foreach ($exe in @('fleetd.exe', 'fleet-runner.exe', 'fleetctl.exe')) {
         Copy-Item -LiteralPath (Join-Path $repo "target/debug/$exe") -Destination $bin
     }
-    $env:FLEET_RUNTIME_DIR = $runtime
-    $env:FLEET_DB_PATH = Join-Path $root 'private data/fleet.sqlite'
     # No FLEET_RUNNER_BIN: exercise default sibling executable resolution.
     $sentinel = Start-OwnedProcess (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 180')
     $daemon = Start-OwnedProcess (Join-Path $bin 'fleetd.exe') @()
@@ -207,9 +213,6 @@ try {
         } finally {
             try { Stop-OwnedProcess $daemon } finally {
                 try { Stop-OwnedProcess $sentinel } finally {
-                    foreach ($name in $names) {
-                        [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
-                    }
                     Remove-Item -LiteralPath $root -Recurse -Force
                 }
             }

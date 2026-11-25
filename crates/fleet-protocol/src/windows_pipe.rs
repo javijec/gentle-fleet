@@ -1062,8 +1062,10 @@ mod tests {
         use std::sync::mpsc;
         use std::time::Duration;
 
-        let runtime =
-            std::env::temp_dir().join(format!("gentle-fleet-write-timeout-{}", uuid::Uuid::new_v4()));
+        let runtime = std::env::temp_dir().join(format!(
+            "gentle-fleet-write-timeout-{}",
+            uuid::Uuid::new_v4()
+        ));
         let listener = Listener::bind(&runtime, "write-timeout").unwrap();
         let address = listener.address().to_owned();
         let (ready_tx, ready_rx) = mpsc::channel();

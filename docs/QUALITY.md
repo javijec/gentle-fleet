@@ -231,3 +231,17 @@ Cuando Actions no pueda iniciar por facturación, registrar GitHub Actions como 
 Para W1-B, una prueba entre SID debe distinguir denegación del objeto protegido
 de falta de acceso a un antecesor y verificar controles positivos y negativos;
 un fixture incompleto o sin ejecución real permanece BLOCKED.
+
+### Diferimiento explícito de evidencia manual W1-B (24/11/2026)
+
+Por decisión del propietario, la prueba real entre dos cuentas Windows
+se difiere al release P7; no se crearán cuentas para el desarrollo actual.
+Se mantiene el fixture y su criterio de controles positivos/negativos.
+El estado permanece UNTESTED, nunca PASS. Esta excepción permite el
+traspaso administrativo W1-B → W1-C y la aceptación técnica de desarrollo
+con alcance limitado una vez que full Windows/Linux, consolidación y
+regresiones de seguridad obligatorias pasen sobre el mismo SHA limpio.
+No permite ignorar defectos P0/P1, rebajar ACL, sustituir seguridad por
+fixtures ni aprobar release sin evidencia manual. El perfil release y
+sus requisitos `cross-user-ipc-acl`, `runtime-acl-delete-child` e
+`ipc-backpressure-cancel-peer-identity` se conservan sin cambios.

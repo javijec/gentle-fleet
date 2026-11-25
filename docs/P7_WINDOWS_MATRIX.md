@@ -74,3 +74,20 @@ W1-B permanece ABIERTA.
 y prueba unitaria Windows; PID reuse y aislamiento real de dos SID siguen
 pendientes. El estado histórico de esta matriz no sustituye las corridas
 multiplataforma del SHA candidato. Ver `P7_W1_RESULTS.md`.
+
+## Estado vigente W1-B (24/11/2026)
+
+| Criterio | Estado |
+|---|---|
+| Full Windows/Linux de 175fad2 | PASS histórico |
+| fleet-core Windows 10/10 de 175fad2 | PASS histórico |
+| Protocolo Windows 10/10 reportado sobre d7e4a28 | PASS histórico |
+| Full Windows/Linux del candidato 69f7729 y HEAD documental | UNTESTED |
+| Regresiones de identidad, ACL, cancelación y recuperación del candidato | UNTESTED |
+| Aislamiento efectivo entre dos SID | UNTESTED — diferido por decisión del propietario hasta release |
+| GitHub Actions | BLOCKED por facturación |
+
+W1-B: cierre administrativo con alcance limitado, aceptación técnica
+pendiente. W1-C: traspaso autorizado; implementar solo tras gate de entrada
+automatizado PASS y resolución de defectos P0/P1 confirmados. No se modifica
+el modelo de amenaza ni el gate de release. Ver P7_W1_RESULTS.md.

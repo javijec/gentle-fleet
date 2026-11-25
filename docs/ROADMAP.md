@@ -77,3 +77,17 @@ No existe migración automática. No se hacen cherry-picks de M0–M4, no se arr
 
 
 **CI local (P7):** se incorporó una alternativa reproducible al gate automatizado de GitHub Actions mientras el servicio esté bloqueado por facturación. Ver [CI local](LOCAL_CI.md) y [política de calidad](QUALITY.md). Los scripts se ejecutan de forma nativa en Windows y Linux sobre el mismo SHA limpio; no sustituyen la evidencia manual de seguridad. P7-W1-B sigue abierta hasta validación efectiva. No se modifican los workflows remotos.
+
+### Traspaso W1-B → W1-C (24/11/2026)
+
+**W1-B: cierre administrativo con alcance limitado; aceptación técnica
+pendiente.** Por decisión del propietario, el aislamiento real entre dos
+cuentas Windows queda UNTESTED y diferido al release P7, sin crear cuentas
+ni eliminar el fixture. No hay full confirmado del candidato `69f7729`.
+**W1-C: autorizado para preparación; implementación tras gate de entrada**
+(full Windows/Linux, mismo SHA limpio, consolidación PASS, regresiones IPC
+y ningún defecto P0/P1 confirmado pendiente). Alcance W1-C: rutas durables
+por usuario, ACL de datos, DB/WAL/spool, acceso concurrente y recuperación
+de persistencia tras terminación. No iniciar W1-D–F ni W2; no merge ni
+release. Ver [resultados W1](P7_W1_RESULTS.md) y [calidad](QUALITY.md).
+Esta actualización prevalece sobre el estado histórico W1-B anterior.

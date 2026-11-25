@@ -340,3 +340,32 @@ sus bytes transferidos, según la corrección anterior. Se añade un test de
 timeout de escritura con peer que no drena y comprobación del siguiente
 write desde otro clon. La prueba no simula fallo de CancelIoEx ni demuestra
 por sí sola una cota dura de cancelación del kernel. Requiere ejecución nativa.
+
+## Decisión de alcance y traspaso W1-B → W1-C (24/11/2026)
+
+Por decisión explícita del propietario del proyecto, no se crearán cuentas
+Windows adicionales para la prueba entre SID. Se difiere esa prueba hasta el
+gate de release P7. El fixture se conserva sin cambios. Su estado es
+**UNTESTED — diferida por decisión del propietario**, no PASS, ni evidencia
+de aislamiento efectivo. Esta decisión reemplaza únicamente la exigencia de
+esa prueba manual para avanzar de etapa; no elimina el requisito de release
+ni exime defectos de seguridad conocidos.
+
+**Estado de gestión: cierre administrativo de W1-B con alcance limitado y
+traspaso a W1-C autorizado. Aceptación técnica W1-B: PENDIENTE (UNTESTED).**
+El candidato funcional es `69f772979d3d599ab62e37ec7d7574aefa4b2288`.
+No hay reportes full nuevos para ese código; los PASS de `175fad2` y
+las 10 repeticiones de protocolo reportadas sobre `d7e4a28` son históricos.
+Antes de implementar W1-C, el agente debe validar el HEAD documental limpio
+en Windows y Linux, con reporte conjunto PASS, repetir protocolo Windows
+10 veces y verificar las regresiones W1-A/W1-B, incluidas identidad, ACL,
+runtime, cancelación y endpoints obsoletos. Resolver cualquier FAIL y cualquier
+defecto P0/P1 confirmado antes de avanzar. No interpretar este traspaso como
+certificación de PID reuse, cancelación del kernel ni seguridad entre cuentas.
+Registrar alcance y riesgos residuales de identidad/CancelIoEx de forma
+explícita; si constituyen defectos reales, no diferirlos por esta decisión.
+
+GitHub Actions continúa BLOCKED por facturación. Usar alias SSH
+`javiomarchi` con verificación estricta de host key y el orquestador local.
+W1-C puede preparar el plan ahora; su implementación se inicia tras el gate
+automatizado de entrada. No merge a main ni release autorizado.

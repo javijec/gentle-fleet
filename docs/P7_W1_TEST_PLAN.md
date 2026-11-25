@@ -111,3 +111,20 @@ DELETE_CHILD y escritura se prueban abriendo handles con derechos exactos,
 sin modificar las ACL ni el contenido. La comprobación del propietario
 antes/después usa Hello real vía bridge. La prueba es manual y no equivale
 a probar reutilización de PID real ni escenarios de administradores.
+
+## Criterio vigente de traspaso W1-B → W1-C (24/11/2026)
+
+Esta sección prevalece sobre los criterios históricos de cierre de este
+documento. El propietario decidió no crear otra cuenta Windows. El fixture
+entre dos SID queda intacto, UNTESTED y diferido al release P7; no bloquea
+el traspaso administrativo ni la aceptación técnica limitada por sí solo.
+No se sustituye por una simulación ni se declara PASS.
+
+Gate de entrada obligatorio a la implementación W1-C: full Windows y Linux
+del mismo SHA limpio, reporte consolidado PASS, revisión de logs, protocolo
+Windows 10/10 con paralelismo normal, W1-A y W1-B PASS, ACL automatizadas,
+identidad, cancelación/backpressure, runtime y reinicio sin defectos P0/P1
+confirmados. Registrar resultados de identidad y cancelación que aún no se
+puedan reproducir; no ocultar fallos ni eximirlos por el diferimiento.
+Usar `javiomarchi` para SSH con host key checking. No crear cuentas. El
+perfil release conserva `cross-user-ipc-acl` y los demás gates manuales.

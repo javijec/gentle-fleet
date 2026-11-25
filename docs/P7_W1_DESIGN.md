@@ -67,3 +67,15 @@ mantener esas concurrencias y no reenviar prompts inciertos.
 - Se agregaron pruebas Rust nativas de half-close, respuesta pendiente y cancelación, y se adaptó W1-A para conectarse por `NamedPipeClientStream`. W1-B ejecuta un fixture de daemon, token inválido y segundo daemon competidor en CI.
 - La propiedad de handles y el efecto de cancelación ante un peer que no consume datos exigen prueba de carga adicional. `Shutdown::Both` se corrigió para ser abortivo: marca ambos sentidos cerrados y solicita `CancelIoEx`, sin transmitir el marcador EOF (que podría bloquearse con el buffer lleno). El handle Win32 se guarda en un estado compartido `Mutex<Option<Arc<File>>>`: `Shutdown::Both` retira ese handle de todos los clones, solicita `CancelIoEx` y permite liberar físicamente el endpoint al terminar las operaciones en curso. Hay tests de cancelación y EOF remoto aun con clones vivos; el cierre solo puede darse por validado después de pasar CI Windows y los E2E. La semántica bajo saturación de buffers sigue pendiente de pruebas de estrés.
 - La ACL de archivos (token, DB, WAL, spool) y la prueba contra otra cuenta Windows siguen pendientes. El modelo de confianza sigue considerando al mismo usuario como confiable; esto no prueba aislamiento entre usuarios distintos.
+
+## Alcance vigente de aceptación (24/11/2026)
+
+W1-B se traspasa administrativamente a W1-C con aceptación técnica
+pendiente del gate automatizado del HEAD. El propietario difiere la prueba
+real entre SID al release, sin cambiar el modelo de confianza ni las ACL.
+Las nuevas verificaciones de identidad del mensaje y del propietario del
+pipe, cancelación direccional, resultado de timeout y cierre ante escritura
+incierta requieren validación nativa. No existe garantía demostrada de PID
+reuse o aislamiento efectivo entre cuentas por inspección. No se eximen
+defectos de seguridad reales. W1-C se limita a persistencia; ver el gate de
+entrada vigente en P7_W1_TEST_PLAN.md.

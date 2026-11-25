@@ -2,8 +2,7 @@
 
 No requiere GitHub Actions ni servicios de pago. Requiere Python 3.10+, Git,
 Rust estable con rustfmt/clippy y dependencias nativas del workflow existente.
-Windows: PowerShell 7, MSVC y Windows SDK. Linux: Bash, OpenSSH server (sshd),
-dependencias de GPUI X11/Wayland/Vulkan y entorno que satisfaga el fixture GPUI.
+Windows: PowerShell 7, MSVC y Windows SDK. Linux: Bash y OpenSSH server (sshd). El workspace headless no requiere GPUI ni bibliotecas gráficas.
 Ejecutar como usuario normal, no root. En Linux, si sshd no está en PATH,
 añadir su directorio (por ejemplo /usr/sbin). No desactivar host-key checking.
 
@@ -21,7 +20,7 @@ bash scripts/ci/linux.sh full
 ```
 
 También disponibles quick.ps1 y quick.sh. Full ejecuta los comandos Rust
-del workspace (incluido GPUI), regresiones nativas Windows y todos los E2E
+del workspace headless (incluido control de `cargo metadata --locked`), regresiones nativas Windows y todos los E2E
 deterministas Linux del workflow. Los jobs duplicados se consolidan; no replica
 la imagen limpia Ubuntu/Windows de GitHub ni instala dependencias por su cuenta.
 No usa credenciales de proveedores ni activa GF_E2E_REAL. Tests de fixture
@@ -63,7 +62,7 @@ remoto automáticamente porque requiere evidencia humana específica.
 ## Release (evidencia manual/real obligatoria)
 
 El perfil release ejecuta full y exige evidencia separada del operador, vinculada
-al mismo SHA y plataforma, para proveedores reales, SSH físico, smoke gráfico,
+al mismo SHA y plataforma, para proveedores reales, SSH físico, smoke de consumidor externo SDK/CLI,
 auditoría de dependencias y, en Windows, IPC/ACL entre cuentas, integridad del
 runtime, backpressure/cancelación/identidad del peer y recuperación nativa.
 Sin evidencia esos casos quedan BLOCKED. Las claves aceptadas están en MANUAL
@@ -86,7 +85,7 @@ declarar PASS. El script no inventa ni ejecuta automáticamente estas pruebas:
 ```powershell
 python scripts/ci/local_ci.py --profile release --manual-evidence reports/windows-evidence.json
 ```
-Para Linux usar python3 y evidencia Linux. El perfil release no acredita macOS,
+Para Linux usar python3 y evidencia Linux. La evidencia `external-sdk-smoke` debe demostrar catálogo, sesión, prompt, timeline, reconexión/cancelación y parada de un consumidor externo headless mediante el SDK/CLI; no se sustituye por una captura ni por una ventana. El perfil release no acredita macOS,
 instaladores, ni requisitos de release adicionales del roadmap. Los cierres
 siguen sujetos a QUALITY.md y a los criterios de la etapa. GitHub Actions
 permanece intacto y su estado BLOCKED se registra por separado.

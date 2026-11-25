@@ -42,7 +42,7 @@ No compartir SQLite entre hosts. No abrir listeners TCP públicos por defecto. E
 | Windows 11 | Experimental, aceptación técnica P7 pendiente | CLI por SSH hacia Linux validado en P5 |
 | macOS | Sin validación funcional completa | Sin validación funcional completa |
 
-P0–P5 están integrados en main. P6 y P7 se desarrollan en ramas; los resultados históricos no acreditan automáticamente HEAD. Ver [roadmap](docs/ROADMAP.md) y [matriz Windows](docs/P7_WINDOWS_MATRIX.md) en la rama de desarrollo. La supervivencia a cierre del cliente y caída del daemon está validada en Linux dentro del alcance probado; no equivale a garantizar supervivencia al reinicio del host o resume de todos los proveedores.
+P0–P6 están integrados en main (`7700b6a`); P7 incorpora esa base y sigue en desarrollo; los resultados históricos no acreditan automáticamente HEAD. Ver [roadmap](docs/ROADMAP.md) y [matriz Windows](docs/P7_WINDOWS_MATRIX.md) en la rama de desarrollo. La supervivencia a cierre del cliente y caída del daemon está validada en Linux dentro del alcance probado; no equivale a garantizar supervivencia al reinicio del host o resume de todos los proveedores.
 
 | Proveedor | Estado Linux |
 | --- | --- |
@@ -53,7 +53,7 @@ P0–P5 están integrados en main. P6 y P7 se desarrollan en ramas; los resultad
 
 ## Desarrollo sin GUI como objetivo
 
-La compilación actual todavía conserva `apps/desktop` como cliente experimental histórico. P6.2-A/B quedan como evidencia; P6.2-C y P7-W3 gráfico se retiran del roadmap. P7-H separará el workspace y las dependencias gráficas del build/test/release obligatorio del motor. **Ese desacople aún no está implementado**: los gates existentes se mantienen hasta validarlo.
+P7-H retira `apps/desktop`, su fixture exclusivamente gráfico y las dependencias GPUI del árbol activo. El cliente experimental se conserva en el historial de P7 (commit `427a5c1`) y sus documentos de resultados. La reorganización headless está implementada y **pendiente de validación nativa Windows/Linux**; no implica aceptación de W1-B.
 
 Para desarrollar el motor, con Rust estable y las dependencias de plataforma descritas en [CI local](docs/LOCAL_CI.md):
 
@@ -62,13 +62,13 @@ cargo build -p fleetd -p fleet-runner -p fleetctl --locked
 cargo test -p fleet-client --locked
 ```
 
-Estos comandos son un punto de entrada al backend, no sustituyen las pruebas full vigentes ni demuestran todavía un build completamente libre de resolución gráfica. Consultar [AGENTS.md](AGENTS.md) y [QUALITY.md](docs/QUALITY.md) para los checks obligatorios. Las pruebas con proveedores reales son opt-in; requieren su propia instalación y autenticación. No publicar logs, perfiles o credenciales.
+Estos comandos son un punto de entrada al backend; el gate obligatorio de P7 es el perfil full de CI local, con verificación del grafo headless, y regresiones nativas. Consultar [AGENTS.md](AGENTS.md) y [QUALITY.md](docs/QUALITY.md) para los checks obligatorios. Las pruebas con proveedores reales son opt-in; requieren su propia instalación y autenticación. No publicar logs, perfiles o credenciales.
 
 ## Camino al primer release
 
-1. P7-W1: cerrar IPC, persistencia, ciclo de vida y recuperación Windows sin reducir seguridad.
-2. P7-W2: validar proveedores nativos.
-3. P7-H: desacoplar GPUI y demostrar build/test headless.
+1. P7-H: validar el desacople headless y la integración de P6.
+2. P7-W1: cerrar IPC, persistencia, ciclo de vida y recuperación Windows sin reducir seguridad.
+3. P7-W2: validar proveedores nativos.
 4. P7-W4: SSH bidireccional y configuración portable.
 5. P7-O/S: operación, distribución y contrato público/SDK.
 6. P7-M: macOS con evidencia nativa.

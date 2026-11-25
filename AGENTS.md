@@ -34,3 +34,7 @@ Reportar: archivos, API tocada, pruebas unitarias/de proceso/real, compatibilida
 ## Validación sin GitHub Actions
 
 Usar scripts/ci/windows.ps1 y scripts/ci/linux.sh (full) sobre el mismo SHA limpio; consolidar con scripts/ci/report.py. Quick es solo diagnóstico. Registrar Actions BLOCKED por infraestructura de forma independiente. No afirmar PASS de pruebas manuales, nativas de proveedores o entre usuarios sin evidencia específica. Ver docs/LOCAL_CI.md y docs/QUALITY.md.
+
+## Alcance vigente del motor
+
+P0–P6 integrados en main; P7-H reorganiza el motor sin GPUI. No reintroducir escritorio ni dependencias gráficas; el cliente experimental permanece en el historial. Conservar todos los gates de backend y seguridad. Antes de iniciar W1-C validar P7-H y los criterios W1-B vigentes. La futura publicación se prepara en otro repositorio desde un snapshot auditado; este repositorio permanece privado.

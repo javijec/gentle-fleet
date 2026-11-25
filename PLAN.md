@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0–P4 CERRADOS EN LINUX; P5 CERRADA CON ALCANCE CLIENTE WINDOWS/LINUX → SERVIDOR LINUX; P6.1 SDK CERRADA EN LINUX (histórico); P6 HEADLESS CERRADA EN LINUX (PASS local reportado)** (25/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 para P6**; la validación funcional nativa Windows/macOS se realiza en P7. P5: `docs/P5_RESULTS.md`. P6.1: `docs/P6_1_RESULTS.md`, diseño `docs/P6_DESIGN.md`, plan `docs/P6_TEST_PLAN.md`.
+**Estado:** **P0–P4 CERRADOS EN LINUX; P5 CERRADA CON ALCANCE CLIENTE WINDOWS/LINUX → SERVIDOR LINUX; P6.1 SDK CERRADA EN LINUX (histórico); P6 HEADLESS CERRADA EN LINUX E INTEGRADA EN MAIN; P7-H IMPLEMENTADA, VALIDACIÓN PENDIENTE** (25/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 para P6**; la validación funcional nativa Windows/macOS se realiza en P7. P5: `docs/P5_RESULTS.md`. P6.1: `docs/P6_1_RESULTS.md`, diseño `docs/P6_DESIGN.md`, plan `docs/P6_TEST_PLAN.md`.
 
 ## Estrategia de plataforma
 
@@ -25,6 +25,7 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P5 — Cliente remoto ✅ CERRADA | Cliente Linux/Windows por SSH contra servidor Linux, mismo wire; alcance en `docs/P5_RESULTS.md` | CI SSH + recorrido real Windows→Linux; limitaciones explícitas |
 | P6.1 — SDK Rust ✅ CERRADA EN LINUX | `fleetctl` usa `fleet-client`; local/SSH, chat, timeline, cancelación, replay y OpenCode real | `docs/P6_1_RESULTS.md` |
 | P6-H — cierre headless ✅ CERRADA EN LINUX | SDK y SSH reutilizables, sin GUI ni dependencias gráficas | Gate y smoke OpenCode reportados PASS sobre el candidato `b366f96`; ver `docs/P6_1_RESULTS.md`. P6.2 gráfica fuera del producto |
+| P7-H — Desacople de GPUI en P7 | Integración de main y motor sin dependencias gráficas | Candidata; full Windows/Linux, mismos criterios W1-B y grafo headless |
 | P7 — Motor headless, endurecimiento y release | Empaquetado, instalación, límites, backups, migraciones y telemetría local | Suite de fallas, carga, validación funcional de Windows y macOS, docs y recuperación de datos |
 
 ## Condiciones mínimas de producto antes de anunciar MVP

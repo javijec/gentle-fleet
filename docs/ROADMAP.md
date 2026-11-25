@@ -2,24 +2,24 @@
 
 **Decisión de alcance (25/11/2026):** Gentle Fleet es un motor de sesiones persistentes y remotas para agentes de programación, sin interfaz gráfica propia como objetivo de producto. Los entregables son daemon, runner, CLI, SDK Rust y protocolo público. Gentle Shell GPUI y otros clientes son integraciones externas opcionales; no gestionan directamente los procesos internos de Fleet.
 
-Esta decisión reemplaza las metas gráficas futuras de P6.2 y P7-W3. Los resultados históricos P6.2-A/B, la evidencia de seguridad y las restricciones de calidad se conservan. No se declara ningún PASS nuevo por este cambio documental. Las reglas existentes de CI y aceptación siguen vigentes hasta que el desacople headless tenga su propio plan, implementación y validación.
+Esta decisión reemplaza las metas gráficas futuras de P6.2 y P7-W3. Los resultados históricos P6.2-A/B, la evidencia de seguridad y las restricciones de calidad se conservan. No se declara ningún PASS nuevo por este cambio documental. P7-H integra main y retira GPUI; su aceptación requiere validación nativa del candidato. Los criterios de seguridad, IPC y recuperación no se reducen.
 
 ## Camino crítico del motor
 
 | Etapa | Entregable | Estado / dependencia |
 | --- | --- | --- |
 | P0–P5 | Sesiones, persistencia, runner, proveedores y SSH | Cerrados para el alcance documentado Linux / cliente Windows SSH |
-| P6.1 | SDK Rust reutilizable | Cerrado en Linux |
+| P6-H | SDK Rust reutilizable sin GUI | Cerrado en Linux; integrado en main `7700b6a` |
 | P7-W1 | Motor Windows: IPC, persistencia, procesos y recuperación | W1-A PASS; W1-B aceptación pendiente; W1-C preparación autorizada |
 | P7-W2 | Conformidad con proveedores nativos Windows | Después de W1 |
-| P7-H | Desacople del workspace y validación headless | Después de los gates vigentes W1/W2; reemplaza W3 gráfico |
+| P7-H | Desacople del workspace y validación headless | Implementado; primer gate pendiente antes de continuar W1/W2 |
 | P7-W4 | SSH bidireccional y configuración portable | Después de W1; validación final con motor headless |
 | P7-O | Operación, límites, backup, diagnóstico y distribución | Pendiente |
 | P7-S | SDK y wire versionados; prueba de consumidor externo sin GPUI | Pendiente |
 | P7-M | Validación funcional macOS | Pendiente; puede avanzar en paralelo con un entorno nativo |
-| PUBLIC-READINESS | Auditoría de historial, privacidad y preparación de código público | Independiente; no autoriza publicar hasta aceptar su gate |
+| Publicación | Nuevo repositorio público desde snapshot auditado | Futuro; el repositorio de desarrollo permanece privado |
 
-P7-H/O/S/M son etiquetas de planificación nuevas, no fases implementadas. La primera entrega del motor puede ser una versión preliminar de alcance Linux, con cliente SSH Windows probado; no se podrá anunciar soporte nativo Windows/macOS ni cerrar P7 integral hasta cumplir sus respectivos gates. El release Windows conserva la prueba efectiva de aislamiento entre SID; Windows→Windows físico sigue pendiente hasta disponer de entorno autorizado.
+P7-H está implementada, pendiente de aceptación; P7-O/S/M son etapas futuras. La primera entrega del motor puede ser una versión preliminar de alcance Linux, con cliente SSH Windows probado; no se podrá anunciar soporte nativo Windows/macOS ni cerrar P7 integral hasta cumplir sus respectivos gates. El release Windows conserva la prueba efectiva de aislamiento entre SID; Windows→Windows físico sigue pendiente hasta disponer de entorno autorizado.
 
 ## Alcance histórico y evidencia
 
@@ -69,7 +69,7 @@ P7-H/O/S/M son etiquetas de planificación nuevas, no fases implementadas. La pr
 
 **Estado P6.2-B (23/11/2026): CERRADA EN LINUX.** Desktop demuestra consultas Fleet locales y SSH desde la vista GPUI real contra un `fleetd` aislado y un `sshd` de fixture, incluyendo refresco, desconexión, reintento y supervivencia de runners. Se corrigieron snapshots obsoletos, se acotaron las operaciones con deadline/cancelación, «Volver al inicio» limpia la selección y los elementos usan identidades estables. CI: [run 45208226815](https://github.com/javijec/gentle-fleet/actions/runs/45208226815) sobre `7ec7440`. Limitaciones y resultados PASS/FAIL/UNTESTED en [`P6_2B_RESULTS.md`](P6_2B_RESULTS.md); diseño y plan en [`P6_2B_DESIGN.md`](P6_2B_DESIGN.md) y [`P6_2B_TEST_PLAN.md`](P6_2B_TEST_PLAN.md). P6.2-C no iniciado; queda retirado del roadmap de producto.
 
-**Salida vigente**: SDK de cliente con gestión de hosts, cursores, backoff y deduplicación, consumido por CLI y clientes externos. El SDK expone operaciones, timeline, herramientas, permisos y capacidades sin depender de un runtime gráfico. `apps/desktop` queda como referencia histórica/experimental: no se añade chat, renderer ni nuevas funciones gráficas. Su separación del workspace obligatorio se realiza en P7-H, sin borrar código ni evidencia.
+**Salida vigente**: SDK de cliente con gestión de hosts, cursores, backoff y deduplicación, consumido por CLI y clientes externos. El SDK expone operaciones, timeline, herramientas, permisos y capacidades sin depender de un runtime gráfico. `apps/desktop` queda como referencia histórica en el commit `427a5c1`; P7-H lo retira del árbol activo sin reescribir el historial.
 
 ## P7: robustez operacional y release
 
@@ -133,9 +133,9 @@ Validar descubrimiento, versión, lanzamiento, chat, herramientas, streaming, in
 
 ### P7-H — Desacople headless (sustituye P7-W3)
 
-Separar `apps/desktop` del camino de build/test/release del motor, incluido el lockfile/resolución y dependencias nativas cuando corresponda. Conservar el cliente gráfico como código experimental fuera del producto, sin nuevas funcionalidades; no borrar su historial.
+Implementación candidata: integrar main `7700b6a`, retirar `apps/desktop`, su parche xattr, fixture E2E gráfico, resolución gráfica del lockfile y job desktop; conservar todo el historial en P7.
 
-Criterios: un clon limpio del motor compila, prueba y distribuye `fleetd`, `fleet-runner`, `fleetctl`, SDK y protocolo sin instalar GPUI ni dependencias gráficas. Actualizar workspace, CI local/remoto, documentación de calidad y perfiles de release mediante un corte independiente; conservar todos los tests de seguridad, backend, IPC, recuperación, proveedores y SSH. Reemplazar solo la evidencia visual que deja de pertenecer al producto por un consumidor externo headless verificable (CLI/SDK). Hasta aceptar P7-H, seguir usando los gates full/release existentes, incluyendo el workspace actual.
+Criterios: un clon limpio del motor compila, prueba y distribuye `fleetd`, `fleet-runner`, `fleetctl`, SDK y protocolo sin instalar GPUI ni dependencias gráficas. Actualizar workspace, CI local/remoto, documentación de calidad y perfiles de release mediante un corte independiente; conservar todos los tests de seguridad, backend, IPC, recuperación, proveedores y SSH. Reemplazar solo la evidencia visual que deja de pertenecer al producto por un consumidor externo headless verificable (CLI/SDK). El nuevo perfil full incluye control del grafo headless y todos los checks del motor anteriores; el perfil release sustituye exclusivamente `desktop-smoke` por `external-sdk-smoke` (consumidor externo CLI/SDK con evidencia real). No se permite omitir otras pruebas. Antes de W1-C, full Windows/Linux mismo SHA, protocolo Windows 10/10 y W1-A/B siguen obligatorios. No hay PASS de P7-H hasta ejecutar el candidato.
 
 ### P7-W4 — SSH portable
 
@@ -158,3 +158,9 @@ Validación nativa de daemon, runner, IPC, persistencia, permisos, SDK, SSH y pr
 ## Integraciones externas y no objetivos
 
 Gentle Shell GPUI puede consumir Fleet como backend alternativo al RPC directo, sin modificar el motor para depender de su interfaz. La integración gráfica es responsabilidad del cliente y no bloquea un release headless. Perfiles, subagentes, jobs o eventos específicos se exponen solo mediante capacidad y contrato probados. Filesystem remoto, Git/worktrees, PTY remoto y demás funciones de IDE son extensiones fuera del MVP; requieren ADR y prueba vertical. No implementar una segunda aplicación de escritorio, ni importar runtimes gráficos en los crates del motor.
+
+### Actualización de integración P7-H (25/11/2026)
+
+P6-H fue integrada en main mediante PR #2 (`7700b6a`), con gate Linux y smoke OpenCode PASS reportados por el operador, no por GitHub Actions. P7 incorpora ambos padres de historial en `92d0de5`; mantiene las correcciones Windows de token/IPC y las mejoras SDK/SSH de P6-H. La aplicación gráfica queda preservada por el historial de P7, no por una rama activa. El lockfile parte del lock validado de main y añade la dependencia Windows ya resuelta `windows-sys 0.61.2` de fleet-protocol; la validez del grafo debe confirmarse mediante cargo metadata/check --locked en ambas plataformas.
+
+**Estado: IMPLEMENTADO, UNTESTED.** Ejecutar el gate full Windows/Linux del mismo SHA limpio, revisar logs, repetir protocolo Windows 10/10 y regresiones W1-A/B antes de iniciar W1-C. No declarar un nuevo PASS por esta reorganización. No se altera el diferimiento del fixture de dos SID hasta release. La futura publicación se hará en un repositorio nuevo a partir de un árbol auditado; no abrir este repositorio privado. El trabajo previo de preparación pública se conserva como referencia en el PR #1 cerrado, sin incorporarlo a P7.

@@ -126,5 +126,5 @@ Windows 10/10 con paralelismo normal, W1-A y W1-B PASS, ACL automatizadas,
 identidad, cancelación/backpressure, runtime y reinicio sin defectos P0/P1
 confirmados. Registrar resultados de identidad y cancelación que aún no se
 puedan reproducir; no ocultar fallos ni eximirlos por el diferimiento.
-Usar `linux-test-host` para SSH con host key checking. No crear cuentas. El
+Usar el alias SSH del host de pruebas configurado localmente (`linux-test-host` es un ejemplo anonimizado), con host key checking. No crear cuentas. El
 perfil release conserva `cross-user-ipc-acl` y los demás gates manuales.

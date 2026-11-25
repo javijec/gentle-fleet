@@ -283,9 +283,9 @@ El fixture de proceso añade además una junction real en un antecesor hacia un 
 - **BLOCKED:** dos usuarios Windows. El fixture existente aún no comprueba
   todos los accesos exigidos ni descarta denegaciones de antecesores; no debe
   aceptarse como evidencia de cierre sin corregirlo y ejecutarlo.
-- Alias SSH `linux`: **BLOCKED** por resolución de nombre; `linux-test-host`
+- Alias SSH `linux`: **BLOCKED** por resolución de nombre; `linux-test-host` (alias anonimizado)
   conecta con host key checking habilitado. GitHub Actions **BLOCKED** por
-  facturación. El full de ambos sistemas y consolidación de este candidato
+  infraestructura. El full de ambos sistemas y consolidación de este candidato
   están pendientes. **W1-B ABIERTA; NO-GO W1-C.**
 
 
@@ -322,9 +322,9 @@ objeto; usa aperturas de handles con derechos exactos, no realiza cambios
 destructivos. Owner verifica Hello autenticado antes y después. No se han
 creado cuentas, cambiado ACL del sistema ni ejecutado la prueba. No hay
 PASS de aislamiento real hasta conservar las dos salidas nativas.
-El alias SSH funcional reportado por el agente es `linux-test-host` (no
+El alias SSH funcional reportado por el agente se representa aquí como `linux-test-host` (seudónimo; no
 `linux`); validar HEAD y checkout limpio en ambos hosts y usar
-`python scripts/ci/remote.py --host linux-test-host --remote-root /home/test-user/dev/gentle-fleet --profile full`.
+`python scripts/ci/remote.py --host linux-test-host --remote-root /home/test-user/dev/gentle-fleet --profile full` (sustituir alias y ruta de ejemplo por los reales del entorno).
 No hay evidencia de ejecución del full desde esta sesión.
 
 
@@ -364,6 +364,6 @@ Registrar alcance y riesgos residuales de identidad/CancelIoEx de forma
 explícita; si constituyen defectos reales, no diferirlos por esta decisión.
 
 GitHub Actions continúa BLOCKED por infraestructura. Usar alias SSH
-`linux-test-host` con verificación estricta de host key y el orquestador local.
+del host de pruebas configurado localmente (representado por `linux-test-host`), con verificación estricta de host key y el orquestador local.
 W1-C puede preparar el plan ahora; su implementación se inicia tras el gate
 automatizado de entrada. No merge a main ni release autorizado.

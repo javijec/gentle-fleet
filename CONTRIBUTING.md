@@ -7,3 +7,5 @@ Run formatting, check, Clippy, tests and build with the locked workspace; follow
 Do not commit secrets, runtime data, personal paths or raw captures. Scan proposed commits with Gitleaks and manually inspect fixtures. Report security issues privately via [SECURITY.md](SECURITY.md).
 
 By contributing, you agree to license your contribution under the repository's MIT license, subject to existing third-party notices.
+
+Follow the [community code of conduct](CODE_OF_CONDUCT.md).

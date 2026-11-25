@@ -53,7 +53,9 @@ def worker(args):
         print(f"READY: {args.platform} {args.sha}", flush=True)
         return 0
     if args.worker == "collect":
-        print((folder / "native.json").read_text(encoding="utf-8"))
+        # ASCII JSON survives the remote Windows console code page.
+        print(json.dumps(json.loads((folder / "native.json").read_text(encoding="utf-8")),
+                         ensure_ascii=True))
         return 0
     folder.mkdir(parents=True, exist_ok=False)
     profile = "full" if args.mode == "w1c" else args.mode

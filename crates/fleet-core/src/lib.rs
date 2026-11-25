@@ -433,9 +433,7 @@ impl SessionManager {
                 + 1;
             // Sin runner verificado, una sesión antigua no puede fingir que sigue ejecutándose.
             let (session_state, turn_state) = match stored.state {
-                SessionState::Running => {
-                    (SessionState::NeedsReconciliation, TurnState::Uncertain)
-                }
+                SessionState::Running => (SessionState::NeedsReconciliation, TurnState::Uncertain),
                 SessionState::Stopping | SessionState::StopUnconfirmed => {
                     (SessionState::StopUnconfirmed, stored.turn_state)
                 }
@@ -853,7 +851,9 @@ impl SessionManager {
             ) {
                 let status = match session_record.state {
                     SessionState::Stopped => RunnerStatus::Stopped,
-                    SessionState::Stopping | SessionState::StopUnconfirmed => RunnerStatus::StopUnconfirmed,
+                    SessionState::Stopping | SessionState::StopUnconfirmed => {
+                        RunnerStatus::StopUnconfirmed
+                    }
                     _ => RunnerStatus::Uncertain,
                 };
                 self.store
@@ -3518,14 +3518,23 @@ mod tests {
             reopened.store.get_runner(&ses.id).unwrap().unwrap().status,
             RunnerStatus::StopUnconfirmed
         );
-        assert!(!reopened.read_timeline(&ses.id, 0, 128).unwrap().iter().any(|event| matches!(
-            event.kind,
-            EventKind::SessionStateChanged { state: SessionState::Stopped }
-        )));
+        assert!(!reopened
+            .read_timeline(&ses.id, 0, 128)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(
+                event.kind,
+                EventKind::SessionStateChanged {
+                    state: SessionState::Stopped
+                }
+            )));
         drop(reopened);
         let restarted = manager_at(FakeConfig::default(), path);
         assert!(restarted.recover_runners().unwrap().is_empty());
-        assert_eq!(restarted.list_sessions()[0].state, SessionState::StopUnconfirmed);
+        assert_eq!(
+            restarted.list_sessions()[0].state,
+            SessionState::StopUnconfirmed
+        );
         assert_eq!(
             restarted.store.get_runner(&ses.id).unwrap().unwrap().status,
             RunnerStatus::StopUnconfirmed
@@ -3540,16 +3549,28 @@ mod tests {
         });
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
-        assert_eq!(manager.stop_session(&ses.id).unwrap_err().code, "StopUnconfirmed");
-        assert_eq!(manager.list_sessions()[0].state, SessionState::StopUnconfirmed);
+        assert_eq!(
+            manager.stop_session(&ses.id).unwrap_err().code,
+            "StopUnconfirmed"
+        );
+        assert_eq!(
+            manager.list_sessions()[0].state,
+            SessionState::StopUnconfirmed
+        );
         assert_eq!(
             manager.store.get_runner(&ses.id).unwrap().unwrap().status,
             RunnerStatus::StopUnconfirmed
         );
-        assert!(!manager.read_timeline(&ses.id, 0, 128).unwrap().iter().any(|event| matches!(
-            event.kind,
-            EventKind::SessionStateChanged { state: SessionState::Stopped }
-        )));
+        assert!(!manager
+            .read_timeline(&ses.id, 0, 128)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(
+                event.kind,
+                EventKind::SessionStateChanged {
+                    state: SessionState::Stopped
+                }
+            )));
     }
 
     struct FailAckHandle(Box<dyn RunnerHandle>);

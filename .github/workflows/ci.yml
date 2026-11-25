@@ -12,62 +12,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
-      - name: Validar sintaxis de scripts E2E
+      - name: Install OpenSSH server for P5/P6 E2E
         run: |
-          for script in tests/*.sh; do bash -n "$script"; done
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace
-      - name: e2e con FakeDriver (sin servicios de pago)
-        run: tests/e2e_fake.sh
-      - name: e2e concurrencia y aislamiento
-        run: tests/e2e_concurrency.sh
-      - name: e2e backpressure
-        run: tests/e2e_backpressure.sh
-      - name: e2e permisos de socket sin root
-        run: tests/e2e_unix_permissions.sh
-      - name: e2e persistencia y reinicio de fleetd
-        run: tests/e2e_persistence.sh
-      - name: e2e aprobaciones deterministas
-        run: tests/e2e_approvals.sh
-      - name: e2e supervivencia del runner tras SIGKILL de fleetd
-        run: tests/e2e_p3_survival.sh
-      - name: e2e aprobación pendiente durante desconexión del daemon
-        run: tests/e2e_p3_approval_disconnect.sh
-      - name: e2e identidad y versión de runner inválidas
-        run: tests/e2e_p3_identity.sh
-      - name: e2e pérdida de salud del proveedor
-        run: tests/e2e_p3_provider_health.sh
-      - name: e2e muerte del runner con fail-closed
-        run: tests/e2e_p3_runner_kill.sh
-      - name: e2e dos caídas de daemon con sesiones concurrentes
-        run: tests/e2e_p3_multi_session.sh
-      - name: e2e replay completo con mas de 256 eventos
-        run: tests/e2e_long_replay.sh
-      # P4.4-H: fixtures deterministas; no requieren CLIs ni credenciales de pago.
-      # Los 4 proveedores nativos se siguen probando solo con GF_E2E_REAL=1 local.
-      - name: e2e P4.4 conformidad contrato FakeDriver
-        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_conformity.sh
-      - name: e2e P4.4 aislamiento y turno superviviente FakeDriver
-        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_concurrency.sh
-      - name: e2e P4.4 privacidad y tokens FakeDriver
-        run: GF_E2E_FAKE_ONLY=1 tests/e2e_p44_security.sh
-      - name: e2e P4.4 redaccion de credenciales inyectadas
-        run: tests/e2e_p44_redaction.sh
-      - name: e2e P4.4 aprobaciones sin autoaprobacion
-        run: tests/e2e_p44_approvals.sh
-      - name: e2e P5 transporte SSH local
-        run: |
-          if command -v sshd >/dev/null 2>&1; then
-            tests/e2e_p51_ssh.sh
-          else
-            echo "SKIP: sshd not installed in CI image"
-          fi
-      - name: e2e P5 dos hosts SSH aislados
-        run: |
-          if command -v sshd >/dev/null 2>&1; then
-            tests/e2e_p52_two_hosts.sh
-          else
-            echo "SKIP: sshd not installed in CI image"
-          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+      - name: P6 headless full gate (locked workspace and deterministic E2E)
+        run: bash scripts/ci/p6-headless.sh

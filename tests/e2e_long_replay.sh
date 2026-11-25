@@ -32,7 +32,13 @@ for n in $(seq 1 32); do
   done
   if [[ "$completed" != 1 ]]; then echo "FAIL: prompt $n never completed"; exit 1; fi
 done
-timeout 20s "$BIN/fleetctl" watch "$SID" --since 0 --count 270 >"$RUNTIME/replay.out" 2>"$RUNTIME/replay.err"
+if ! timeout 20s "$BIN/fleetctl" watch "$SID" --since 0 --count 270 \
+  >"$RUNTIME/replay.out" 2>"$RUNTIME/replay.err"; then
+  echo "FAIL: SDK watch exited before completing 270-event replay"
+  cat "$RUNTIME/replay.err"
+  tail -n 10 "$RUNTIME/replay.out" || true
+  exit 1
+fi
 awk -F '\t' '
   NR == 1 && $1 != 1 { exit 1 }
   NR > 1 && $1 != previous + 1 { exit 1 }

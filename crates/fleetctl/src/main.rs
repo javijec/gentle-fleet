@@ -1,22 +1,12 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
-use std::fs::{self, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
+use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
+use fleet_client::{FleetClient, Host};
 use fleet_domain::EventKind;
-use fleet_protocol::transport::{connect, expected_token};
-use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
-use fleet_ssh::{
-    find_host, load_hosts, save_hosts, FleetReader, FleetWriter, HostConfig, SshStream,
-};
-
-static SELECTED_HOST: Mutex<Option<String>> = Mutex::new(None);
-
-fn selected_host() -> Option<String> {
-    SELECTED_HOST.lock().expect("host lock poisoned").clone()
-}
+use fleet_protocol::{Request, Response};
+use fleet_ssh::{find_host, load_hosts, save_hosts, HostConfig};
 
 /// Keep an operation key durably on the CLIENT before sending any remote
 /// effect. SSH can fail after the daemon accepts a request but before its ACK.
@@ -31,76 +21,7 @@ fn operation_journal_path() -> Result<PathBuf, String> {
     Ok(root.join("gentle-fleet/operations.jsonl"))
 }
 
-fn persist_remote_operation(kind: &str, target: &str, key: &str) -> Result<(), String> {
-    let Some(host) = selected_host() else {
-        return Ok(());
-    };
-    let path = operation_journal_path()?;
-    let parent = path
-        .parent()
-        .ok_or("operation journal needs a parent directory")?;
-    fs::create_dir_all(parent).map_err(|e| format!("cannot create operation journal: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Restrict our own Fleet state directory; do not chmod an arbitrary
-        // override directory such as /tmp.
-        if std::env::var_os("FLEET_OPERATION_JOURNAL").is_none() {
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-                .map_err(|e| format!("cannot protect operation journal directory: {e}"))?;
-        }
-    }
-    if let Ok(metadata) = fs::symlink_metadata(&path) {
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("operation journal is not a regular file".into());
-        }
-    }
-    let record = serde_json::json!({
-        "host": host,
-        "kind": kind,
-        "target": target,
-        "operation_key": key,
-        "created_at_unix_ms": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default().as_millis(),
-    });
-    let encoded = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&path)
-        .map_err(|e| format!("cannot open operation journal: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if file
-            .metadata()
-            .map_err(|e| e.to_string())?
-            .permissions()
-            .mode()
-            & 0o077
-            != 0
-        {
-            return Err("operation journal permissions are too permissive".into());
-        }
-    }
-    file.write_all(&encoded)
-        .and_then(|_| file.write_all(b"\n"))
-        .and_then(|_| file.sync_data())
-        .map_err(|e| format!("cannot durably record remote operation: {e}"))?;
-    eprintln!(
-        "remote operation_key={key} host={host} (journal={})",
-        path.display()
-    );
-    Ok(())
-}
-
-fn show_pending() -> Result<(), String> {
+fn show_pending(selected_host: Option<&str>) -> Result<(), String> {
     let path = operation_journal_path()?;
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
@@ -111,10 +32,7 @@ fn show_pending() -> Result<(), String> {
         let record: serde_json::Value =
             serde_json::from_str(line).map_err(|e| format!("invalid operation journal: {e}"))?;
         let host = record["host"].as_str().unwrap_or("");
-        if selected_host()
-            .as_deref()
-            .is_some_and(|selected| selected != host)
-        {
+        if selected_host.is_some_and(|selected| selected != host) {
             continue;
         }
         println!(
@@ -128,137 +46,33 @@ fn show_pending() -> Result<(), String> {
     Ok(())
 }
 
-struct Client {
-    reader: BufReader<FleetReader>,
-    writer: BufWriter<FleetWriter>,
-    next_id: u64,
-    remote: bool,
-}
+struct Client(FleetClient);
 
 impl Client {
     fn connect(host: Option<&str>) -> Result<Self, String> {
-        let (reader_stream, writer_stream, remote) = match host {
-            None => {
-                let local = connect()
-                    .map_err(|e| format!("cannot connect to local fleetd (is it running?): {e}"))?;
-                let reader = local
-                    .try_clone()
-                    .map_err(|e| format!("cannot clone local stream: {e}"))?;
-                (FleetReader::Local(reader), FleetWriter::Local(local), false)
-            }
-            Some(alias) => {
-                let config = find_host(alias).map_err(|error| error.to_string())?;
-                let ssh = SshStream::connect(&config).map_err(|error| error.to_string())?;
-                let (reader, writer) = ssh.split().map_err(|error| error.to_string())?;
-                (reader, writer, true)
-            }
-        };
-        Ok(Self {
-            reader: BufReader::new(reader_stream),
-            writer: BufWriter::new(writer_stream),
-            next_id: 0,
-            remote,
-        })
-    }
-
-    fn hello(&self) -> Request {
-        Request::Hello {
-            client_id: "fleetctl".into(),
-            // El token local nunca viaja por SSH: el bridge lo inyecta en el host remoto.
-            token: if self.remote {
-                None
-            } else {
-                expected_token().ok().flatten()
-            },
-        }
-    }
-
-    fn send(&mut self, request: Request) -> Result<String, String> {
-        self.next_id += 1;
-        let request_id = format!("r{}", self.next_id);
-        write_frame(
-            &mut self.writer,
-            &Frame::Request {
-                request_id: request_id.clone(),
-                request,
-            },
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(request_id)
-    }
-
-    fn read_frame(&mut self) -> Result<Frame, String> {
-        match read_frame(&mut self.reader).map_err(|e| e.to_string())? {
-            Some(frame) => Ok(frame),
-            None => {
-                if !self.remote {
-                    return Err("fleetd closed the connection".into());
-                }
-                let code = self.writer.get_mut().ssh_exit_code();
-                let diagnostics = self.writer.get_ref().ssh_diagnostics();
-                let context = diagnostics.join(" | ");
-                let lower = context.to_ascii_lowercase();
-                // OpenSSH uses 255 for transport/auth/host-key failures;
-                // exit codes 5 and 6 are not reliable SSH classifications.
-                if lower.contains("host key verification failed")
-                    || lower.contains("remote host identification has changed")
-                    || lower.contains("no matching host key")
-                {
-                    Err("HostKeyRejected: SSH server identity verification failed".into())
-                } else if lower.contains("permission denied (publickey")
-                    || lower.contains("permission denied (")
-                {
-                    Err("AuthFailed: SSH authentication rejected".into())
-                } else if lower.contains("fleetd unavailable") {
-                    Err("DaemonDown: remote fleetd is unavailable".into())
-                } else if code == Some(127)
-                    || lower.contains("fleet-ssh-bridge: not found")
-                    || lower.contains("fleet-ssh-bridge: no such file")
-                {
-                    Err("BridgeMissing: remote bridge executable not found".into())
-                } else if lower.contains("connection refused") {
-                    Err("SSHUnreachable: connection refused".into())
-                } else if lower.contains("connection timed out")
-                    || lower.contains("operation timed out")
-                {
-                    Err("SSHTimeout: connection timed out".into())
-                } else if lower.contains("could not resolve hostname") {
-                    Err("SSHUnreachable: name resolution failed".into())
-                } else {
-                    // stderr may contain local paths, account names or even
-                    // unexpected secrets; classify it without echoing it.
-                    Err(format!("SSHDisconnected: SSH exited with status {code:?}"))
-                }
-            }
-        }
+        let host = host.map_or(Host::Local, |alias| Host::Ssh(alias.into()));
+        FleetClient::connect(host)
+            .map(Self)
+            .map_err(|error| error.to_string())
     }
 
     fn call(&mut self, request: Request) -> Result<Response, String> {
-        let request_id = self.send(request)?;
-        loop {
-            match self.read_frame()? {
-                Frame::Response {
-                    request_id: id,
-                    result,
-                } if id == request_id => {
-                    let response = result.map_err(|e| format!("{}: {}", e.code, e.message))?;
-                    if let Response::Hello { wire, .. } = &response {
-                        if wire != fleet_protocol::WIRE {
-                            return Err(format!(
-                                "IncompatibleProtocol: expected {}, server reports {wire}",
-                                fleet_protocol::WIRE
-                            ));
-                        }
-                    }
-                    return Ok(response);
-                }
-                Frame::Event { .. } => continue,
-                Frame::Notice { code, message, .. } => {
-                    return Err(format!("{code}: {message}"));
-                }
-                _ => continue,
+        if let fleet_client::Host::Ssh(alias) = self.0.host() {
+            let entry = match &request {
+                Request::SendPrompt { operation_key, .. } => Some(operation_key),
+                Request::AnswerApproval { operation_key, .. } => Some(operation_key),
+                Request::ImportNativeHistory { operation_key, .. } => Some(operation_key),
+                _ => None,
+            };
+            if let Some(key) = entry {
+                let path = operation_journal_path()?;
+                eprintln!(
+                    "remote operation_key={key} host={alias} (journal={})",
+                    path.display()
+                );
             }
         }
+        self.0.request(request).map_err(|error| error.to_string())
     }
 }
 
@@ -272,7 +86,7 @@ fn main() {
 fn run() -> Result<(), String> {
     let all_args: Vec<String> = std::env::args().skip(1).collect();
     let mut args = all_args.clone();
-    if args.first().map(String::as_str) == Some("--host") {
+    let selected_host = if args.first().map(String::as_str) == Some("--host") {
         let alias = args
             .get(1)
             .ok_or_else(|| "--host requires an alias".to_string())?
@@ -281,9 +95,11 @@ fn run() -> Result<(), String> {
         if args.get(2).map(String::as_str) != Some("host") {
             find_host(&alias).map_err(|error| error.to_string())?;
         }
-        *SELECTED_HOST.lock().expect("host lock poisoned") = Some(alias);
         args = args[2..].to_vec();
-    }
+        Some(alias)
+    } else {
+        None
+    };
     let Some(command) = args.first() else {
         return Err(usage());
     };
@@ -291,27 +107,26 @@ fn run() -> Result<(), String> {
         return host_command(&args[1..]);
     }
     if command == "pending" {
-        return show_pending();
+        return show_pending(selected_host.as_deref());
     }
     match command.as_str() {
-        "workspace" => workspace(&args[1..]),
-        "session" => session(&args[1..]),
-        "prompt" => prompt(&args[1..]),
-        "interrupt" => interrupt(&args[1..]),
-        "controls" => controls(&args[1..]),
-        "set-control" => set_control(&args[1..]),
-        "native-sessions" => native_sessions(&args[1..]),
-        "import-history" => import_history(&args[1..]),
-        "watch" => watch(&args[1..]),
-        "stop" => stop(&args[1..]),
-        "timeline" => timeline(&args[1..]),
-        "operation" => operation(&args[1..]),
-        "approvals" => approvals(&args[1..]),
-        "approval" => approval(&args[1..]),
-        "answer" => answer(&args[1..]),
+        "workspace" => workspace(&args[1..], selected_host.as_deref()),
+        "session" => session(&args[1..], selected_host.as_deref()),
+        "prompt" => prompt(&args[1..], selected_host.as_deref()),
+        "interrupt" => interrupt(&args[1..], selected_host.as_deref()),
+        "controls" => controls(&args[1..], selected_host.as_deref()),
+        "set-control" => set_control(&args[1..], selected_host.as_deref()),
+        "native-sessions" => native_sessions(&args[1..], selected_host.as_deref()),
+        "import-history" => import_history(&args[1..], selected_host.as_deref()),
+        "watch" => watch(&args[1..], selected_host.as_deref()),
+        "stop" => stop(&args[1..], selected_host.as_deref()),
+        "timeline" => timeline(&args[1..], selected_host.as_deref()),
+        "operation" => operation(&args[1..], selected_host.as_deref()),
+        "approvals" => approvals(&args[1..], selected_host.as_deref()),
+        "approval" => approval(&args[1..], selected_host.as_deref()),
+        "answer" => answer(&args[1..], selected_host.as_deref()),
         "agents" => {
-            let mut client = Client::connect(selected_host().as_deref())?;
-            client.call(client.hello())?;
+            let mut client = Client::connect(selected_host.as_deref())?;
             match client.call(Request::ListAgents)? {
                 Response::Agents { agents } => {
                     for agent in agents {
@@ -426,14 +241,9 @@ fn host_command(args: &[String]) -> Result<(), String> {
             let alias = args
                 .get(1)
                 .ok_or_else(|| "host check <alias>".to_string())?;
-            let mut client = Client::connect(Some(alias))?;
-            match client.call(client.hello())? {
-                Response::Hello { wire, .. } => {
-                    println!("connected\t{alias}\t{wire}");
-                    Ok(())
-                }
-                other => Err(format!("unexpected Hello response: {other:?}")),
-            }
+            let _client = Client::connect(Some(alias))?;
+            println!("connected\t{alias}\t{}", fleet_protocol::WIRE);
+            Ok(())
         }
         _ => Err("usage: fleetctl host add|list|show|remove|check ...".into()),
     }
@@ -444,9 +254,8 @@ fn usage() -> String {
         .into()
 }
 
-fn workspace(args: &[String]) -> Result<(), String> {
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+fn workspace(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
+    let mut client = Client::connect(selected_host)?;
     match args.first().map(String::as_str) {
         Some("add") => {
             let path = args.get(1).ok_or_else(usage)?;
@@ -471,9 +280,8 @@ fn workspace(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn session(args: &[String]) -> Result<(), String> {
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+fn session(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
+    let mut client = Client::connect(selected_host)?;
     match args.first().map(String::as_str) {
         Some("create") => {
             let workspace = flag(args, "--workspace").ok_or_else(usage)?;
@@ -512,10 +320,9 @@ fn session(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn native_sessions(args: &[String]) -> Result<(), String> {
+fn native_sessions(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let provider_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::ListNativeSessions { provider_id })? {
         Response::NativeSessions { sessions } => {
             for session in sessions {
@@ -536,16 +343,14 @@ fn native_sessions(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn import_history(args: &[String]) -> Result<(), String> {
+fn import_history(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let provider_id = args.get(1).ok_or_else(usage)?.clone();
     let native_ref = args.get(2).ok_or_else(usage)?.clone();
     let operation_key = args.get(3).cloned().unwrap_or_else(|| {
         std::env::var("FLEET_OPERATION_KEY").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
     });
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
-    persist_remote_operation("import_history", &session_id, &operation_key)?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::ImportNativeHistory {
         session_id,
         provider_id,
@@ -560,10 +365,9 @@ fn import_history(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn controls(args: &[String]) -> Result<(), String> {
+fn controls(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::ListControls { session_id })? {
         Response::Controls { controls } => {
             for control in controls {
@@ -581,13 +385,12 @@ fn controls(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn set_control(args: &[String]) -> Result<(), String> {
+fn set_control(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let name = args.get(1).ok_or_else(usage)?.clone();
     let value = args.get(2).ok_or_else(usage)?.clone();
     let scope = args.get(3).cloned().unwrap_or_else(|| "turn".into());
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::SetControl {
         session_id,
         name,
@@ -607,11 +410,10 @@ fn set_control(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn interrupt(args: &[String]) -> Result<(), String> {
+fn interrupt(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let turn_id = args.get(1).ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::InterruptTurn {
         session_id,
         turn_id,
@@ -627,7 +429,7 @@ fn interrupt(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn prompt(args: &[String]) -> Result<(), String> {
+fn prompt(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let text = args[1..].join(" ");
     if text.is_empty() {
@@ -637,9 +439,7 @@ fn prompt(args: &[String]) -> Result<(), String> {
         .ok()
         .filter(|key| !key.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
-    persist_remote_operation("prompt", &session_id, &operation_key)?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::SendPrompt {
         session_id,
         text,
@@ -657,10 +457,9 @@ fn prompt(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn stop(args: &[String]) -> Result<(), String> {
+fn stop(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::StopSession { session_id })? {
         Response::Stopped { session_id } => {
             println!("stopped\t{session_id}");
@@ -670,7 +469,7 @@ fn stop(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn watch(args: &[String]) -> Result<(), String> {
+fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let since = flag(args, "--since")
         .map(|value| value.parse::<u64>())
@@ -682,47 +481,30 @@ fn watch(args: &[String]) -> Result<(), String> {
         .map(|value| value.parse::<usize>())
         .transpose()
         .map_err(|e| format!("invalid --count: {e}"))?;
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
-    let request_id = client.send(Request::SubscribeTimeline {
-        session_id: session_id.clone(),
-        since_seq: since,
-    })?;
-    let mut last_seq = since;
+    let host = selected_host.map_or(Host::Local, |alias| Host::Ssh(alias.into()));
+    let client = FleetClient::connect(host).map_err(|error| error.to_string())?;
+    let subscription = client
+        .subscribe_timeline(session_id.clone(), since)
+        .map_err(|error| error.to_string())?;
+    eprintln!("subscribed\t{session_id}\tsince={since}");
     let mut printed = 0usize;
     loop {
-        match client.read_frame()? {
-            Frame::Response {
-                request_id: id,
-                result,
-            } if id == request_id => {
-                let latest = match result.map_err(|e| format!("{}: {}", e.code, e.message))? {
-                    Response::Subscribed { latest_seq, .. } => latest_seq,
-                    other => return Err(format!("unexpected response: {other:?}")),
-                };
-                eprintln!("subscribed\t{session_id}\tlatest={latest}");
+        let event = match subscription.recv() {
+            Ok(event) => event,
+            // The SDK observer stays alive and reconnects after transient errors.
+            Err(fleet_client::ClientError::Transport(_)) => continue,
+            Err(fleet_client::ClientError::Api { code, .. }) if code == "Timeout" => {
+                continue;
             }
-            Frame::Notice { code, message, .. } => {
-                eprintln!("notice\t{code}\t{message}");
-                if code == "Backpressure" {
-                    return Err("subscription closed by backpressure; use --since to resume".into());
-                }
-            }
-            Frame::Event { seq, event, .. } => {
-                if seq <= last_seq {
-                    continue; // deducción defensiva, nunca duplica mensajes
-                }
-                last_seq = seq;
-                println!("{}\t{}", seq, describe(&event.kind));
-                printed += 1;
-                if count.is_some_and(|limit| printed >= limit) {
-                    return Ok(());
-                }
-                if until_turn_end && matches!(event.kind, EventKind::TurnCompleted { .. }) {
-                    return Ok(());
-                }
-            }
-            _ => {}
+            Err(error) => return Err(error.to_string()),
+        };
+        println!("{}\t{}", event.seq, describe(&event.kind));
+        printed += 1;
+        if count.is_some_and(|limit| printed >= limit) {
+            return Ok(());
+        }
+        if until_turn_end && matches!(event.kind, EventKind::TurnCompleted { .. }) {
+            return Ok(());
         }
     }
 }
@@ -772,7 +554,7 @@ fn describe(kind: &EventKind) -> String {
     }
 }
 
-fn timeline(args: &[String]) -> Result<(), String> {
+fn timeline(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = args.first().ok_or_else(usage)?.clone();
     let since = flag(args, "--since")
         .map(|value| value.parse::<u64>())
@@ -784,8 +566,7 @@ fn timeline(args: &[String]) -> Result<(), String> {
         .transpose()
         .map_err(|e| format!("invalid --limit: {e}"))?
         .unwrap_or(256);
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::ReadTimeline {
         session_id,
         since_seq: since,
@@ -806,10 +587,9 @@ fn timeline(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn operation(args: &[String]) -> Result<(), String> {
+fn operation(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let key = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::GetOperation { operation_key: key })? {
         Response::Operation { operation } => {
             println!(
@@ -826,10 +606,9 @@ fn operation(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn approvals(args: &[String]) -> Result<(), String> {
+fn approvals(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let session_id = flag(args, "--session");
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::ListApprovals { session_id })? {
         Response::Approvals { approvals } => {
             for approval in approvals {
@@ -848,10 +627,9 @@ fn approvals(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn approval(args: &[String]) -> Result<(), String> {
+fn approval(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let approval_id = args.first().ok_or_else(usage)?.clone();
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     match client.call(Request::GetApproval { approval_id })? {
         Response::Approval { approval } => {
             println!(
@@ -868,15 +646,14 @@ fn approval(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn answer(args: &[String]) -> Result<(), String> {
+fn answer(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
     let approval_id = args.first().ok_or_else(usage)?.clone();
     let decision = args.get(1).ok_or_else(usage)?.clone();
     let operation_key = std::env::var("FLEET_OPERATION_KEY")
         .ok()
         .filter(|key| !key.is_empty())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let mut client = Client::connect(selected_host().as_deref())?;
-    client.call(client.hello())?;
+    let mut client = Client::connect(selected_host)?;
     // Argumentos tipados opcionales: name=value[,value] ...
     let arguments = args[2..]
         .iter()
@@ -886,7 +663,6 @@ fn answer(args: &[String]) -> Result<(), String> {
             values: values.split(',').map(str::to_string).collect(),
         })
         .collect();
-    persist_remote_operation("answer", &approval_id, &operation_key)?;
     match client.call(Request::AnswerApproval {
         approval_id,
         decision,

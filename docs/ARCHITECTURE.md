@@ -22,7 +22,7 @@ El diagrama y el árbol siguiente describen el destino arquitectónico. Lo imple
 
 ~~~mermaid
 flowchart TB
-    UI[GPUI Desktop] --> SDK[Fleet Client SDK]
+    UI[Cliente externo] --> SDK[Fleet Client SDK]
     CLI[fleetctl] --> SDK
     SDK --> TR[Transporte local o SSH]
     TR --> API[Fleet API / fleetd]
@@ -55,11 +55,9 @@ gentle-fleet/
     fleet-driver-opencode/       OpenCode server/API (tras spike)
     fleet-runner/                proceso por sesión y spool acotado
     fleetd/                      daemon por usuario, IPC, runtime
-    fleet-client/                SDK Rust para CLI/GPUI
+    fleet-client/                SDK Rust para CLI y clientes externos
     fleetctl/                    cliente CLI y diagnósticos
     fleet-transport/             IPC Unix/Windows + SSH stdio
-  apps/
-    desktop/                     GPUI en etapa P6, puede residir separado después
   tests/
     contract/                    fixtures comunes del wire y los drivers
     e2e/                         procesos reales/fixtures/crash injection
@@ -76,7 +74,7 @@ Las carpetas indicadas describen módulos futuros; **no existe código implement
 4. fleet-store-sqlite implementa Storage; solo fleetd escribe la base central.
 5. fleet-runner supervisa un proveedor por sesión y entrega mensajes al daemon; no escribe en Fleet DB ni decide autorización pública.
 6. Drivers conocen únicamente la API de su proveedor y la interfaz AgentDriver; no importan fleetd, GPUI ni SQL.
-7. fleetctl y Desktop solo importan fleet-client/protocol; no conocen rutas internas de daemon o runner.
+7. fleetctl y los clientes externos consumen fleet-client/protocol; no conocen rutas internas de daemon o runner.
 
 No se usan dependencias circulares. No hay una crate global utils con lógica de negocio.
 
@@ -85,7 +83,7 @@ No se usan dependencias circulares. No hay una crate global utils con lógica de
 - **fleetd:** servicio local por usuario y host. Expone API, autoriza cliente, gestiona catálogos, idempotencia, sesiones, eventos, permisos y límites. No ejecuta consultas de proveedores desde un proceso cliente.
 - **fleet-runner:** proceso hijo independiente con identidad asignada por fleetd, dueño de la conexión del agente y del buffer temporal de entrega. Solo emite eventos enumerados/acknowledgeables, no decide el ID Fleet.
 - **agente:** subprocess o servidor controlado por driver. La capacidad de mantener el proceso o reanudar su conversación varía entre proveedores.
-- **cliente:** puede ser local o remoto, CLI o GPUI. Sus cierres no matan los runners.
+- **cliente:** puede ser local o remoto, CLI o aplicación externa. Sus cierres no matan los runners.
 
 Una sesión puede tener varios observadores, pero **una sola cola serializada de operaciones mutables**. Los lectores no bloquean otras sesiones. No se utiliza lock global durante llamadas de red o al proveedor.
 

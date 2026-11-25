@@ -168,6 +168,17 @@ pub enum FleetWriter {
 }
 
 impl FleetWriter {
+    /// Close only this client transport. The remote fleetd and runners remain
+    /// owned by the host and are not signalled.
+    pub fn close(&mut self) {
+        match self {
+            FleetWriter::Local(stream) => {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            FleetWriter::Ssh(writer) => writer.close(),
+        }
+    }
+
     pub fn ssh_exit_code(&mut self) -> Option<i32> {
         match self {
             FleetWriter::Ssh(writer) => writer.exit_code(),
@@ -205,16 +216,58 @@ pub struct SshWriter {
     child: Child,
     stdin: Option<ChildStdin>,
     diagnostics: std::sync::Arc<std::sync::Mutex<VecDeque<String>>>,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
+}
+
+fn join_stderr_reader(
+    reader: &mut Option<std::thread::JoinHandle<()>>,
+    timeout: std::time::Duration,
+) {
+    if let Some(reader) = reader.take() {
+        let deadline = std::time::Instant::now() + timeout;
+        while !reader.is_finished() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                // A local SSH helper may still hold stderr open. Do not
+                // let diagnostic collection block cancellation indefinitely.
+                return;
+            }
+            std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)));
+        }
+        let _ = reader.join();
+    }
 }
 
 impl SshWriter {
+    fn drain_stderr(&mut self) {
+        join_stderr_reader(
+            &mut self.stderr_reader,
+            std::time::Duration::from_millis(200),
+        );
+    }
+
+    pub fn close(&mut self) {
+        self.stdin.take();
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        self.drain_stderr();
+    }
+
     /// Código de salida del proceso SSH para clasificar fallos de transporte.
     pub fn exit_code(&mut self) -> Option<i32> {
         // stdout can reach EOF just before OpenSSH exits; give it a bounded
         // opportunity to publish its real exit status and stderr diagnostics.
         for _ in 0..20 {
             match self.child.try_wait() {
-                Ok(Some(status)) => return status.code(),
+                Ok(Some(status)) => {
+                    // The stderr reader may still be publishing OpenSSH's
+                    // host-key diagnostic after stdout EOF and process exit.
+                    // Join it before the caller classifies the disconnect.
+                    self.drain_stderr();
+                    return status.code();
+                }
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
                 Err(_) => return None,
             }
@@ -242,6 +295,7 @@ impl Drop for SshWriter {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
+        self.drain_stderr();
     }
 }
 
@@ -272,6 +326,7 @@ pub struct SshStream {
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     diagnostics: std::sync::Arc<std::sync::Mutex<VecDeque<String>>>,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SshStream {
@@ -314,9 +369,9 @@ impl SshStream {
             .map_err(|_| SshError::SshUnavailable)?;
         let diagnostics: std::sync::Arc<std::sync::Mutex<VecDeque<String>>> =
             std::sync::Arc::new(std::sync::Mutex::new(VecDeque::new()));
-        if let Some(stderr) = child.stderr.take() {
+        let stderr_reader = if let Some(stderr) = child.stderr.take() {
             let log = diagnostics.clone();
-            std::thread::spawn(move || {
+            Some(std::thread::spawn(move || {
                 let mut reader = io::BufReader::new(stderr);
                 let mut chunk = Vec::with_capacity(4096);
                 loop {
@@ -335,13 +390,16 @@ impl SshStream {
                     }
                     entries.push_back(String::from_utf8_lossy(&chunk).trim().to_string());
                 }
-            });
-        }
+            }))
+        } else {
+            None
+        };
         Ok(Self {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
             child,
             diagnostics,
+            stderr_reader,
         })
     }
 
@@ -351,6 +409,7 @@ impl SshStream {
             child: self.child,
             stdin: self.stdin.take(),
             diagnostics: self.diagnostics.clone(),
+            stderr_reader: self.stderr_reader.take(),
         };
         Ok((FleetReader::Ssh(stdout), FleetWriter::Ssh(writer)))
     }
@@ -465,6 +524,49 @@ pub fn read_bridge_frame<R: std::io::BufRead>(reader: &mut R) -> io::Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_diagnostics_are_drained_before_disconnect_classification() {
+        let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reader_diagnostics = diagnostics.clone();
+        let mut reader = Some(std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            reader_diagnostics
+                .lock()
+                .unwrap()
+                .push("Host key verification failed.".to_string());
+        }));
+
+        join_stderr_reader(&mut reader, std::time::Duration::from_secs(5));
+
+        assert!(reader.is_none());
+        assert_eq!(
+            diagnostics.lock().unwrap().as_slice(),
+            ["Host key verification failed."]
+        );
+    }
+
+    #[test]
+    fn stderr_reader_that_has_not_finished_is_not_joined_indefinitely() {
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let mut reader = Some(std::thread::spawn(move || {
+            // A finite watchdog also prevents a broken implementation from
+            // hanging the test suite forever.
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(5));
+            let _ = done.send(());
+        }));
+        join_stderr_reader(&mut reader, std::time::Duration::from_millis(20));
+        assert!(reader.is_none());
+        assert!(matches!(
+            finished.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+    }
 
     #[test]
     fn host_config_rejects_unsafe_arguments() {

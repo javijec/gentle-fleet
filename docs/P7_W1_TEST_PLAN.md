@@ -88,3 +88,26 @@ El fixture actual no cubre todos los intentos requeridos de modificación,
 reemplazo, DACL y renombrado, ni verifica que un antecesor no cause la
 denegación. Debe ampliarse antes de utilizarlo como evidencia de cierre.
 Además falta una prueba sincronizada de la carrera real timeout/completado.
+
+
+### Fixture ampliado (reemplaza los comandos Owner anteriores)
+
+Desde la segunda cuenta ordinaria autorizada, obtener solo su SID:
+
+    [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+Desde la cuenta propietaria ordinaria:
+
+    pwsh -NoProfile -File tests/windows/w1b-cross-user.ps1 -Mode Owner -ProbeSid '<SID de segunda cuenta>'
+
+El padre por defecto es CommonDocuments; si no admite creación/traversal,
+usar `-FixtureParent` con una carpeta de prueba autorizada accesible desde
+ambas cuentas, sin modificar permisos de carpetas del sistema. El script
+concede acceso únicamente a su raíz y control desechables, no al runtime.
+En la segunda cuenta ejecutar Probe como arriba. Debe pasar el control
+positivo de traversal y derechos de su carpeta control, y Access Denied
+para todos los accesos de pipe, archivos y runtime. WRITE_DAC, DELETE,
+DELETE_CHILD y escritura se prueban abriendo handles con derechos exactos,
+sin modificar las ACL ni el contenido. La comprobación del propietario
+antes/después usa Hello real vía bridge. La prueba es manual y no equivale
+a probar reutilización de PID real ni escenarios de administradores.

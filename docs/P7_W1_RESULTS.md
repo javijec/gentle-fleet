@@ -311,3 +311,20 @@ delegación deliberada de handles por el propio usuario siguen fuera de
 lo demostrado; no se certifica reutilización de PID por inspección.
 Referencia: https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient
 y https://learn.microsoft.com/en-us/windows/win32/ipc/impersonating-a-named-pipe-client.
+
+
+### Fixture entre dos SID ampliado (UNTESTED/BLOCKED)
+
+El modo Owner requiere el SID de la otra cuenta autorizada; crea una raíz
+desechable compartida solo con ella y una carpeta control positiva. El modo
+Probe comprueba el marcador con ambos SID, traversal y derechos explícitos
+en el control. Luego exige Access Denied de conexión, enumeración, lectura,
+escritura, DELETE/rename, DELETE_CHILD, FILE_ADD_FILE y WRITE_DAC según el
+objeto; usa aperturas de handles con derechos exactos, no realiza cambios
+destructivos. Owner verifica Hello autenticado antes y después. No se han
+creado cuentas, cambiado ACL del sistema ni ejecutado la prueba. No hay
+PASS de aislamiento real hasta conservar las dos salidas nativas.
+El alias SSH funcional reportado por el agente es `javiomarchi` (no
+`linux`); validar HEAD y checkout limpio en ambos hosts y usar
+`python scripts/ci/remote.py --host javiomarchi --remote-root /home/javijec/dev/gentle-fleet --profile full`.
+No hay evidencia de ejecución del full desde esta sesión.

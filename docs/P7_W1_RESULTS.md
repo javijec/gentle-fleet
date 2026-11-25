@@ -465,3 +465,7 @@ Operador confirmó que pasó todo tras 6e6499f (HEAD remoto observado d61c96fd69
 ### Startup — revalidación reportada y candidato shutdown
 
 Operador confirmó que pasó todo después de de121f5; HEAD remoto observado c1eb647a9d1004f3c2f69a3525f8bfccf49f6425. Sin informes nuevos adjuntos; PASS reportado. Se añade candidato de Shutdown tipado, RPC acotado incluido lock y verificación de salida normal del hijo propio. Se mantiene incertidumbre sin Child verificable y no se fuerza kill para simular cierre. Regresiones nuevas UNTESTED. Pendiente validación y vertical Windows, revisión final de evidencia y riesgos; main intacta.
+
+### Shutdown — corrección de compilación
+
+El operador ejecutó cargo test -p fleetd --locked tras 09b2b9c: FAIL E0599 en process_runner.rs, dos llamadas a RunnerStatus::Stopped.as_str(). La conversión as_str pertenece al trait privado StatusStr de fleet-runner, no a fleet-domain. Se comparte la constante RUNNER_SHUTDOWN_STOPPED en fleet-protocol para emisor y receptor, conservando exactamente el valor wire existente `stopped`, sin cambio de versión ni relajación de la validación. Regresión adicional rechaza `Stopped` (mayúscula). Compilación y tests pendientes; no se declara PASS.

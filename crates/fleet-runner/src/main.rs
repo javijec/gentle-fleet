@@ -698,7 +698,7 @@ fn serve_daemon(
                 match received {
                     Ok(()) => {
                         let response = RunnerResponse::Shutdown {
-                            status: RunnerStatus::Stopped.as_str().into(),
+                            status: RUNNER_SHUTDOWN_STOPPED.into(),
                         };
                         write_runner_frame(
                             &mut writer,
@@ -748,7 +748,7 @@ impl StatusStr for RunnerStatus {
             RunnerStatus::Recovering => "recovering",
             RunnerStatus::Stopping => "stopping",
             RunnerStatus::StopUnconfirmed => "stop_unconfirmed",
-            RunnerStatus::Stopped => "stopped",
+            RunnerStatus::Stopped => RUNNER_SHUTDOWN_STOPPED,
             RunnerStatus::Lost => "lost",
             RunnerStatus::Uncertain => "uncertain",
         }

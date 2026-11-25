@@ -464,7 +464,7 @@ fn stop_unconfirmed(message: &str) -> AgentError {
 
 fn confirm_shutdown_response(response: RunnerResponse) -> Result<(), AgentError> {
     match response {
-        RunnerResponse::Shutdown { status } if status == fleet_domain::RunnerStatus::Stopped.as_str() => Ok(()),
+        RunnerResponse::Shutdown { status } if status == RUNNER_SHUTDOWN_STOPPED => Ok(()),
         _ => Err(stop_unconfirmed("runner did not acknowledge a confirmed shutdown")),
     }
 }
@@ -595,10 +595,11 @@ mod tests {
     #[test]
     fn shutdown_requires_typed_stopped_response() {
         confirm_shutdown_response(RunnerResponse::Shutdown {
-            status: fleet_domain::RunnerStatus::Stopped.as_str().into(),
+            status: RUNNER_SHUTDOWN_STOPPED.into(),
         }).unwrap();
         for response in [
             RunnerResponse::Shutdown { status: "running".into() },
+            RunnerResponse::Shutdown { status: "Stopped".into() },
             RunnerResponse::Accepted { operation_id: "wrong-response".into() },
         ] {
             assert_eq!(confirm_shutdown_response(response).unwrap_err().code, "StopUnconfirmed");

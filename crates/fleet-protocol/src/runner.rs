@@ -25,6 +25,8 @@ pub fn read_runner_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Runner
 }
 
 pub const RUNNER_WIRE: &str = "fleet-runner-v1";
+/// Canonical wire status for an acknowledged, successful driver shutdown.
+pub const RUNNER_SHUTDOWN_STOPPED: &str = "stopped";
 pub const MAX_SPOOL_EVENTS: usize = 1024;
 pub const MAX_SPOOL_BYTES: usize = 4 * 1024 * 1024;
 pub const ACK_TIMEOUT_MS: u64 = 2_000;

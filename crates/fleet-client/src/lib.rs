@@ -13,8 +13,9 @@ use std::time::Duration;
 
 use fleet_domain::{store, ApprovalArgument, ControlState, Event, OperationId, SessionId};
 use fleet_protocol::transport::{connect as connect_local, expected_token};
-use fleet_protocol::{read_frame, write_frame, AgentSummary, Frame, Request, Response};
-use fleet_ssh::{find_host, FleetReader, FleetWriter, SshStream};
+use fleet_protocol::{read_frame, write_frame, Frame, Request, Response};
+pub use fleet_protocol::{AgentSummary, SessionSummary, WorkspaceSummary};
+use fleet_ssh::{find_host, load_hosts, FleetReader, FleetWriter, SshStream};
 use uuid::Uuid;
 
 /// Explicit target. A connection never inherits a process-global host choice.
@@ -65,6 +66,29 @@ impl std::fmt::Display for ClientError {
 impl std::error::Error for ClientError {}
 
 pub type Result<T> = std::result::Result<T, ClientError>;
+
+/// Public, non-secret identity for an SSH host configured through fleetctl.
+/// Connection details remain owned by fleet-ssh and are not exposed to UIs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConfiguredHost {
+    pub alias: String,
+}
+
+/// Read the existing fleetctl SSH catalog without probing or connecting to
+/// any remote host.
+pub fn configured_hosts() -> Result<Vec<ConfiguredHost>> {
+    let hosts = load_hosts()
+        .map_err(|_| ClientError::Transport("configured SSH host catalog is unavailable".into()))?;
+    Ok(public_host_catalog(hosts))
+}
+
+fn public_host_catalog(mut hosts: Vec<fleet_ssh::HostConfig>) -> Vec<ConfiguredHost> {
+    hosts.sort_by(|left, right| left.alias.cmp(&right.alias));
+    hosts
+        .into_iter()
+        .map(|host| ConfiguredHost { alias: host.alias })
+        .collect()
+}
 
 pub struct FleetClient {
     host: Host,
@@ -180,34 +204,7 @@ impl FleetClient {
         }
         let code = self.writer.get_mut().ssh_exit_code();
         let diagnostics = self.writer.get_ref().ssh_diagnostics().join(" | ");
-        let lower = diagnostics.to_ascii_lowercase();
-        if lower.contains("host key verification failed")
-            || lower.contains("remote host identification has changed")
-            || lower.contains("no matching host key")
-        {
-            "HostKeyRejected: SSH server identity verification failed".into()
-        } else if lower.contains("permission denied (publickey")
-            || lower.contains("permission denied (")
-        {
-            "AuthFailed: SSH authentication rejected".into()
-        } else if lower.contains("fleetd unavailable") {
-            "DaemonDown: remote fleetd is unavailable".into()
-        } else if code == Some(127)
-            || lower.contains("fleet-ssh-bridge: not found")
-            || lower.contains("fleet-ssh-bridge: no such file")
-        {
-            "BridgeMissing: remote bridge executable not found".into()
-        } else if lower.contains("connection refused") {
-            "SSHUnreachable: connection refused".into()
-        } else if lower.contains("connection timed out") || lower.contains("operation timed out") {
-            "SSHTimeout: connection timed out".into()
-        } else if lower.contains("could not resolve hostname") {
-            "SSHUnreachable: name resolution failed".into()
-        } else {
-            // SSH diagnostics may contain local paths, account names or
-            // unexpected sensitive data; classify without echoing raw stderr.
-            format!("SSHDisconnected: SSH exited with status {code:?}")
-        }
+        classify_ssh_disconnect(code, &diagnostics)
     }
 
     fn journal_if_remote(&self, request: &Request) -> Result<()> {
@@ -569,6 +566,38 @@ impl FleetClient {
             Response::ControlChanged { control } => Ok(control),
             _ => Err(ClientError::UnexpectedResponse("ControlChanged")),
         }
+    }
+}
+
+fn classify_ssh_disconnect(code: Option<i32>, diagnostics: &str) -> String {
+    let lower = diagnostics.to_ascii_lowercase();
+    if lower.contains("host key verification failed")
+        || lower.contains("remote host identification has changed")
+        || lower.contains("no matching host key")
+        || (lower.contains("strict checking") && lower.contains("host key"))
+    {
+        "HostKeyRejected: SSH server identity verification failed".into()
+    } else if lower.contains("permission denied (publickey")
+        || lower.contains("permission denied (")
+    {
+        "AuthFailed: SSH authentication rejected".into()
+    } else if lower.contains("fleetd unavailable") {
+        "DaemonDown: remote fleetd is unavailable".into()
+    } else if code == Some(127)
+        || lower.contains("fleet-ssh-bridge: not found")
+        || lower.contains("fleet-ssh-bridge: no such file")
+    {
+        "BridgeMissing: remote bridge executable not found".into()
+    } else if lower.contains("connection refused") {
+        "SSHUnreachable: connection refused".into()
+    } else if lower.contains("connection timed out") || lower.contains("operation timed out") {
+        "SSHTimeout: connection timed out".into()
+    } else if lower.contains("could not resolve hostname") {
+        "SSHUnreachable: name resolution failed".into()
+    } else {
+        // SSH diagnostics may contain local paths, account names or
+        // unexpected sensitive data; classify without echoing raw stderr.
+        format!("SSHDisconnected: SSH exited with status {code:?}")
     }
 }
 
@@ -945,6 +974,58 @@ fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_host_key_rejection_classification_does_not_depend_on_exit_code() {
+        assert_eq!(
+            classify_ssh_disconnect(
+                Some(255),
+                "No ED25519 host key is known for [127.0.0.1]:23000 and strict checking is enabled."
+            ),
+            "HostKeyRejected: SSH server identity verification failed"
+        );
+        assert_eq!(
+            classify_ssh_disconnect(Some(255), "Host key verification failed."),
+            "HostKeyRejected: SSH server identity verification failed"
+        );
+    }
+
+    #[test]
+    fn configured_host_catalog_exposes_only_sorted_aliases() {
+        let configured = public_host_catalog(vec![
+            fleet_ssh::HostConfig {
+                alias: "zeta".into(),
+                destination: "private-user@private-host".into(),
+                bridge_path: "/private/path/fleet-ssh-bridge".into(),
+                port: Some(22),
+                identity_file: Some("/private/key".into()),
+                expected_host_key: None,
+                last_status: Some("connected".into()),
+                protocol_version: Some("wire-v1".into()),
+            },
+            fleet_ssh::HostConfig {
+                alias: "alpha".into(),
+                destination: "user@host".into(),
+                bridge_path: "/opt/fleet-ssh-bridge".into(),
+                port: None,
+                identity_file: None,
+                expected_host_key: None,
+                last_status: None,
+                protocol_version: None,
+            },
+        ]);
+        assert_eq!(
+            configured,
+            vec![
+                ConfiguredHost {
+                    alias: "alpha".into()
+                },
+                ConfiguredHost {
+                    alias: "zeta".into()
+                }
+            ]
+        );
+    }
 
     fn sample_event(seq: u64) -> Event {
         Event {

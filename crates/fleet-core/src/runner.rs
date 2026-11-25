@@ -80,7 +80,7 @@ struct InProcessHandle {
     identity: RunnerIdentity,
     commands: SyncSender<RunnerCommand>,
     events: Mutex<Receiver<RunnerEvent>>,
-    closed: Mutex<Receiver<()>>,
+    closed: Mutex<Receiver<Result<(), AgentError>>>,
 }
 
 impl RunnerHandle for InProcessHandle {
@@ -131,7 +131,11 @@ impl RunnerHandle for InProcessHandle {
             .expect("runner close poisoned")
             .recv_timeout(Duration::from_millis(500))
         {
-            Ok(()) => Ok(()),
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(AgentError {
+                code: "StopUnconfirmed".into(),
+                message: fleet_agent::redact_provider_error(&error.to_string()),
+            }),
             Err(_) => Err(AgentError {
                 code: "StopUnconfirmed".into(),
                 message: "in-process runner did not confirm close".into(),
@@ -196,7 +200,7 @@ fn spawn_in_process_driver(
     runner_id: String,
     commands: Receiver<RunnerCommand>,
     events: Sender<RunnerEvent>,
-    closed: Sender<()>,
+    closed: Sender<Result<(), AgentError>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut runner_seq = 0u64;
@@ -256,8 +260,8 @@ fn spawn_in_process_driver(
                     }
                 }
                 Ok(RunnerCommand::Stop) => {
-                    let _ = driver.close();
-                    let _ = closed.send(());
+                    let result = driver.close();
+                    let _ = closed.send(result);
                     break;
                 }
                 Err(RecvTimeoutError::Disconnected) => break,

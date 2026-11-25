@@ -433,8 +433,11 @@ impl SessionManager {
                 + 1;
             // Sin runner verificado, una sesión antigua no puede fingir que sigue ejecutándose.
             let (session_state, turn_state) = match stored.state {
-                SessionState::Running | SessionState::Stopping | SessionState::StopUnconfirmed => {
+                SessionState::Running => {
                     (SessionState::NeedsReconciliation, TurnState::Uncertain)
+                }
+                SessionState::Stopping | SessionState::StopUnconfirmed => {
+                    (SessionState::StopUnconfirmed, stored.turn_state)
                 }
                 other => (other, stored.turn_state),
             };
@@ -848,9 +851,14 @@ impl SessionManager {
                     | SessionState::StopUnconfirmed
                     | SessionState::Failed
             ) {
-                let _ = self
-                    .store
-                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Stopped);
+                let status = match session_record.state {
+                    SessionState::Stopped => RunnerStatus::Stopped,
+                    SessionState::Stopping | SessionState::StopUnconfirmed => RunnerStatus::StopUnconfirmed,
+                    _ => RunnerStatus::Uncertain,
+                };
+                self.store
+                    .update_runner_status(&record.identity.runner_id, status)
+                    .map_err(to_agent_error)?;
                 continue;
             }
             // Never start a second ingress for the same runner. Recovery may
@@ -2355,35 +2363,13 @@ impl SessionManager {
                     message: format!("session `{session_id}` already stopped"),
                 });
             }
-            let Some(handle) = record.runner.clone() else {
-                // No runner tras un reinicio/reattach fallido: el cierre
-                // explícito debe tener efecto verificable en el estado durable
-                // aunque no haya un proceso al que enviar Shutdown.
-                let runner_id = self
-                    .store
-                    .get_runner(session_id)
-                    .ok()
-                    .flatten()
-                    .map(|record| record.identity.runner_id);
-                record.summary.state = SessionState::Stopped;
-                record.active_turn = None;
-                record.current_operation = None;
-                let _ = self.publish_locked(
-                    &mut state,
-                    session_id,
-                    EventKind::SessionStateChanged {
-                        state: SessionState::Stopped,
-                    },
-                );
-                drop(state);
-                self.persist_session_state(session_id);
-                if let Some(runner_id) = runner_id {
-                    let _ = self
-                        .store
-                        .update_runner_status(&runner_id, RunnerStatus::Stopped);
-                }
-                return Ok(());
-            };
+            if record.summary.state == SessionState::Stopping {
+                return Err(AgentError {
+                    code: "StopUnconfirmed".into(),
+                    message: "another stop is still in progress".into(),
+                });
+            }
+            let handle = record.runner.clone();
             let active_turn = record.active_turn.take();
             let operation_id = record.current_operation.take();
             record.summary.state = SessionState::Stopping;
@@ -2416,6 +2402,32 @@ impl SessionManager {
         };
         self.persist_session_state(session_id);
         let _ = (active_turn, operation_id);
+        let Some(handle) = handle else {
+            // A missing handle after restart/failed reattach is not evidence
+            // that the previous runner or its provider has stopped.
+            let message = "no verified runner handle; termination cannot be confirmed";
+            self.mark_stop_unconfirmed(session_id, message);
+            match self.store.get_runner(session_id) {
+                Ok(Some(record)) => {
+                    if let Err(error) = self.store.update_runner_status(
+                        &record.identity.runner_id,
+                        RunnerStatus::StopUnconfirmed,
+                    ) {
+                        self.record_storage_fault(&error.message);
+                        return Err(to_agent_error(error));
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.record_storage_fault(&error.message);
+                    return Err(to_agent_error(error));
+                }
+            }
+            return Err(AgentError {
+                code: "StopUnconfirmed".into(),
+                message: message.into(),
+            });
+        };
         let outcome = handle.close();
         if outcome.is_ok() {
             self.finish_stop(session_id, &outcome);
@@ -3475,16 +3487,16 @@ mod tests {
     }
 
     #[test]
-    fn stop_after_failed_reattach_finalizes_durable_state() {
+    fn stop_after_failed_reattach_preserves_uncertainty() {
         let path = unique_db_path();
         let manager = manager_at(FakeConfig::default(), path.clone());
         let ws = workspace(&manager);
         let ses = session(&manager, &ws.id);
         drop(manager);
 
-        let reopened = manager_at(FakeConfig::default(), path);
-        // In-process launcher cannot reattach, so recovery leaves the session
-        // uncertain with no runner. An explicit Stop must still be effective.
+        let reopened = manager_at(FakeConfig::default(), path.clone());
+        // In-process launcher cannot reattach. Losing the handle cannot
+        // establish that the previous runner/provider has stopped.
         let _ = reopened.recover_runners().unwrap();
         let before = reopened
             .list_sessions()
@@ -3492,17 +3504,52 @@ mod tests {
             .find(|item| item.id == ses.id)
             .unwrap();
         assert_eq!(before.state, SessionState::NeedsReconciliation);
-        reopened.stop_session(&ses.id).unwrap();
+        assert_eq!(
+            reopened.stop_session(&ses.id).unwrap_err().code,
+            "StopUnconfirmed"
+        );
         let after = reopened
             .list_sessions()
             .into_iter()
             .find(|item| item.id == ses.id)
             .unwrap();
-        assert_eq!(after.state, SessionState::Stopped);
+        assert_eq!(after.state, SessionState::StopUnconfirmed);
         assert_eq!(
             reopened.store.get_runner(&ses.id).unwrap().unwrap().status,
-            RunnerStatus::Stopped
+            RunnerStatus::StopUnconfirmed
         );
+        assert!(!reopened.read_timeline(&ses.id, 0, 128).unwrap().iter().any(|event| matches!(
+            event.kind,
+            EventKind::SessionStateChanged { state: SessionState::Stopped }
+        )));
+        drop(reopened);
+        let restarted = manager_at(FakeConfig::default(), path);
+        assert!(restarted.recover_runners().unwrap().is_empty());
+        assert_eq!(restarted.list_sessions()[0].state, SessionState::StopUnconfirmed);
+        assert_eq!(
+            restarted.store.get_runner(&ses.id).unwrap().unwrap().status,
+            RunnerStatus::StopUnconfirmed
+        );
+    }
+
+    #[test]
+    fn failed_driver_close_never_confirms_stop() {
+        let manager = manager(FakeConfig {
+            fail_close: true,
+            ..FakeConfig::default()
+        });
+        let ws = workspace(&manager);
+        let ses = session(&manager, &ws.id);
+        assert_eq!(manager.stop_session(&ses.id).unwrap_err().code, "StopUnconfirmed");
+        assert_eq!(manager.list_sessions()[0].state, SessionState::StopUnconfirmed);
+        assert_eq!(
+            manager.store.get_runner(&ses.id).unwrap().unwrap().status,
+            RunnerStatus::StopUnconfirmed
+        );
+        assert!(!manager.read_timeline(&ses.id, 0, 128).unwrap().iter().any(|event| matches!(
+            event.kind,
+            EventKind::SessionStateChanged { state: SessionState::Stopped }
+        )));
     }
 
     struct FailAckHandle(Box<dyn RunnerHandle>);

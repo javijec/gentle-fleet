@@ -78,3 +78,7 @@ No etiquetar roja por un error de compilación o de infraestructura.
 6. Sin P0/P1 confirmados pendientes; revisión de logs y limitaciones. No
    sustituir requisitos manuales de release, dos SID, proveedores reales,
    SSH físico ni gate de seguridad por FakeDriver. No iniciar W1-E/F ni W2.
+
+## Corrección candidata previa al cierre W1-C — confirmación de parada
+
+Inspección confirmó dos caminos lógicos que reportan éxito sin evidencia: ausencia de handle y error de close descartado por launcher en proceso. Se sustituyen las expectativas anteriores por regresiones que exigen StopUnconfirmed en API, timeline y runner durable; el caso sin handle también verifica persistencia tras reinicio. FakeConfig añade fail_close (FLEET_FAKE_FAIL_CLOSE para futuros fixtures). SQLite conserva intención de stop incierta al reiniciar; recuperación no convierte StopUnconfirmed/Failed en runner Stopped ni revive sesiones. Stop simultáneo se rechaza mientras uno está en curso. Cambios compartidos Linux/Windows, sin nuevo wire ni tablas. UNTESTED: pruebas no ejecutadas aquí, no se declara RED observado ni PASS. Pendientes: revisar transición y persistencia ante fallo de storage, startup/Child, RPC shutdown/timeout y verificación del proceso real; primera vertical W1-D sigue especificada, no implementada. No iniciar W1-D ni cerrar W1-C hasta resolver y validar bloqueantes.

@@ -21,6 +21,7 @@ fn fake_config_from_env() -> FakeConfig {
     FakeConfig {
         block_send: env_flag("FLEET_FAKE_BLOCK_SEND"),
         block_close: env_flag("FLEET_FAKE_BLOCK_CLOSE"),
+        fail_close: env_flag("FLEET_FAKE_FAIL_CLOSE"),
         fail_send: env_flag("FLEET_FAKE_FAIL_SEND"),
         emit_provider_error: env_flag("FLEET_FAKE_PROVIDER_ERROR"),
         emit_terminal_failure: env_flag("FLEET_FAKE_TERMINAL_FAILURE"),

@@ -19,6 +19,7 @@ pub struct FakeConfig {
     pub fail_send: bool,
     pub block_send: bool,
     pub block_close: bool,
+    pub fail_close: bool,
     pub emit_provider_error: bool,
     pub emit_terminal_failure: bool,
     pub emit_approval: bool,
@@ -283,6 +284,12 @@ impl AgentDriver for FakeDriver {
     fn close(&mut self) -> Result<(), AgentError> {
         if self.config.block_close {
             std::thread::sleep(Duration::from_secs(60));
+        }
+        if self.config.fail_close {
+            return Err(AgentError {
+                code: "driver_close_failed".into(),
+                message: "injected fake close failure".into(),
+            });
         }
         self.closed = true;
         Ok(())

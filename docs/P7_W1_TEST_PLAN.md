@@ -128,3 +128,7 @@ confirmados. Registrar resultados de identidad y cancelación que aún no se
 puedan reproducir; no ocultar fallos ni eximirlos por el diferimiento.
 Usar `javiomarchi` para SSH con host key checking. No crear cuentas. El
 perfil release conserva `cross-user-ipc-acl` y los demás gates manuales.
+
+## Ejecución conjunta del gate W1-C
+
+Usar `scripts/ci/w1c_entry.py` desde Windows con el checkout Linux en el mismo SHA; ver [plan W1-C](P7_W1_C_PLAN.md). El resultado AUTOMATED_PASS requiere todavía revisión de logs y criterios de seguridad. No modifica el gate ni registra PASS manual.

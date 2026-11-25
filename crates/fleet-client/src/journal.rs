@@ -18,7 +18,7 @@ pub(super) fn path(override_name: &str, name: &str) -> io::Result<PathBuf> {
         return Ok(path);
     }
     #[cfg(windows)]
-    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let root = Some(fleet_protocol::transport::local_app_data()?);
     #[cfg(unix)]
     let root = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)

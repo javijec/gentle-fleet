@@ -409,3 +409,7 @@ El operador confirmó que pasó todo tras W1-C.4. HEAD remoto comprobado b32c1ec
 ### W1-C.5 — gate automatizado reportado PASS
 
 El operador confirmó que pasó todo tras resolver checkout dirty y ejecutar el candidato W1-C.5. HEAD remoto observado 2b4e80f8dc19e22f2cf23c65cc7c8783798bbf9f; no se adjuntó resumen, SHA ejecutado ni logs, por lo que no se atribuye conteo exacto ni revisión independiente. Los cinco subcortes tienen resultados automatizados reportados favorables. Se mantiene W1-C abierta por pendientes de aceptación y se añade candidato de exclusividad de raíz y spool Windows. Main sin cambios.
+
+### W1-C — reserva exclusiva PASS reportado
+
+El operador confirmó que pasó todo tras el candidato de DataLease y la actualización de formato. HEAD remoto observado d49b0b96cfec1e0c6bea76d2b0e817db816e62ad; no se adjuntaron reportes nuevos vinculados al SHA ni logs. Se registra PASS reportado, no aceptación independiente. Nuevo candidato: Known Folder compartida y reserva de endpoint previa a la apertura de SQLite, con publicación posterior a recuperación. No se inicia W1-D.

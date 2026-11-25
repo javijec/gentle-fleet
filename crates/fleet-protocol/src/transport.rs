@@ -16,7 +16,7 @@ use std::path::PathBuf;
 mod windows_pipe;
 
 #[cfg(windows)]
-pub use windows_pipe::{DataDirectory, DataLease};
+pub use windows_pipe::{local_app_data, DataDirectory, DataLease};
 
 /// Windows uses one daemon per private durable root (runner spool filenames
 /// are also scoped to that root). Reserve the lease namespace from SQLite.
@@ -44,7 +44,7 @@ pub fn database_path() -> io::Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
     #[cfg(windows)]
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let base = Some(local_app_data()?);
     #[cfg(unix)]
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -188,11 +188,15 @@ impl LocalListener {
         Self::bind_named("fleetd")
     }
 
-    pub fn bind_named(name: &str) -> io::Result<Self> {
+    fn reserve_named(name: &str) -> io::Result<Self> {
         let directory = runtime_dir();
         let guard = windows_pipe::private_runtime(&directory, true)?;
         let listener = windows_pipe::Listener::bind_runtime(guard, name)?;
-        let address = listener.address().to_string();
+        Ok(Self::NamedPipe(listener))
+    }
+
+    fn publish_named(&self, name: &str) -> io::Result<()> {
+        let Self::NamedPipe(listener) = self;
         // Only the daemon owns fleetd.token. Runners generate their own
         // independent token during startup and must never rotate the daemon's.
         if name == "fleetd" {
@@ -202,8 +206,18 @@ impl LocalListener {
                 token.as_bytes(),
             )?;
         }
-        windows_pipe::write_private_file(&address_file_named(name), address.as_bytes())?;
-        Ok(Self::NamedPipe(listener))
+        windows_pipe::write_private_file(&address_file_named(name), listener.address().as_bytes())
+    }
+
+    /// Reserve the daemon endpoint without publishing readiness credentials.
+    pub fn reserve_daemon() -> io::Result<ReservedDaemonListener> {
+        Ok(ReservedDaemonListener(Self::reserve_named("fleetd")?))
+    }
+
+    pub fn bind_named(name: &str) -> io::Result<Self> {
+        let listener = Self::reserve_named(name)?;
+        listener.publish_named(name)?;
+        Ok(listener)
     }
 
     pub fn accept(&self) -> io::Result<LocalStream> {
@@ -214,6 +228,18 @@ impl LocalListener {
 
     pub fn description(&self) -> String {
         format!("named-pipe:{:?}", address_file_named("fleetd"))
+    }
+}
+
+/// A reserved endpoint cannot be published under a different instance name.
+#[cfg(windows)]
+pub struct ReservedDaemonListener(LocalListener);
+
+#[cfg(windows)]
+impl ReservedDaemonListener {
+    pub fn publish(self) -> io::Result<LocalListener> {
+        self.0.publish_named("fleetd")?;
+        Ok(self.0)
     }
 }
 

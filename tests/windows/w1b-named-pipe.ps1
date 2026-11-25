@@ -144,6 +144,9 @@ try {
         throw 'second daemon did not reject the active endpoint within 10 seconds'
     }
     if ($competitor.ExitCode -eq 0) { throw 'second daemon unexpectedly succeeded' }
+    if (Test-Path -LiteralPath $env:FLEET_DB_PATH) {
+        throw 'endpoint competitor opened SQLite before reserving the endpoint'
+    }
     if ($daemon.HasExited) { throw 'first daemon exited after endpoint collision' }
     if (([IO.File]::ReadAllText($addressFile)).Trim() -ne $address) {
         throw 'second daemon replaced the active endpoint'

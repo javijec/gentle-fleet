@@ -23,7 +23,7 @@ pub(super) fn path() -> Result<PathBuf, SshError> {
         return Ok(path);
     }
     #[cfg(windows)]
-    let root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let root = Some(fleet_protocol::transport::local_app_data().map_err(io_error)?);
     #[cfg(unix)]
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)

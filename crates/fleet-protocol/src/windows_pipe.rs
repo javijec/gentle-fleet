@@ -673,6 +673,53 @@ pub struct DataDirectory {
     sid: String,
 }
 
+/// The current user's actual Windows Known Folder, not a process override.
+pub fn local_app_data() -> io::Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+
+    let mut raw: *mut u16 = ptr::null_mut();
+    let result = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, ptr::null_mut(), &mut raw)
+    };
+    // The documented allocator must be used even on failure.
+    struct KnownFolder(*mut u16);
+    impl Drop for KnownFolder {
+        fn drop(&mut self) {
+            unsafe { CoTaskMemFree(self.0.cast()) };
+        }
+    }
+    let allocated = KnownFolder(raw);
+    if result < 0 || allocated.0.is_null() {
+        return Err(io::Error::other(format!(
+            "LocalAppData Known Folder unavailable (HRESULT {result:#x})"
+        )));
+    }
+    let mut len = 0;
+    unsafe {
+        while *allocated.0.add(len) != 0 {
+            len += 1;
+        }
+    }
+    let path = PathBuf::from(std::ffi::OsString::from_wide(unsafe {
+        std::slice::from_raw_parts(allocated.0, len)
+    }));
+    validate_data_path(&path)?;
+    if !path.is_dir() {
+        return Err(invalid("LocalAppData Known Folder is not an existing directory"));
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+#[test]
+fn known_folder_is_an_existing_absolute_path() {
+    let folder = local_app_data().unwrap();
+    assert!(folder.is_absolute());
+    assert!(folder.is_dir());
+}
+
 fn validate_data_path(path: &Path) -> io::Result<()> {
     use std::path::{Component, Prefix};
 

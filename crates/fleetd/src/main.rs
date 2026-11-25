@@ -29,6 +29,10 @@ fn main() -> std::io::Result<()> {
     // The OS releases this lease when the daemon is terminated.
     #[cfg(windows)]
     let _data_lease = fleet_protocol::transport::daemon_data_lease(&database)?;
+    // Reserve both authorities before opening SQLite. Publishing credentials
+    // remains deferred until initialization and recovery are complete.
+    #[cfg(windows)]
+    let reserved_listener = LocalListener::reserve_daemon()?;
     let registry = builtin_registry_from_env();
     let store = Arc::new(
         SqliteStore::open(database)
@@ -56,7 +60,9 @@ fn main() -> std::io::Result<()> {
         }
         Err(error) => eprintln!("runner recovery incomplete: {error}"),
     }
-    // bind() crea el token de Windows: no leerlo antes.
+    #[cfg(windows)]
+    let listener = reserved_listener.publish()?;
+    #[cfg(unix)]
     let listener = LocalListener::bind()?;
     let expected = expected_token()?;
     println!("fleetd listening on {} ({WIRE})", listener.description());

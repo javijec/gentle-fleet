@@ -148,8 +148,8 @@ fn load_in(directory: &Directory, path: &Path) -> Result<Vec<HostConfig>, SshErr
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(io_error(err)),
     };
-    // A cooperating writer replaces the path, not the contents of this
-    // open handle, so a reader sees a complete old or new catalog.
+    // Readers and writers hold the stable sibling lock while opening and
+    // validating the catalog, including during replacement.
     directory.validate_handle(path, &file)?;
     let mut text = String::new();
     file.read_to_string(&mut text).map_err(io_error)?;
@@ -161,7 +161,10 @@ fn load_in(directory: &Directory, path: &Path) -> Result<Vec<HostConfig>, SshErr
 
 pub(super) fn load(path: &Path) -> Result<Vec<HostConfig>, SshError> {
     match Directory::open(path, false)? {
-        Some(directory) => load_in(&directory, path),
+        Some(directory) => {
+            let _lock = lock_catalog(&directory, path, false)?;
+            load_in(&directory, path)
+        }
         None => Ok(Vec::new()),
     }
 }
@@ -209,16 +212,30 @@ fn write_atomic(directory: &Directory, path: &Path, hosts: &[HostConfig]) -> Res
     result
 }
 
+fn lock_catalog(directory: &Directory, path: &Path, exclusive: bool) -> Result<File, SshError> {
+    let lock_path = sibling(path, ".lock");
+    directory.validate_file(&lock_path)?;
+    let lock = options()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(io_error)?;
+    directory.validate_handle(&lock_path, &lock)?;
+    if exclusive {
+        lock.lock().map_err(io_error)?;
+    } else {
+        lock.lock_shared().map_err(io_error)?;
+    }
+    Ok(lock)
+}
+
 pub(super) fn update(
     path: &Path,
     change: impl FnOnce(&mut Vec<HostConfig>) -> Result<(), SshError>,
 ) -> Result<(), SshError> {
     let directory = Directory::open(path, true)?.ok_or_else(|| error("catalog directory missing"))?;
-    let lock_path = sibling(path, ".lock");
-    directory.validate_file(&lock_path)?;
-    let lock = options().write(true).create(true).truncate(false).open(&lock_path).map_err(io_error)?;
-    directory.validate_handle(&lock_path, &lock)?;
-    lock.lock().map_err(io_error)?;
+    let _lock = lock_catalog(&directory, path, true)?;
     let mut hosts = load_in(&directory, path)?;
     change(&mut hosts)?;
     validate_hosts(&hosts)?;
@@ -270,6 +287,16 @@ mod tests {
     fn concurrent_updates_preserve_every_host() {
         let root = fixture();
         let path = root.join("data").join("hosts.json");
+        // Readers must never see a partially written or inconsistent catalog.
+        add(&path, host("initial".into())).unwrap();
+        let reader = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for _ in 0..24 {
+                    assert!(load(&path).unwrap().iter().any(|host| host.alias == "initial"));
+                }
+            })
+        };
         let workers: Vec<_> = (0..12).map(|index| {
             let path = path.clone();
             std::thread::spawn(move || add(&path, host(format!("host-{index}"))).unwrap())
@@ -277,9 +304,10 @@ mod tests {
         for worker in workers {
             worker.join().unwrap();
         }
-        assert_eq!(load(&path).unwrap().len(), 12);
+        reader.join().unwrap();
+        assert_eq!(load(&path).unwrap().len(), 13);
         assert!(add(&path, host("host-0".into())).is_err());
-        assert_eq!(load(&path).unwrap().len(), 12);
+        assert_eq!(load(&path).unwrap().len(), 13);
         std::fs::remove_dir_all(root).unwrap();
     }
 

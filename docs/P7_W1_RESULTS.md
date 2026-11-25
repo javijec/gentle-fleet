@@ -461,3 +461,7 @@ Tras informe del agente en bfccbb9, se confirmó por inspección el descarte de 
 ### StopUnconfirmed — revalidación reportada y candidato de startup
 
 Operador confirmó que pasó todo tras 6e6499f (HEAD remoto observado d61c96fd693f64f535f960f57dd0f4bfe546d3bb). Sin nuevos informes asociados al SHA ni logs originales, PASS reportado. Se prepara corrección de startup con Child propio retenido, plazo de identidad y Hello, validación de contexto y cleanup acotado. Regresiones nuevas no ejecutadas. Mantener pendiente revisión de shutdown, evidencia de ciclo de vida real y cierre técnico W1-C.
+
+### Startup — revalidación reportada y candidato shutdown
+
+Operador confirmó que pasó todo después de de121f5; HEAD remoto observado c1eb647a9d1004f3c2f69a3525f8bfccf49f6425. Sin informes nuevos adjuntos; PASS reportado. Se añade candidato de Shutdown tipado, RPC acotado incluido lock y verificación de salida normal del hijo propio. Se mantiene incertidumbre sin Child verificable y no se fuerza kill para simular cierre. Regresiones nuevas UNTESTED. Pendiente validación y vertical Windows, revisión final de evidencia y riesgos; main intacta.

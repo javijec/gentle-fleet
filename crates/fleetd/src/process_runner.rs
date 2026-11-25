@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use fleet_agent::AgentError;
@@ -25,6 +25,7 @@ struct RunnerIo {
 struct ProcessHandle {
     identity: RunnerIdentity,
     io: Mutex<RunnerIo>,
+    cancellation: LocalStream,
     buffered: Mutex<VecDeque<RunnerEvent>>,
     next_request: AtomicU64,
     child: Mutex<Option<std::process::Child>>,
@@ -40,6 +41,8 @@ fn io_error(error: std::io::Error) -> AgentError {
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(70);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_IDENTITY_BYTES: u64 = 16 * 1024;
 
 fn read_identity(stdout: impl Read) -> Result<RunnerIdentity, AgentError> {
@@ -153,12 +156,14 @@ impl ProcessHandle {
         let name = format!("fleet-runner-{}", identity.runner_id);
         let stream = connect_named(&name).map_err(io_error)?;
         let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
+        let cancellation = stream.try_clone().map_err(io_error)?;
         let handle = Self {
             identity,
             io: Mutex::new(RunnerIo {
                 writer: stream,
                 reader,
             }),
+            cancellation,
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(None),
@@ -166,38 +171,13 @@ impl ProcessHandle {
         };
         let token = std::fs::read_to_string(runtime_dir().join(format!("{name}.token")))
             .map_err(io_error)?;
-        // Cancel a stalled Hello on the actual connection, not by abandoning
-        // an RPC thread. The clone shares the Windows cancellation state.
-        let cancellation = handle
-            .io
-            .lock()
-            .expect("runner stream poisoned")
-            .writer
-            .try_clone()
-            .map_err(io_error)?;
-        let (done_tx, done_rx) = mpsc::channel();
-        let watchdog = std::thread::Builder::new()
-            .spawn(move || {
-                if done_rx.recv_timeout(HELLO_TIMEOUT).is_err() {
-                    let _ = cancellation.shutdown(std::net::Shutdown::Both);
-                    true
-                } else {
-                    false
-                }
-            })
-            .map_err(io_error)?;
-        let response = handle.rpc(RunnerRequest::Hello {
-            identity: handle.identity.clone(),
-            token,
-        });
-        let _ = done_tx.send(());
-        if watchdog.join().unwrap_or(true) {
-            return Err(AgentError {
-                code: "runner_hello_timeout".into(),
-                message: "runner Hello did not finish before the deadline".into(),
-            });
-        }
-        match response? {
+        match handle.rpc_bounded(
+            RunnerRequest::Hello {
+                identity: handle.identity.clone(),
+                token,
+            },
+            HELLO_TIMEOUT,
+        )? {
             RunnerResponse::Hello {
                 identity,
                 protocol_version,
@@ -217,8 +197,65 @@ impl ProcessHandle {
     }
 
     fn rpc(&self, request: RunnerRequest) -> Result<RunnerResponse, AgentError> {
-        let request_id = format!("d{}", self.next_request.fetch_add(1, Ordering::SeqCst));
         let mut io = self.io.lock().expect("runner stream poisoned");
+        self.rpc_locked(&mut io, request, None)
+    }
+
+    // Include contention for the per-runner RPC lock in the deadline. Cancel
+    // the actual connection on expiry so a stalled ingress cannot keep the
+    // shutdown waiting or allow subsequent commands on an uncertain stream.
+    fn rpc_bounded(
+        &self,
+        request: RunnerRequest,
+        timeout: Duration,
+    ) -> Result<RunnerResponse, AgentError> {
+        let deadline = Instant::now() + timeout;
+        let timeout_error = || AgentError {
+            code: "runner_rpc_timeout".into(),
+            message: "runner RPC deadline expired; connection cancelled".into(),
+        };
+        let mut io = loop {
+            if Instant::now() >= deadline {
+                let _ = self.cancellation.shutdown(std::net::Shutdown::Both);
+                return Err(timeout_error());
+            }
+            match self.io.try_lock() {
+                Ok(io) => break io,
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(5)),
+                Err(TryLockError::Poisoned(_)) => return Err(AgentError {
+                    code: "runner_io".into(),
+                    message: "runner RPC lock poisoned".into(),
+                }),
+            }
+        };
+        let cancellation = self.cancellation.try_clone().map_err(io_error)?;
+        let (done_tx, done_rx) = mpsc::channel();
+        let watchdog = std::thread::Builder::new()
+            .spawn(move || {
+                if done_rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).is_err() {
+                    let _ = cancellation.shutdown(std::net::Shutdown::Both);
+                    true
+                } else {
+                    false
+                }
+            })
+            .map_err(io_error)?;
+        let response = self.rpc_locked(&mut io, request, Some(deadline));
+        let _ = done_tx.send(());
+        if watchdog.join().unwrap_or(true) || Instant::now() >= deadline {
+            let _ = self.cancellation.shutdown(std::net::Shutdown::Both);
+            return Err(timeout_error());
+        }
+        response
+    }
+
+    fn rpc_locked(
+        &self,
+        io: &mut RunnerIo,
+        request: RunnerRequest,
+        deadline: Option<Instant>,
+    ) -> Result<RunnerResponse, AgentError> {
+        let request_id = format!("d{}", self.next_request.fetch_add(1, Ordering::SeqCst));
         write_runner_frame(
             &mut io.writer,
             &RunnerFrame::Request {
@@ -228,6 +265,12 @@ impl ProcessHandle {
         )
         .map_err(io_error)?;
         loop {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(AgentError {
+                    code: "runner_rpc_timeout".into(),
+                    message: "runner RPC deadline expired".into(),
+                });
+            }
             match read_runner_frame(&mut io.reader).map_err(io_error)? {
                 Some(RunnerFrame::Response {
                     request_id: id,
@@ -397,20 +440,45 @@ impl RunnerHandle for ProcessHandle {
     }
 
     fn close(&self) -> Result<(), AgentError> {
-        self.rpc(RunnerRequest::Shutdown)?;
-        if let Some(mut child) = self.child.lock().expect("child poisoned").take() {
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while std::time::Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => return Ok(()),
-                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                    Err(_) => break,
-                }
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        let response = self.rpc_bounded(RunnerRequest::Shutdown, SHUTDOWN_TIMEOUT)
+            .map_err(|error| stop_unconfirmed(&error.to_string()))?;
+        confirm_shutdown_response(response)?;
+        let mut owned = self.child.lock().expect("child poisoned");
+        let child = owned.as_mut().ok_or_else(|| {
+            stop_unconfirmed("driver close acknowledged but runner exit cannot be verified after reattach")
+        })?;
+        // Do not force-kill a runner and convert that into a successful
+        // graceful close. Retain the owned handle on uncertainty.
+        confirm_child_exit(child, EXIT_TIMEOUT)?;
+        *owned = None;
         Ok(())
+    }
+}
+
+fn stop_unconfirmed(message: &str) -> AgentError {
+    AgentError {
+        code: "StopUnconfirmed".into(),
+        message: fleet_agent::redact_provider_error(message),
+    }
+}
+
+fn confirm_shutdown_response(response: RunnerResponse) -> Result<(), AgentError> {
+    match response {
+        RunnerResponse::Shutdown { status } if status == fleet_domain::RunnerStatus::Stopped.as_str() => Ok(()),
+        _ => Err(stop_unconfirmed("runner did not acknowledge a confirmed shutdown")),
+    }
+}
+
+fn confirm_child_exit(child: &mut std::process::Child, timeout: Duration) -> Result<(), AgentError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => return Err(stop_unconfirmed("runner exited unsuccessfully after shutdown")),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => return Err(stop_unconfirmed("runner exit not observed after shutdown acknowledgment")),
+            Err(error) => return Err(stop_unconfirmed(&format!("cannot verify runner exit: {error}"))),
+        }
     }
 }
 
@@ -523,6 +591,91 @@ impl RunnerLauncher for ProcessRunnerLauncher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_requires_typed_stopped_response() {
+        confirm_shutdown_response(RunnerResponse::Shutdown {
+            status: fleet_domain::RunnerStatus::Stopped.as_str().into(),
+        }).unwrap();
+        for response in [
+            RunnerResponse::Shutdown { status: "running".into() },
+            RunnerResponse::Accepted { operation_id: "wrong-response".into() },
+        ] {
+            assert_eq!(confirm_shutdown_response(response).unwrap_err().code, "StopUnconfirmed");
+        }
+    }
+
+    #[test]
+    fn shutdown_exit_confirmation_distinguishes_live_and_failed_child() {
+        const CHILD: &str = "GF_TEST_SHUTDOWN_EXIT_CHILD";
+        if let Ok(mode) = std::env::var(CHILD) {
+            match mode.as_str() {
+                "ok" => std::process::exit(0),
+                "error" => std::process::exit(1),
+                _ => {
+                    let mut byte = [0];
+                    let _ = std::io::stdin().read(&mut byte);
+                    std::process::exit(0);
+                }
+            }
+        }
+        struct Guard(std::process::Child);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = terminate_startup_child(&mut self.0);
+            }
+        }
+        let spawn = |mode| {
+            Guard(std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "process_runner::tests::shutdown_exit_confirmation_distinguishes_live_and_failed_child"])
+                .env(CHILD, mode)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn().unwrap())
+        };
+        let mut live = spawn("live");
+        assert_eq!(confirm_child_exit(&mut live.0, Duration::from_millis(30)).unwrap_err().code, "StopUnconfirmed");
+        assert!(live.0.try_wait().unwrap().is_none(), "confirmation must not kill the child");
+        let mut failed = spawn("error");
+        let error = confirm_child_exit(&mut failed.0, Duration::from_secs(5)).unwrap_err();
+        assert!(error.message.contains("exited unsuccessfully"));
+        let mut ok = spawn("ok");
+        confirm_child_exit(&mut ok.0, Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_deadline_includes_rpc_lock_and_silent_peer() {
+        fn pair() -> (ProcessHandle, std::os::unix::net::UnixStream) {
+            let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let stream = LocalStream::Unix(stream);
+            let cancellation = stream.try_clone().unwrap();
+            let reader = BufReader::new(stream.try_clone().unwrap());
+            (ProcessHandle {
+                identity: RunnerIdentity {
+                    runner_id: "runner-test".into(), session_id: "ses-test".into(),
+                    provider_id: "fake".into(), host_id: "local-host".into(),
+                    boot_id: "boot".into(), pid: 1, protocol_version: RUNNER_WIRE.into(), generation: 1,
+                },
+                io: Mutex::new(RunnerIo { writer: stream, reader }),
+                cancellation,
+                buffered: Mutex::new(VecDeque::new()),
+                next_request: AtomicU64::new(1),
+                child: Mutex::new(None),
+                last_seq: AtomicU64::new(0),
+            }, peer)
+        }
+        let (handle, _peer) = pair();
+        let held = handle.io.lock().unwrap();
+        let error = handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50)).unwrap_err();
+        assert_eq!(error.code, "runner_rpc_timeout");
+        drop(held);
+
+        let (handle, _peer) = pair();
+        let error = handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50)).unwrap_err();
+        assert_eq!(error.code, "runner_rpc_timeout");
+    }
 
     #[test]
     fn startup_identity_requires_complete_bounded_frame() {

@@ -1,6 +1,6 @@
 # P7-W0: auditoría de portabilidad Windows
 
-Base auditada: `427a5c1` (`feature/p6-2-gpui-desktop`). Esta auditoría no
+Base histórica auditada: `427a5c1`. Esta auditoría no
 declara paridad Windows. Las mediciones y pendientes están en
 [P7_W0_RESULTS.md](P7_W0_RESULTS.md) y [P7_WINDOWS_MATRIX.md](P7_WINDOWS_MATRIX.md).
 
@@ -44,16 +44,14 @@ declara paridad Windows. Las mediciones y pendientes están en
    la validación: el comando remoto pasa por el shell del servidor y requiere
    una estrategia segura de quoting específicamente probada.
    La validación existente Windows→Linux de P5 no demuestra Windows como host.
-6. **P2, desktop:** GPUI está fijado a 0.2.2; el backend Windows y sus
-   dependencias nativas, renderer, ciclo de vida y llamadas mediante
-   `fleet-client` requieren resultados independientes de compilación y GUI.
-   No se ha probado una ventana ni el renderer.
-7. **P2, suite:** los scripts `tests/*.sh` incluyen señales, permisos y sockets
+6. **P2, suite:** los scripts `tests/*.sh` incluyen señales, permisos y sockets
    Unix y se mantienen en Linux CI. No se han portado ni deben contarse como
    E2E Windows. Los tests Rust con `cfg(unix)` no prueban su equivalente
    Windows. Los tests opt-in de proveedores reales no son sustituidos por fake.
 
-## Plan ejecutable posterior, sin iniciar ahora
+## Plan histórico del motor (ver roadmap para el orden vigente)
+
+El hallazgo y plan de interfaz gráfica de W0 quedaron fuera de alcance; el documento íntegro original permanece en el historial. No se modifican los hallazgos del motor.
 
 ### W1 — Core, IPC, persistencia y runners
 
@@ -78,13 +76,6 @@ Tras W1, probar descubrimiento y versiones reales de OpenCode, Codex, Pi y
 Gentle Shell; ejecutar conformidad, procesos, permisos interactivos, errores,
 interrupción y recuperación por proveedor. Registrar binario y versión reales,
 sin credenciales en logs ni inferir soporte desde fixtures.
-
-### W3 — GPUI Windows
-
-Resolver primero errores del backend/dependencias, después tests y build GPUI
-0.2.2 en MSVC; verificar creación/cierre de ventana, renderer y consultas SDK
-locales con daemon aislado, DPI y recuperación de errores. No implementar chat
-ni rediseñar la interfaz en W0.
 
 ### W4 — SSH bidireccional
 

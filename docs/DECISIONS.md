@@ -102,7 +102,7 @@ ADR resumido en `docs/P5_DESIGN.md`: bridge propio sobre SSH stdio, token remoto
 | Evidencia | CI Linux x86_64 [#45076748228](https://github.com/javijec/gentle-fleet/actions/runs/45076748228) PASS con E2E de SSH local, dos instancias aisladas y corte/replay; manual Windows→Linux con FakeDriver, OpenCode, Codex, Pi y Gentle Shell, eventos persistidos y recuperación por `--since` |
 | Límites explícitos | Windows **solo cliente**, no daemon/runner nativo; dos Linux físicos, macOS, aprobaciones interactivas remotas desde Windows y confirmación precisa del Ctrl+C manual **UNTESTED**. Las capacidades del proveedor no se deducen del éxito del transporte |
 | Seguridad y lifecycle | Mantener host-key OpenSSH, journal de `operation_key`, fail-closed sin pinning no implementado y **sin reenvío automático** de efectos de resultado incierto |
-| Siguientes etapas | P6 SDK/GPUI/backoff y P7 soporte nativo Windows/macOS y operacional; no iniciar P6 ni fusionar P5 en `main` como parte de este cierre |
+| Siguientes etapas | P6 SDK/backoff y P7 soporte nativo Windows/macOS y operacional; la meta gráfica original se retiró el 25/11/2026. No iniciar P6 ni fusionar P5 en `main` como parte de aquel cierre histórico |
 
 Esta decisión cambia **solo el criterio de cierre de P5**, sin modificar D01–D12 ni los contratos de proveedores. Resultados y caveats completos en [`P5_RESULTS.md`](P5_RESULTS.md).
 

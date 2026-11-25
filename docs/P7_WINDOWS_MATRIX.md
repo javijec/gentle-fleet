@@ -9,6 +9,7 @@ unitarios se repitieron tras la adaptación SSH en `e31efcb`.
 El [CI definitivo de `64dfac0`](https://github.com/javijec/gentle-fleet/actions/runs/45234810431)
 terminó PASS en Windows nativo, backend Linux y Desktop Linux. Windows ejecutó
 fmt, check, clippy, tests Rust y build del workspace completo.
+La matriz muestra solo componentes del motor activo. La fila histórica del cliente gráfico retirado permanece en la versión original del documento en Git; no se modifica ningún resultado del backend.
 
 | Componente | Compila | Tests unitarios | E2E | Validación real | Bloqueadores / siguiente etapa |
 |---|---|---|---|---|---|
@@ -29,7 +30,6 @@ fmt, check, clippy, tests Rust y build del workspace completo.
 | fleet-driver-codex | PASS | PASS | UNTESTED | UNTESTED | Binario Windows no validado; W2 |
 | fleet-driver-pi | PASS | PASS | UNTESTED | UNTESTED | HOME / `/tmp`; W2 |
 | fleet-driver-gentle-shell | PASS | PASS | UNTESTED | UNTESTED | Probe real opt-in; W2 |
-| gentle-fleet-desktop | PASS | PASS | UNTESTED | UNTESTED | GPUI 0.2.2; fixture real ignorado y renderer sin validar; W3 |
 | SSH Windows→Linux | UNTESTED | UNTESTED | UNTESTED | UNTESTED | P5 anterior no repetido en W0; W4 |
 | SSH Linux→Windows | UNTESTED | UNTESTED | UNTESTED | UNTESTED | Bridge y shell Windows; W4 |
 
@@ -91,3 +91,7 @@ W1-B: cierre administrativo con alcance limitado, aceptación técnica
 pendiente. W1-C: traspaso autorizado; implementar solo tras gate de entrada
 automatizado PASS y resolución de defectos P0/P1 confirmados. No se modifica
 el modelo de amenaza ni el gate de release. Ver P7_W1_RESULTS.md.
+
+## P7-H (25/11/2026)
+
+Workspace headless integrado con P6. La nueva validación full Windows/Linux y las regresiones W1-A/B permanecen UNTESTED; no se trasladan PASS históricos al candidato. Aislamiento entre SID sigue diferido al release, no PASS.

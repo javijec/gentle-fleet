@@ -53,7 +53,7 @@ P0–P6 están integrados en main (`7700b6a`); P7 incorpora esa base y sigue en 
 
 ## Desarrollo sin GUI como objetivo
 
-P7-H retira `apps/desktop`, su fixture exclusivamente gráfico y las dependencias GPUI del árbol activo. El cliente experimental se conserva en el historial de P7 (commit `427a5c1`) y sus documentos de resultados. La reorganización headless está implementada y **pendiente de validación nativa Windows/Linux**; no implica aceptación de W1-B.
+El workspace contiene únicamente el motor, sus clientes headless y pruebas; no requiere dependencias gráficas. El experimento gráfico y todos sus documentos se conservan exclusivamente en el historial de P7 (commit `427a5c1`), no en el árbol activo. La reorganización headless está implementada y **pendiente de validación nativa Windows/Linux**; no implica aceptación de W1-B.
 
 Para desarrollar el motor, con Rust estable y las dependencias de plataforma descritas en [CI local](docs/LOCAL_CI.md):
 

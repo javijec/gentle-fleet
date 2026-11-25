@@ -28,7 +28,7 @@
 
 ## Límites conocidos
 
-- SDK síncrono, sin dependencia GPUI. El consumidor GPUI debe invocar en su worker y publicar eventos en su propio event loop.
+- SDK síncrono, independiente de frameworks de interfaz. Un consumidor externo debe invocar desde su worker si necesita evitar bloquear su event loop.
 - Los cursores están separados por target local/alias SSH; el alias no pretende ser identidad criptográfica del host. OpenSSH `known_hosts` sigue siendo la autoridad de autenticación.
 - `RetentionGap` se comunica explícitamente. El store actual no poda eventos ni publica earliest-retained, de modo que no se fabricó soporte de retención.
 - Las operaciones inciertas no se retransmiten automáticamente; el caller debe reconciliar mediante `get_operation` y la clave registrada.
@@ -69,4 +69,4 @@ El operador ejecutó el procedimiento Linux indicado en el plan P6. El primer in
 | GitHub Actions | Sin PASS nuevo confirmado; ejecución previa fallida sin pasos ni logs accesibles |
 | Windows nativo, macOS, otros proveedores reales tras P6-H, aprobación interactiva real SDK | UNTESTED en este corte |
 
-Cierre de alcance Linux del SDK y motor headless; no es release ni aceptación de P7. Se acepta la evidencia reportada por el operador para esta integración limitada; conservar los logs localmente para trazabilidad y no atribuir PASS a GitHub Actions. Este commit de cierre solo modifica documentación, no altera el código o los scripts validados. El escritorio permanece en su rama histórica. Siguiente corte: P7-H, incorporar la base P6 y retirar dependencias gráficas de P7 sin reducir sus gates de seguridad.
+Cierre de alcance Linux del SDK y motor headless; no es release ni aceptación de P7. Se acepta la evidencia reportada por el operador para esta integración limitada; conservar los logs localmente para trazabilidad y no atribuir PASS a GitHub Actions. Este commit de cierre solo modifica documentación, no altera el código o los scripts validados. El experimento gráfico permanece exclusivamente en el historial (commit `427a5c1`). Siguiente corte: P7-H, incorporar la base P6 y retirar dependencias gráficas de P7 sin reducir sus gates de seguridad.

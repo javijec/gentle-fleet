@@ -93,4 +93,4 @@ multiusuario. No se afirma equivalencia entre loopback/token y named pipe/DACL.
    runner tras caída del daemon y reattach/replay sin reenvíos inciertos.
 
 Estos puntos y las pruebas funcionales fallidas o no ejecutadas no son
-criterios de éxito de W0; siguen abiertos para W1. W2–W4 y P6.2-C no se iniciaron.
+criterios de éxito de W0; seguían abiertos para W1. W2–W4 no se habían iniciado en ese corte histórico. Los resultados de compilación y pruebas del antiguo cliente gráfico se conservan únicamente como evidencia histórica; no son requisitos del motor activo.

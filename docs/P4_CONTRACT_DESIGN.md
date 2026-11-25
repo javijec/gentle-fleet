@@ -149,7 +149,7 @@ Reglas de oro: identificadores **nativos** opacos no se serializan; `FleetOption
 
 - **P3:** ninguna propuesta toca el spool, el ACK ni la dedup. Las nuevas operaciones viajan por el mismo `RunnerCommand`/`RunnerRequest` tipados y quedan cubiertas por el spool si el daemon cae. `Interrupt` y `set_control` deben ser idempotentes por `operation_key`.
 - **P5 (remoto):** mantener el wire tipado y versionado permite tunelizar el mismo protocolo sin exponer RPC nativo. No se añade SSH ni TCP público en P4.
-- **P6 (UI):** `AgentSummary` y `ListAgents` exponen capacidades y descriptores de control; la UI podrá preguntar sin conocer al proveedor. No se toma GPUI como referencia (P4-F17).
+- **P6 (SDK):** `AgentSummary` y `ListAgents` exponen capacidades y descriptores de control; un consumidor externo podrá consultar sin conocer al proveedor. No se toma GPUI como referencia (P4-F17).
 - **Subagentes:** solo se documentan (§3.6 de `P4_RPC_RESEARCH.md`). No se crea trait, comando ni tabla para ellos en P4 (P4-F05).
 
 ## 7. Lo que explícitamente NO se propone en P4.0

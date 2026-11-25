@@ -24,8 +24,8 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P4.4 — Conformidad ✅ **CERRADA EN LINUX** | Suite matrix-driven para cuatro proveedores y regresiones P1–P3 | Criterios de `docs/P4_TEST_PLAN.md` §3; OpenCode como línea base |
 | P5 — Cliente remoto ✅ CERRADA | Cliente Linux/Windows por SSH contra servidor Linux, mismo wire; alcance en `docs/P5_RESULTS.md` | CI SSH + recorrido real Windows→Linux; limitaciones explícitas |
 | P6.1 — SDK Rust ✅ CERRADA EN LINUX | `fleetctl` usa `fleet-client`; local/SSH, chat, timeline, cancelación, replay y OpenCode real | `docs/P6_1_RESULTS.md` |
-| P6-H — cierre headless ✅ CERRADA EN LINUX | SDK y SSH reutilizables, sin GUI ni dependencias gráficas | Gate y smoke OpenCode reportados PASS sobre el candidato `b366f96`; ver `docs/P6_1_RESULTS.md`. P6.2 gráfica fuera del producto |
-| P7-H — Desacople de GPUI en P7 | Integración de main y motor sin dependencias gráficas | Candidata; full Windows/Linux, mismos criterios W1-B y grafo headless |
+| P6-H — cierre headless ✅ CERRADA EN LINUX | SDK y SSH reutilizables, sin GUI ni dependencias gráficas | Gate y smoke OpenCode reportados PASS sobre el candidato `b366f96`; ver `docs/P6_1_RESULTS.md`. El experimento gráfico queda solo en el historial |
+| P7-H — Validación del motor headless | Integración de main y motor sin dependencias gráficas | Candidata; full Windows/Linux, mismos criterios W1-B y grafo headless |
 | P7 — Motor headless, endurecimiento y release | Empaquetado, instalación, límites, backups, migraciones y telemetría local | Suite de fallas, carga, validación funcional de Windows y macOS, docs y recuperación de datos |
 
 ## Condiciones mínimas de producto antes de anunciar MVP

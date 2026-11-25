@@ -47,7 +47,7 @@ El producto debe permitir conversaciones reales, herramientas, permisos, sesione
 - `AgentDriver` conserva un núcleo pequeño. Capacidades especializadas deben resolverse en P4.0 con contratos concretos, sin crear traits o crates vacíos ni nuevos subsistemas por anticipación.
 - Los eventos son tipados, ordenados por `seq` Fleet, persistidos antes de ACK/publicación y deduplicados. No se filtra RPC nativo crudo a la API de cliente.
 - Las desconexiones del cliente no detienen sesiones. Los turnos inciertos **no** se reenvían automáticamente y las aprobaciones **no** se responden por defecto.
-- Mantener independencia de cualquier interfaz gráfica: el diseño GPUI corresponde a P6 y la gestión general de subagentes es posterior a P6.
+- Mantener independencia de cualquier interfaz gráfica: P6 desarrolla el SDK para consumidores externos, no una interfaz propia (alcance actualizado el 25/11/2026); la gestión general de subagentes es posterior a P6.
 - No introducir SSH, remoto, SDK de escritorio completo, editor genérico de configuración, worktrees, sistema de plugins, filesystem remoto ni ACP genérico dentro del alcance de P4 sin una nueva decisión.
 
 ## 4. Alcance operativo común

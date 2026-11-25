@@ -56,7 +56,7 @@ El driver entrega solicitud estructurada; SessionManager la registra, crea appro
 
 | Evento | Expectativa MVP / fase | Acción |
 |---|---|---|
-| Se cierra CLI o GPUI | P1/P2 | Runner y agente continúan; otra UI reanuda timeline |
+| Se cierra CLI o cliente externo | P1/P2 | Runner y agente continúan; otra UI reanuda timeline |
 | Cae conexión SSH | P5 | Runner remoto continúa; cliente reautentica y usa cursor |
 | Muere fleetd | P3 | Runner vivo conserva conexión y spool de eventos; daemon nuevo reanuda tras autenticar runner |
 | Muere runner | P3 | No fingir que el agente continúa; intentar recuperación nativa solo si driver la garantiza; en otro caso Failed/NeedsReconciliation |

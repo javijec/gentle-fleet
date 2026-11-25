@@ -469,3 +469,7 @@ Operador confirmó que pasó todo después de de121f5; HEAD remoto observado c1e
 ### Shutdown — corrección de compilación
 
 El operador ejecutó cargo test -p fleetd --locked tras 09b2b9c: FAIL E0599 en process_runner.rs, dos llamadas a RunnerStatus::Stopped.as_str(). La conversión as_str pertenece al trait privado StatusStr de fleet-runner, no a fleet-domain. Se comparte la constante RUNNER_SHUTDOWN_STOPPED en fleet-protocol para emisor y receptor, conservando exactamente el valor wire existente `stopped`, sin cambio de versión ni relajación de la validación. Regresión adicional rechaza `Stopped` (mayúscula). Compilación y tests pendientes; no se declara PASS.
+
+### Shutdown — revalidación reportada y fixture vertical candidato
+
+Operador confirmó que pasó todo después de ca787ce. HEAD remoto observado b0f5a9bb92354386498ea7c03cddd4d75dc237f6. No se adjuntaron nuevos JSON ni logs asociados; se registra PASS reportado de las cuatro correcciones prioritarias, no ejecución independiente. Se añade primera regresión vertical de proceso Windows con FakeDriver, ruta con espacios, dos runners, parada verificada y centinela. Integración en full local y workflow sin quitar pruebas existentes. UNTESTED: ejecutar fixture y full del mismo SHA limpio; revisar logs antes de cierre técnico de W1-C, sin declarar W1-D aceptada. Main intacta.

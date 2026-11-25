@@ -47,6 +47,8 @@ jobs:
         run: pwsh -NoProfile -File tests/windows/w1c-ssh-config.ps1
       - name: W1-C operation journal recovery regression
         run: pwsh -NoProfile -File tests/windows/w1c-journal-recovery.ps1
+      - name: Native Windows runner lifecycle
+        run: pwsh -NoProfile -File tests/windows/w1d-lifecycle.ps1
 
   windows-ipc:
     runs-on: windows-latest

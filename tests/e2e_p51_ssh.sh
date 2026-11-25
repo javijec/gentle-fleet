@@ -183,7 +183,7 @@ cp "$RUNTIME/known_hosts" "$RUNTIME/known_hosts.bak"
 if "$BIN/fleetctl" --host test agents >"$RUNTIME/hostkey.out" 2>&1; then
   echo "FAIL: untrusted SSH host accepted"; exit 1
 fi
-grep -qi 'HostKeyRejected\|host key' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
+grep -q 'HostKeyRejected' "$RUNTIME/hostkey.out" || { echo "FAIL: host key error not explicit"; cat "$RUNTIME/hostkey.out"; exit 1; }
 cp "$RUNTIME/known_hosts.bak" "$RUNTIME/known_hosts"
 
 # 6. Bridge ausente.

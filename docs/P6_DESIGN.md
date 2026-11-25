@@ -9,13 +9,15 @@
 ```text
 fleetctl ─┐
           ├─ FleetClient ── fleet-protocol ── socket local / fleet-ssh ── fleetd
-GPUI ─────┘        │
+Cliente externo ┘        │
                    └─ TimelineSubscription (canal acotado + cancelación)
 ```
 
 No se modifica el wire. Los IDs de solicitud `sdk-N` son independientes de `operation_key`. Cada llamada espera el `request_id` correspondiente y descarta notificaciones no correlacionadas sin confundirlas con respuestas.
 
 ## API pública
+
+- `configured_hosts()` expone solo alias ordenados, sin credenciales ni rutas privadas; tipos de resumen reexportados por el SDK.
 
 - `FleetClient::connect(Host)` y `disconnect()`.
 - Agentes/capacidades, workspaces, sesiones (`create`, `get`, `list`, `stop`).
@@ -38,7 +40,7 @@ Para SSH, `SendPrompt`, `AnswerApproval` e importación de historial se agrega a
 
 ## Límites
 
-- API síncrona, adecuada para invocación desde un worker GPUI; P6.2 decidirá si hace falta una fachada async.
+- API síncrona, adecuada para invocación desde un worker del consumidor externo; no se impone un runtime async.
 - El cursor es local al usuario y alias SSH, no una identidad global compartida entre perfiles. No sincroniza bases ni cursores entre equipos.
 - La API actual del servidor no anuncia earliest-retained ni implementa poda de timeline; si el wire/store reporta un hueco, el SDK lo mantiene explícito.
 - No se implementan GUI, terminal, filesystem ni Git.

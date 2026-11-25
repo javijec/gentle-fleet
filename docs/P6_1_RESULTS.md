@@ -37,7 +37,7 @@
 
 ## Siguiente corte
 
-P6.2 puede integrar el SDK en un cliente GPUI mínimo de chat/timeline/permisos, con una tarea worker cancelable; evitar rehacer transporte/correlación. Antes de abrir capacidades de terminal/archivos/Git, validar una aprobación real soportada por proveedor. P6.2 no se implementó en este corte.
+El SDK será consumido por CLI y aplicaciones externas. P6.2 gráfica se retira del alcance de producto. Antes de abrir capacidades de terminal/archivos/Git, validar una aprobación real soportada por proveedor.
 
 ## P6.1-H — Correcciones posteriores al primer push
 
@@ -49,3 +49,24 @@ P6.2 puede integrar el SDK en un cliente GPUI mínimo de chat/timeline/permisos,
 - Se agregaron unitarias para eventos encolados sin ACK, consumidor lento y error terminal en una cola llena. `e2e_long_replay.sh` reporta errores de watch con diagnóstico en caso de fallo.
 - CI instala OpenSSH Server para ejecutar los E2E SSH deterministas, en vez de omitirlos por falta de `sshd`.
 - **CI de P6.1-H: SUCCESS** en el commit de código `26a436d` (132 tests Rust; replay 270 eventos; E2E SSH uno/dos hosts; SDK local FakeDriver). Los cuatro proveedores reales no fueron revalidados en P6.1-H; el smoke OpenCode de P6.1 original permanece como evidencia anterior.
+
+## P6-H — preparación headless (25/11/2026)
+
+Base `4166c4a`; origen de mejoras reutilizadas `427a5c1`; código candidato `6a8d366`. Se incorporan solo `fleet-client`, `fleet-ssh` y una aserción E2E más estricta de identidad SSH. Se conserva catálogo de hosts sin secretos y tipos públicos, clasificación de host-key y espera acotada de stderr. Si un helper local conserva stderr abierto, se deja de esperar al lector después de 200 ms; el hilo puede permanecer vivo hasta EOF. No se declara garantía de cancelación de todos los procesos auxiliares SSH. Se añade una regresión del lector que no termina y se exige el error tipado HostKeyRejected en el fixture SSH.
+
+El workspace y lockfile se conservan de P6.1, sin GPUI. La suite de cierre usa los 21 scripts E2E explícitos del workflow heredado, más los contratos Rust y el gate de grafo headless. La cifra histórica de 22 se conserva como resultado histórico, no se inventa un script adicional. CI y ejecución local usan el mismo script; al preparar el candidato faltaba ejecutar el smoke real OpenCode tras el endurecimiento.
+
+**Estado inicial del candidato:** compilación, Clippy, unitarias, E2E y smoke real UNTESTED al preparar la rama. Ver actualización de cierre siguiente. La validación de Windows nativo sigue en P7; no se anuncia paridad. No reducir criterios de P7.
+
+### Cierre P6-H (25/11/2026)
+
+El operador ejecutó el procedimiento Linux indicado en el plan P6. El primer intento confirmó metadata headless y se detuvo en rustfmt; se corrigió únicamente el formato en `b366f968fad2a5c409444a633591c56fda74f48d`. Tras indicar pull y repetición del gate y smoke, el operador confirmó que pasó todo. Se registra esa confirmación como evidencia reportada del candidato, no como ejecución independiente por el asistente. No se adjuntaron SHA local, versiones de herramientas ni logs completos; no se verifican independientemente esos datos ni se inventan contadores de tests Rust.
+
+| Validación | Resultado |
+| --- | --- |
+| Gate headless Linux: metadata, fmt, check, clippy, test, build locked, 21 E2E deterministas | PASS reportado por operador |
+| Smoke real opt-in OpenCode SDK | PASS reportado por operador |
+| GitHub Actions | Sin PASS nuevo confirmado; ejecución previa fallida sin pasos ni logs accesibles |
+| Windows nativo, macOS, otros proveedores reales tras P6-H, aprobación interactiva real SDK | UNTESTED en este corte |
+
+Cierre de alcance Linux del SDK y motor headless; no es release ni aceptación de P7. Se acepta la evidencia reportada por el operador para esta integración limitada; conservar los logs localmente para trazabilidad y no atribuir PASS a GitHub Actions. Este commit de cierre solo modifica documentación, no altera el código o los scripts validados. El escritorio permanece en su rama histórica. Siguiente corte: P7-H, incorporar la base P6 y retirar dependencias gráficas de P7 sin reducir sus gates de seguridad.

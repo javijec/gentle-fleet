@@ -22,14 +22,14 @@ E2E = (
     "e2e_p3_runner_kill", "e2e_p3_multi_session", "e2e_long_replay",
     "e2e_p44_conformity", "e2e_p44_concurrency", "e2e_p44_security",
     "e2e_p44_redaction", "e2e_p44_approvals", "e2e_p51_ssh",
-    "e2e_p52_two_hosts", "e2e_p61_sdk", "e2e_p62b_desktop_gpui",
+    "e2e_p52_two_hosts", "e2e_p61_sdk",
 )
 FAKE_ONLY = {"e2e_p44_conformity", "e2e_p44_concurrency", "e2e_p44_security"}
 MANUAL = {
     "windows": ("native-providers", "cross-user-ipc-acl", "runtime-acl-delete-child",
                 "ipc-backpressure-cancel-peer-identity", "native-recovery",
-                "physical-ssh", "desktop-smoke", "dependency-audit"),
-    "linux": ("native-providers", "physical-ssh", "desktop-smoke", "dependency-audit"),
+                "physical-ssh", "external-sdk-smoke", "dependency-audit"),
+    "linux": ("native-providers", "physical-ssh", "external-sdk-smoke", "dependency-audit"),
 }
 
 
@@ -61,6 +61,7 @@ def plan(os_name, profile):
     if os_name not in PLATFORMS or profile not in PROFILES:
         raise ValueError("Invalid platform/profile")
     items = [
+        step("headless-graph", [sys.executable, str(ROOT / "scripts/ci/check_headless.py")]),
         step("format", ["cargo", "fmt", "--all", "--", "--check"]),
         step("check", ["cargo", "check", "--workspace", "--locked"]),
         step("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]),

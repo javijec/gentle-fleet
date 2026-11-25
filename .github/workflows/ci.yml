@@ -20,6 +20,8 @@ jobs:
           components: rustfmt, clippy
       # Run every diagnostic even if a previous one fails. Failures are not
       # suppressed: this job remains red until Windows incompatibilities are fixed.
+      - name: Check headless dependency graph
+        run: python scripts/ci/check_headless.py
       - name: Format
         if: ${{ always() }}
         run: cargo fmt --all -- --check
@@ -67,13 +69,14 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq openssh-server
+      - run: python3 scripts/ci/check_headless.py
       - run: cargo fmt --all -- --check
       - name: Validar sintaxis de scripts E2E
         run: |
           for script in tests/*.sh; do bash -n "$script"; done
-      - run: cargo clippy --workspace --exclude gentle-fleet-desktop --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --exclude gentle-fleet-desktop --locked
-      - run: cargo build --workspace --exclude gentle-fleet-desktop --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked
       - name: e2e con FakeDriver (sin servicios de pago)
         run: tests/e2e_fake.sh
       - name: e2e concurrencia y aislamiento
@@ -114,44 +117,11 @@ jobs:
         run: tests/e2e_p44_approvals.sh
       - name: e2e P5 transporte SSH local
         run: |
-          if command -v sshd >/dev/null 2>&1; then
-            tests/e2e_p51_ssh.sh
-          else
-            echo "SKIP: sshd not installed in CI image"
-          fi
+          command -v sshd >/dev/null || { echo 'BLOCKED: sshd missing'; exit 1; }
+          tests/e2e_p51_ssh.sh
       - name: e2e P5 dos hosts SSH aislados
         run: |
-          if command -v sshd >/dev/null 2>&1; then
-            tests/e2e_p52_two_hosts.sh
-          else
-            echo "SKIP: sshd not installed in CI image"
-          fi
+          command -v sshd >/dev/null || { echo 'BLOCKED: sshd missing'; exit 1; }
+          tests/e2e_p52_two_hosts.sh
       - name: e2e P6.1 SDK local con FakeDriver
         run: tests/e2e_p61_sdk.sh
-
-  desktop-gpui-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Instalar dependencias nativas de GPUI (Linux X11/Wayland)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            libfontconfig1-dev libfreetype-dev libwayland-dev libxkbcommon-dev \
-            libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxext-dev \
-            libxfixes-dev libxi-dev libxcursor-dev libxrandr-dev libxrender-dev \
-            libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-sync-dev \
-            libxcb-xfixes0-dev libxcb-xkb-dev libvulkan-dev
-      - name: Instalar OpenSSH server para el E2E GPUI
-        run: sudo apt-get install -y -qq openssh-server
-      - run: cargo fmt --all -- --check
-      - run: cargo check -p gentle-fleet-desktop --locked
-      - run: cargo clippy -p gentle-fleet-desktop --all-targets --locked -- -D warnings
-      - run: cargo test -p gentle-fleet-desktop --locked
-      - run: cargo build -p gentle-fleet-desktop --locked
-      - name: e2e P6.2-B consultas reales desde GPUI (local + SSH fixture)
-        run: tests/e2e_p62b_desktop_gpui.sh

@@ -17,7 +17,14 @@ class LocalCITests(unittest.TestCase):
             self.assertIn("build", full)
         self.assertIn("w1b-named-pipe", expected_ids("windows", "full"))
         self.assertIn("e2e_p44_security", expected_ids("linux", "full"))
-        self.assertIn("e2e_p62b_desktop_gpui", expected_ids("linux", "full"))
+        self.assertIn("e2e_p61_sdk", expected_ids("linux", "full"))
+        self.assertNotIn("e2e_p62b_desktop_gpui", expected_ids("linux", "full"))
+        for os_name in ("windows", "linux"):
+            self.assertIn("headless-graph", expected_ids(os_name, "full"))
+            self.assertIn("manual-external-sdk-smoke", expected_ids(os_name, "release"))
+            self.assertNotIn("manual-desktop-smoke", expected_ids(os_name, "release"))
+        self.assertIn("manual-cross-user-ipc-acl", expected_ids("windows", "release"))
+        self.assertIn("manual-ipc-backpressure-cancel-peer-identity", expected_ids("windows", "release"))
 
     def test_report_integrity(self):
         data = dict(schema=1, source="local", platform="windows", commit="a",

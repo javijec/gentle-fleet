@@ -219,15 +219,31 @@ pub struct SshWriter {
     stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
 
-fn join_stderr_reader(reader: &mut Option<std::thread::JoinHandle<()>>) {
+fn join_stderr_reader(
+    reader: &mut Option<std::thread::JoinHandle<()>>,
+    timeout: std::time::Duration,
+) {
     if let Some(reader) = reader.take() {
+        let deadline = std::time::Instant::now() + timeout;
+        while !reader.is_finished() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                // A local SSH helper may still hold stderr open. Do not
+                // let diagnostic collection block cancellation indefinitely.
+                return;
+            }
+            std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)));
+        }
         let _ = reader.join();
     }
 }
 
 impl SshWriter {
     fn drain_stderr(&mut self) {
-        join_stderr_reader(&mut self.stderr_reader);
+        join_stderr_reader(
+            &mut self.stderr_reader,
+            std::time::Duration::from_millis(200),
+        );
     }
 
     pub fn close(&mut self) {
@@ -528,13 +544,35 @@ mod tests {
                 .push("Host key verification failed.".to_string());
         }));
 
-        join_stderr_reader(&mut reader);
+        join_stderr_reader(&mut reader, std::time::Duration::from_secs(5));
 
         assert!(reader.is_none());
         assert_eq!(
             diagnostics.lock().unwrap().as_slice(),
             ["Host key verification failed."]
         );
+    }
+
+    #[test]
+    fn stderr_reader_that_has_not_finished_is_not_joined_indefinitely() {
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let mut reader = Some(std::thread::spawn(move || {
+            // A finite watchdog also prevents a broken implementation from
+            // hanging the test suite forever.
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(5));
+            let _ = done.send(());
+        }));
+        join_stderr_reader(&mut reader, std::time::Duration::from_millis(20));
+        assert!(reader.is_none());
+        assert!(matches!(
+            finished.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
     }
 
     #[test]

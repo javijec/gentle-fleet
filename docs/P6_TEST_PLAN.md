@@ -40,3 +40,13 @@ GF_E2E_REAL=1 tests/e2e_p61_sdk.sh
 ```
 
 No introducir credenciales ni llamadas a modelos pagos en CI; el CI usa FakeDriver.
+
+## Gate P6-H para integrar en main
+
+Desde un checkout Linux limpio del mismo SHA candidato, como usuario normal, con Rust estable/rustfmt/Clippy, Python 3, Bash y OpenSSH server (sshd disponible en PATH), ejecutar:
+
+```bash
+bash scripts/ci/p6-headless.sh
+GF_E2E_REAL=1 tests/e2e_p61_sdk.sh
+````
+El primer comando ejecuta metadata locked y verifica que no haya paquete GPUI/desktop en el grafo; fmt/check/clippy/test/build locked; sintaxis y los 21 E2E deterministas del workflow P6.1 (incluidos 3 de conformidad FakeDriver, 2 SSH y el SDK). Un requisito ausente o una prueba fallida impide PASS; no se omite SSH. El segundo ejecuta el smoke real de OpenCode con una instalación autenticada; no copiar secretos. Registrar SHA, versiones, resultados, limitaciones y logs redactados. Validar además la regresión de stderr acotado y la clasificación HostKeyRejected. Los resultados anteriores a este candidato no sustituyen su gate. Si Actions no arranca, registrar BLOCKED y presentar la ejecución local equivalente, no atribuir PASS a Actions. Windows nativo y su gate de seguridad permanecen en P7.

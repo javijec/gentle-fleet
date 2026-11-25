@@ -1,6 +1,6 @@
 # PLAN — Gentle Fleet v2
 
-**Estado:** **P0–P4 CERRADOS EN LINUX; P5 CERRADA CON ALCANCE CLIENTE WINDOWS/LINUX → SERVIDOR LINUX; P6.1 SDK CERRADA EN LINUX** (22/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 para P6**; la validación funcional nativa Windows/macOS se realiza en P7. P5: `docs/P5_RESULTS.md`. P6.1: `docs/P6_1_RESULTS.md`, diseño `docs/P6_DESIGN.md`, plan `docs/P6_TEST_PLAN.md`.
+**Estado:** **P0–P4 CERRADOS EN LINUX; P5 CERRADA CON ALCANCE CLIENTE WINDOWS/LINUX → SERVIDOR LINUX; P6.1 SDK CERRADA EN LINUX (histórico); P6 HEADLESS CERRADA EN LINUX (PASS local reportado)** (25/11/2026). P0-D1…D6 ratificadas en `docs/DECISIONS.md`. Plataforma de referencia: **Linux x86_64 para P6**; la validación funcional nativa Windows/macOS se realiza en P7. P5: `docs/P5_RESULTS.md`. P6.1: `docs/P6_1_RESULTS.md`, diseño `docs/P6_DESIGN.md`, plan `docs/P6_TEST_PLAN.md`.
 
 ## Estrategia de plataforma
 
@@ -24,8 +24,8 @@ No hacer 12 fases horizontales antes de obtener una conversación real. Cada eta
 | P4.4 — Conformidad ✅ **CERRADA EN LINUX** | Suite matrix-driven para cuatro proveedores y regresiones P1–P3 | Criterios de `docs/P4_TEST_PLAN.md` §3; OpenCode como línea base |
 | P5 — Cliente remoto ✅ CERRADA | Cliente Linux/Windows por SSH contra servidor Linux, mismo wire; alcance en `docs/P5_RESULTS.md` | CI SSH + recorrido real Windows→Linux; limitaciones explícitas |
 | P6.1 — SDK Rust ✅ CERRADA EN LINUX | `fleetctl` usa `fleet-client`; local/SSH, chat, timeline, cancelación, replay y OpenCode real | `docs/P6_1_RESULTS.md` |
-| P6.2 — GPUI | Cliente de escritorio consume Fleet SDK, sin acceso interno a runners | No iniciado |
-| P7 — Endurecimiento y release | Empaquetado, instalación, límites, backups, migraciones y telemetría local | Suite de fallas, carga, validación funcional de Windows y macOS, docs y recuperación de datos |
+| P6-H — cierre headless ✅ CERRADA EN LINUX | SDK y SSH reutilizables, sin GUI ni dependencias gráficas | Gate y smoke OpenCode reportados PASS sobre el candidato `b366f96`; ver `docs/P6_1_RESULTS.md`. P6.2 gráfica fuera del producto |
+| P7 — Motor headless, endurecimiento y release | Empaquetado, instalación, límites, backups, migraciones y telemetría local | Suite de fallas, carga, validación funcional de Windows y macOS, docs y recuperación de datos |
 
 ## Condiciones mínimas de producto antes de anunciar MVP
 

@@ -2,12 +2,14 @@
 
 ## Usuario y problema
 
-Una persona trabaja con varios proyectos en Linux y Windows, con agentes instalados y autenticados en cada máquina. Quiere administrar sesiones desde CLI, escritorio GPUI y máquinas remotas, sin depender de la ventana que inició el proceso. Necesita ver conversaciones, herramientas, permisos y estado coherentes sin abrir un PTY como sustituto de chat.
+Una persona trabaja con varios proyectos en Linux y Windows, con agentes instalados y autenticados en cada máquina. Quiere administrar sesiones desde CLI, clientes externos y máquinas remotas, sin depender de la ventana que inició el proceso. Necesita ver conversaciones, herramientas, permisos y estado coherentes sin abrir un PTY como sustituto de chat.
+
+**Alcance headless:** Fleet distribuye daemon, runner, CLI, SDK y protocolo; no desarrolla una interfaz gráfica propia. Gentle Shell GPUI es un consumidor externo opcional.
 
 ## Principios de producto
 
 - **Chat primero.** El flujo principal es texto, turnos, herramientas y solicitudes interactivas; terminales y archivos son complementos.
-- **Un mismo contrato para todas las interfaces.** Toda mutación pasa por Fleet API; no existen caminos privados en Desktop.
+- **Un mismo contrato para todas las interfaces.** Toda mutación pasa por Fleet API; no existen caminos privados para clientes externos.
 - **Una sesión pertenece a un host y un workspace.** El host ejecuta los procesos y posee sus datos; un cliente puede mostrar varios hosts sin sincronizar sus bases.
 - **Conservar identidad nativa.** Fleet Session ID identifica el control de Fleet; native session ID permite reanudar la conversación cuando el proveedor lo soporta.
 - **Capacidades negociadas.** Mostrar `unsupported` cuando un proveedor no dispone de una función; no inventar soporte.

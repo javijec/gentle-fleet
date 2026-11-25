@@ -821,27 +821,42 @@ impl DataLease {
             for entry in std::fs::read_dir(&self._directory.path)? {
                 let name = entry?.file_name().to_string_lossy().to_ascii_lowercase();
                 if name.starts_with("fleet-runner-") {
-                    return Err(invalid("unbound legacy runner state; explicit recovery required"));
+                    return Err(invalid(
+                        "unbound legacy runner state; explicit recovery required",
+                    ));
                 }
             }
-            if exists && std::env::var_os("FLEET_ADOPT_LEGACY_DB").as_deref() != Some(OsStr::new("1")) {
-                return Err(invalid("unbound legacy database; explicit adoption after backup required"));
+            if exists
+                && std::env::var_os("FLEET_ADOPT_LEGACY_DB").as_deref() != Some(OsStr::new("1"))
+            {
+                return Err(invalid(
+                    "unbound legacy database; explicit adoption after backup required",
+                ));
             }
             if !exists {
                 for suffix in ["-wal", "-shm", "-journal"] {
                     let mut name = database.as_os_str().to_os_string();
                     name.push(suffix);
                     match std::fs::symlink_metadata(Path::new(&name)) {
-                        Ok(_) => return Err(invalid("orphan SQLite sidecar; explicit recovery required")),
+                        Ok(_) => {
+                            return Err(invalid(
+                                "orphan SQLite sidecar; explicit recovery required",
+                            ))
+                        }
                         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                         Err(error) => return Err(error),
                     }
                 }
-                let fresh = std::fs::OpenOptions::new().write(true).create_new(true).open(database)?;
+                let fresh = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(database)?;
                 fresh.sync_all()?;
             }
         } else if !exists {
-            return Err(invalid("bound durable database is missing; explicit recovery required"));
+            return Err(invalid(
+                "bound durable database is missing; explicit recovery required",
+            ));
         }
 
         let database_handle = std::fs::OpenOptions::new()
@@ -855,7 +870,9 @@ impl DataLease {
         }
         // Include the exact filename as UTF-16 (lossless), because SQLite
         // sidecars are name-scoped even if the same DB is renamed.
-        let filename = database.file_name().ok_or_else(|| invalid("missing database filename"))?;
+        let filename = database
+            .file_name()
+            .ok_or_else(|| invalid("missing database filename"))?;
         let mut identity = format!(
             "fleet-db-v1:{:08x}:{:08x}:{:08x}:",
             info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
@@ -870,7 +887,9 @@ impl DataLease {
             self._file.write_all(identity.as_bytes())?;
             self._file.sync_all()?;
         } else if marker != identity.as_bytes() {
-            return Err(invalid("durable database identity mismatch; explicit recovery required"));
+            return Err(invalid(
+                "durable database identity mismatch; explicit recovery required",
+            ));
         }
         Ok(database_handle)
     }

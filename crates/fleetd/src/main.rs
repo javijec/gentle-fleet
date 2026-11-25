@@ -28,9 +28,10 @@ fn main() -> std::io::Result<()> {
     // Reserve the durable root before opening SQLite or performing recovery.
     // The OS releases this lease when the daemon is terminated.
     #[cfg(windows)]
-    let mut data_lease = fleet_protocol::transport::daemon_data_lease(&database).map_err(|error| {
-        std::io::Error::new(error.kind(), format!("reserve durable data: {error}"))
-    })?;
+    let mut data_lease =
+        fleet_protocol::transport::daemon_data_lease(&database).map_err(|error| {
+            std::io::Error::new(error.kind(), format!("reserve durable data: {error}"))
+        })?;
     // Reserve both authorities before opening SQLite. Publishing credentials
     // remains deferred until initialization and recovery are complete.
     #[cfg(windows)]

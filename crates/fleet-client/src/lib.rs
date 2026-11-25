@@ -3,8 +3,9 @@
 //! A client owns exactly one host context and one request/response stream.
 //! No daemon state, provider protocol, database, or GUI runtime is exposed.
 
-use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter, Write};
+mod journal;
+
+use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -234,24 +235,6 @@ impl FleetClient {
             _ => return Ok(()),
         };
         let path = operation_journal_path()?;
-        let parent = path.parent().ok_or_else(|| {
-            ClientError::Transport("operation journal needs a parent directory".into())
-        })?;
-        std::fs::create_dir_all(parent)
-            .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))?;
-        #[cfg(unix)]
-        if std::env::var_os("FLEET_OPERATION_JOURNAL").is_none() {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-                .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))?;
-        }
-        if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err(ClientError::Transport(
-                    "operation journal is not a regular file".into(),
-                ));
-            }
-        }
         let mut line = serde_json::to_vec(&serde_json::json!({
             "host": alias,
             "kind": kind,
@@ -263,34 +246,7 @@ impl FleetClient {
         }))
         .map_err(|error| ClientError::Protocol(error.to_string()))?;
         line.push(b'\n');
-        let mut options = OpenOptions::new();
-        options.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(path)
-            .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if file
-                .metadata()
-                .map_err(|error| ClientError::Transport(error.to_string()))?
-                .permissions()
-                .mode()
-                & 0o077
-                != 0
-            {
-                return Err(ClientError::Transport(
-                    "operation journal permissions are too permissive".into(),
-                ));
-            }
-        }
-        file.write_all(&line)
-            .and_then(|_| file.sync_data())
+        journal::append(&path, &line)
             .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))
     }
 
@@ -630,17 +586,36 @@ impl TimelineSubscription {
         self.cursor.load(Ordering::SeqCst)
     }
 
-    pub fn recv(&self) -> Result<Event> {
-        let event = self
-            .receiver
-            .recv()
-            .map_err(|_| ClientError::SubscriptionClosed)??;
-        persist_saved_cursor(&self.host, &self.session_id, event.seq)?;
+    fn persist_delivery(
+        &self,
+        event: Event,
+        persist: impl FnOnce(&Host, &str, u64) -> Result<()>,
+    ) -> Result<Event> {
+        if let Err(error) = persist(&self.host, &self.session_id, event.seq) {
+            // The queue already yielded this event. Never consume a later
+            // event and advance across a failed durable cursor write.
+            self.cancelled.store(true, Ordering::SeqCst);
+            return Err(error);
+        }
         self.cursor.store(event.seq, Ordering::SeqCst);
         Ok(event)
     }
 
+    pub fn recv(&self) -> Result<Event> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(ClientError::SubscriptionClosed);
+        }
+        let event = self
+            .receiver
+            .recv()
+            .map_err(|_| ClientError::SubscriptionClosed)??;
+        self.persist_delivery(event, persist_saved_cursor)
+    }
+
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Event> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(ClientError::SubscriptionClosed);
+        }
         let event = self
             .receiver
             .recv_timeout(timeout)
@@ -650,9 +625,7 @@ impl TimelineSubscription {
                 }
                 mpsc::RecvTimeoutError::Disconnected => ClientError::SubscriptionClosed,
             })??;
-        persist_saved_cursor(&self.host, &self.session_id, event.seq)?;
-        self.cursor.store(event.seq, Ordering::SeqCst);
-        Ok(event)
+        self.persist_delivery(event, persist_saved_cursor)
     }
 
     pub fn cancel(&mut self) {
@@ -866,25 +839,13 @@ fn subscription_connection(
 }
 
 fn operation_journal_path() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("FLEET_OPERATION_JOURNAL") {
-        return Ok(PathBuf::from(path));
-    }
-    let root = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .ok_or_else(|| ClientError::Transport("HOME or XDG_STATE_HOME required".into()))?;
-    Ok(root.join("gentle-fleet/operations.jsonl"))
+    journal::path("FLEET_OPERATION_JOURNAL", "operations.jsonl")
+        .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))
 }
 
 fn cursor_journal_path() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("FLEET_CURSOR_JOURNAL") {
-        return Ok(PathBuf::from(path));
-    }
-    let root = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .ok_or_else(|| ClientError::State("HOME or XDG_STATE_HOME required".into()))?;
-    Ok(root.join("gentle-fleet/cursors.jsonl"))
+    journal::path("FLEET_CURSOR_JOURNAL", "cursors.jsonl")
+        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))
 }
 
 fn host_cursor_key(host: &Host) -> String {
@@ -896,18 +857,26 @@ fn host_cursor_key(host: &Host) -> String {
 
 fn load_saved_cursor(host: &Host, session_id: &str) -> Result<u64> {
     let path = cursor_journal_path()?;
-    let content = match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(ClientError::State(format!("cursor journal: {error}"))),
-    };
+    load_cursor_at(&path, host, session_id)
+}
+
+fn load_cursor_at(path: &std::path::Path, host: &Host, session_id: &str) -> Result<u64> {
+    let content = journal::read(path)
+        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
     let host_key = host_cursor_key(host);
     let mut cursor = 0;
     for line in content.lines() {
-        let record: serde_json::Value =
-            serde_json::from_str(line).map_err(|error| ClientError::Protocol(error.to_string()))?;
-        if record["host"] == host_key && record["session_id"] == session_id {
-            cursor = record["seq"].as_u64().unwrap_or(cursor).max(cursor);
+        let record: serde_json::Value = serde_json::from_str(line)
+            .map_err(|_| ClientError::Protocol("corrupt cursor journal record".into()))?;
+        let (Some(record_host), Some(record_session), Some(seq)) = (
+            record["host"].as_str(),
+            record["session_id"].as_str(),
+            record["seq"].as_u64(),
+        ) else {
+            return Err(ClientError::Protocol("invalid cursor journal record".into()));
+        };
+        if record_host == host_key && record_session == session_id {
+            cursor = seq.max(cursor);
         }
     }
     Ok(cursor)
@@ -915,24 +884,6 @@ fn load_saved_cursor(host: &Host, session_id: &str) -> Result<u64> {
 
 fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
     let path = cursor_journal_path()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| ClientError::State("cursor journal needs a parent directory".into()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
-    #[cfg(unix)]
-    if std::env::var_os("FLEET_CURSOR_JOURNAL").is_none() {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
-    }
-    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(ClientError::State(
-                "cursor journal is not a regular file".into(),
-            ));
-        }
-    }
     let mut line = serde_json::to_vec(&serde_json::json!({
         "host": host_cursor_key(host),
         "session_id": session_id,
@@ -940,34 +891,7 @@ fn persist_saved_cursor(host: &Host, session_id: &str, seq: u64) -> Result<()> {
     }))
     .map_err(|error| ClientError::Protocol(error.to_string()))?;
     line.push(b'\n');
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|error| ClientError::State(format!("cursor journal: {error}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if file
-            .metadata()
-            .map_err(|error| ClientError::State(error.to_string()))?
-            .permissions()
-            .mode()
-            & 0o077
-            != 0
-        {
-            return Err(ClientError::State(
-                "cursor journal permissions are too permissive".into(),
-            ));
-        }
-    }
-    file.write_all(&line)
-        .and_then(|_| file.sync_data())
+    journal::append(&path, &line)
         .map_err(|error| ClientError::State(format!("cursor journal: {error}")))
 }
 
@@ -1056,6 +980,36 @@ mod tests {
         assert!(push_subscription_event(&sender, &cancelled, sample_event(7)).unwrap());
         assert_eq!(subscription.last_sequence(), 5, "queued != consumed");
         drop(subscription);
+    }
+
+    #[test]
+    fn failed_cursor_persistence_prevents_later_delivery() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        sender.send(Ok(sample_event(6))).unwrap();
+        sender.send(Ok(sample_event(7))).unwrap();
+        let subscription = TimelineSubscription {
+            host: Host::Local,
+            session_id: "ses_test".into(),
+            receiver,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            worker: None,
+            cursor: Arc::new(std::sync::atomic::AtomicU64::new(5)),
+        };
+        let event = subscription.receiver.recv().unwrap().unwrap();
+        let error = subscription.persist_delivery(event, |_, _, _| {
+            Err(ClientError::State("fixture storage failure".into()))
+        });
+        assert!(matches!(error, Err(ClientError::State(_))));
+        assert_eq!(subscription.last_sequence(), 5);
+        assert!(matches!(
+            subscription.recv(),
+            Err(ClientError::SubscriptionClosed)
+        ));
+        assert!(matches!(
+            subscription.recv_timeout(Duration::from_millis(1)),
+            Err(ClientError::SubscriptionClosed)
+        ));
+        assert_eq!(subscription.last_sequence(), 5);
     }
 
     #[test]

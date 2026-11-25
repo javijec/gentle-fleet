@@ -736,6 +736,15 @@ impl DataDirectory {
         Ok(())
     }
 
+    /// Validate a regular owner-only file in this guarded directory, if it exists.
+    pub fn validate_private_file(&self, path: &Path) -> io::Result<()> {
+        validate_data_path(path)?;
+        if path.parent() != Some(self.path.as_path()) || path.file_name().is_none() {
+            return Err(invalid("file must be inside its guarded data directory"));
+        }
+        self.validate_file(path)
+    }
+
     fn validate_file(&self, path: &Path) -> io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{
             GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,

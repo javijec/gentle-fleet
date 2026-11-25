@@ -29,21 +29,21 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows_sys::Win32::Security::{
-    CopySid, EqualSid, GetLengthSid, GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES,
-    TOKEN_QUERY, TOKEN_USER,
+    CopySid, EqualSid, GetLengthSid, GetTokenInformation, RevertToSelf, TokenUser,
+    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED,
-    FILE_SHARE_READ, OPEN_EXISTING,
+    FILE_SHARE_READ, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
-    WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ImpersonateNamedPipeClient, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken, WaitForSingleObject, INFINITE,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken,
+    OpenThreadToken, WaitForSingleObject, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
@@ -191,6 +191,10 @@ fn sid_of_process(process: HANDLE) -> io::Result<Vec<u8>> {
         return Err(io::Error::last_os_error());
     }
     let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+    sid_of_token(&token)
+}
+
+fn sid_of_token(token: &OwnedHandle) -> io::Result<Vec<u8>> {
     let mut required = 0u32;
     unsafe {
         GetTokenInformation(
@@ -283,6 +287,43 @@ fn check_peer(handle: HANDLE, sid: &[u8], client: bool) -> io::Result<()> {
     } == 0
     {
         return Err(invalid("named-pipe peer has a different user SID"));
+    }
+    Ok(())
+}
+
+// Query the security context attached to the last message read from this
+// connection, not a process found later by its numeric PID. No application
+// work executes while impersonating. OpenAsSelf allows TOKEN_QUERY even at
+// identification level; the token handle is queried only after reverting.
+fn check_client_message(handle: HANDLE, sid: &[u8]) -> io::Result<()> {
+    if unsafe { ImpersonateNamedPipeClient(handle) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut raw_token = ptr::null_mut();
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut raw_token) };
+    let error = if opened == 0 {
+        Some(io::Error::last_os_error())
+    } else {
+        None
+    };
+    // Continuing after failed reversion would run Fleet under a foreign
+    // security context. Terminate instead, as required by the Win32 contract.
+    if unsafe { RevertToSelf() } == 0 {
+        std::process::abort();
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+    let peer = sid_of_token(&token)?;
+    if unsafe {
+        EqualSid(
+            sid.as_ptr().cast_mut().cast::<c_void>(),
+            peer.as_ptr().cast_mut().cast::<c_void>(),
+        )
+    } == 0
+    {
+        return Err(invalid("named-pipe message has a different user SID"));
     }
     Ok(())
 }
@@ -683,7 +724,7 @@ impl Listener {
         // Rejecting an unauthorised peer must not disable future accepts.
         *pending = Some(create_instance(&self.name_wide, &self.sid, false)?);
         verified?;
-        Ok(Stream::new(File::from(instance)))
+        Ok(Stream::new(File::from(instance), Some(self.sid.clone())))
     }
 }
 
@@ -696,6 +737,8 @@ struct Shared {
     // Address of the pending read OVERLAPPED, valid only while the read
     // holds its direction lock. All access is serialized with submission.
     submission: Mutex<Option<usize>>,
+    // Only accepted server streams verify incoming client security contexts.
+    client_sid: Option<Vec<u8>>,
     read_eof: AtomicBool,
     write_eof: AtomicBool,
     stopped: AtomicBool,
@@ -706,12 +749,13 @@ struct Shared {
 pub struct Stream(Arc<Shared>);
 
 impl Stream {
-    fn new(file: File) -> Self {
+    fn new(file: File, client_sid: Option<Vec<u8>>) -> Self {
         Self(Arc::new(Shared {
             file: Mutex::new(Some(Arc::new(file))),
             read_lock: Mutex::new(()),
             write_lock: Mutex::new(()),
             submission: Mutex::new(None),
+            client_sid,
             read_eof: AtomicBool::new(false),
             write_eof: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -822,6 +866,13 @@ impl Read for Stream {
         let timeout = *self.0.read_timeout.lock().expect("pipe timeout poisoned");
         match pipe_read(&file, out, timeout, &self.0) {
             Ok(n) => {
+                if let (true, Some(sid)) = (n != 0, &self.0.client_sid) {
+                    if let Err(error) = check_client_message(file.as_raw_handle(), sid) {
+                        // Never expose unauthenticated bytes to the decoder.
+                        let _ = self.shutdown(std::net::Shutdown::Both);
+                        return Err(error);
+                    }
+                }
                 if let Some(pos) = out[..n].iter().position(|b| *b == 0) {
                     self.0.read_eof.store(true, Ordering::Release);
                     if pos + 1 != n {
@@ -893,7 +944,7 @@ pub fn connect(address: &str) -> io::Result<Stream> {
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED,
+                FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                 ptr::null_mut(),
             )
         };
@@ -903,7 +954,7 @@ pub fn connect(address: &str) -> io::Result<Stream> {
             // an additional fail-closed check even if a PID has been reused.
             check_pipe_owner(handle.as_raw_handle(), &sid)?;
             check_peer(handle.as_raw_handle(), &sid, false)?;
-            return Ok(Stream::new(File::from(handle)));
+            return Ok(Stream::new(File::from(handle), None));
         }
         let error = io::Error::last_os_error();
         if attempt == 1 || error.raw_os_error() != Some(231)
@@ -922,6 +973,50 @@ pub fn connect(address: &str) -> io::Result<Stream> {
 mod tests {
     use super::*;
     use std::net::Shutdown;
+
+    #[test]
+    fn anonymous_client_bytes_are_not_delivered_to_server() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-anonymous-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "anonymous").unwrap();
+        let address = wide(listener.address());
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            ready_tx.send(()).unwrap();
+            let mut byte = [0u8; 1];
+            assert!(stream.read(&mut byte).is_err());
+        });
+        // SECURITY_SQOS_PRESENT with no impersonation level bits explicitly
+        // requests SecurityAnonymous. It can connect under the owner's DACL
+        // but the server must not consume its unauthenticated message.
+        let handle = unsafe {
+            CreateFileW(
+                address.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT,
+                ptr::null_mut(),
+            )
+        };
+        assert_ne!(handle, INVALID_HANDLE_VALUE);
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let mut client = Stream::new(File::from(handle), None);
+        client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        client.write_all(b"x").unwrap();
+        server.join().unwrap();
+    }
 
     #[test]
     fn timeout_racing_success_reports_transferred_bytes() {

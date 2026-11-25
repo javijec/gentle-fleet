@@ -289,3 +289,25 @@ El fixture de proceso añade además una junction real en un antecesor hacia un 
   conecta con host key checking habilitado. GitHub Actions **BLOCKED** por
   facturación. El full de ambos sistemas y consolidación de este candidato
   están pendientes. **W1-B ABIERTA; NO-GO W1-C.**
+
+
+## W1-B — identidad efectiva por mensaje (candidato)
+
+Se conserva la corrección timeout de `d7e4a28` y su evidencia previa. Para
+evitar que la consulta por PID sea la única comprobación de identidad del
+cliente, el servidor comprueba el SID del token de seguridad del último
+mensaje leído antes de entregar bytes al decoder: ImpersonateNamedPipeClient,
+OpenThreadToken(TOKEN_QUERY, OpenAsSelf), RevertToSelf y consulta del token
+después de revertir. Si no puede revertir, termina el proceso. No ejecuta
+operaciones de aplicación bajo impersonación. Los clientes Fleet solicitan
+SECURITY_IDENTIFICATION mediante SECURITY_SQOS_PRESENT para limitar lo que
+el servidor puede hacer con su identidad. La comprobación previa de PID,
+DACL y propietario del objeto del servidor se conservan como capas.
+Se añade una regresión de cliente con nivel anónimo; sus bytes no deben
+llegar al decoder. Las regresiones existentes prueban tráfico normal.
+**UNTESTED:** ejecución nativa, compatibilidad de clientes .NET y todos los
+gates del candidato. La identidad exacta del proceso servidor y la
+delegación deliberada de handles por el propio usuario siguen fuera de
+lo demostrado; no se certifica reutilización de PID por inspección.
+Referencia: https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient
+y https://learn.microsoft.com/en-us/windows/win32/ipc/impersonating-a-named-pipe-client.

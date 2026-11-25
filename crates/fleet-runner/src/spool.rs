@@ -254,7 +254,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn path(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("gf-p3-spool-{name}-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("gf-p3-spool-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         #[cfg(unix)]
         {

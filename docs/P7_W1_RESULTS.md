@@ -328,3 +328,15 @@ El alias SSH funcional reportado por el agente es `javiomarchi` (no
 `linux`); validar HEAD y checkout limpio en ambos hosts y usar
 `python scripts/ci/remote.py --host javiomarchi --remote-root /home/javijec/dev/gentle-fleet --profile full`.
 No hay evidencia de ejecución del full desde esta sesión.
+
+
+### Escrituras inciertas (candidato UNTESTED)
+
+Si la escritura devuelve error, el stream se cierra abortivamente para
+todos los clones; no se envían frames posteriores sobre un posible prefijo
+JSONL incompleto. El marcador de medio cierre fallido también aborta.
+Una finalización exitosa que ganó la carrera al timeout sigue devolviendo
+sus bytes transferidos, según la corrección anterior. Se añade un test de
+timeout de escritura con peer que no drena y comprobación del siguiente
+write desde otro clon. La prueba no simula fallo de CancelIoEx ni demuestra
+por sí sola una cota dura de cancelación del kernel. Requiere ejecución nativa.

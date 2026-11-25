@@ -807,11 +807,20 @@ impl Stream {
                     // consumed only inside this transport implementation.
                     let file = self.file()?;
                     let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
-                    if pipe_write(&file, &[0], timeout, &self.0)? != 1 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "pipe EOF not sent",
-                        ));
+                    let result = pipe_write(&file, &[0], timeout, &self.0);
+                    match result {
+                        Ok(1) => {}
+                        Ok(_) => {
+                            self.shutdown(std::net::Shutdown::Both)?;
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "pipe EOF not sent",
+                            ));
+                        }
+                        Err(error) => {
+                            self.shutdown(std::net::Shutdown::Both)?;
+                            return Err(error);
+                        }
                     }
                 }
             }
@@ -917,7 +926,13 @@ impl Write for Stream {
         }
         let file = self.file()?;
         let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
-        pipe_write(&file, bytes, timeout, &self.0)
+        let result = pipe_write(&file, bytes, timeout, &self.0);
+        if result.is_err() {
+            // An aborted or failed write can leave an uncertain JSONL prefix
+            // at the peer. Do not permit subsequent frames on this stream.
+            self.shutdown(std::net::Shutdown::Both)?;
+        }
+        result
     }
     fn flush(&mut self) -> io::Result<()> {
         // WriteFile completion has already handed bytes to the pipe. Calling
@@ -1040,6 +1055,36 @@ mod tests {
                 .raw_os_error(),
             Some(ERROR_BROKEN_PIPE as i32)
         );
+    }
+
+    #[test]
+    fn failed_write_under_backpressure_closes_stream() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-write-timeout-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "write-timeout").unwrap();
+        let address = listener.address().to_owned();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let _stream = listener.accept().unwrap();
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        });
+        let mut client = connect(&address).unwrap();
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        client
+            .set_write_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let mut clone = client.try_clone().unwrap();
+        let result = client.write_all(&vec![b'x'; 8 * 1024 * 1024]);
+        let next = clone.write(b"next");
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(next.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]

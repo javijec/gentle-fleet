@@ -31,7 +31,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 public static class FleetW1bAccess {
-    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
     static extern SafeFileHandle CreateFileW(string path, uint access, uint share,
         IntPtr security, uint disposition, uint flags, IntPtr template);
     public static void Open(string path, uint access) {

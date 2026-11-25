@@ -808,6 +808,71 @@ fn durable_lease_rejects_alias_and_reopens_after_release() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+// SQLite can delete its WAL/SHM/rollback journal as the last connection
+// closes. Windows may return ACCESS_DENIED or DELETE_PENDING while that
+// deletion completes. Retry the full validation, never interpret these
+// errors as absence. A persistent denial still fails closed.
+fn retry_sqlite_sidecar_validation(
+    mut validate: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_DELETE_PENDING, ERROR_SHARING_VIOLATION,
+    };
+
+    const RETRIES: usize = 10;
+    for attempt in 0..=RETRIES {
+        match validate() {
+            Err(error)
+                if attempt < RETRIES
+                    && error.raw_os_error().is_some_and(|code| {
+                        code == ERROR_ACCESS_DENIED as i32
+                            || code == ERROR_DELETE_PENDING as i32
+                            || code == ERROR_SHARING_VIOLATION as i32
+                    }) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded sidecar validation always returns on its last attempt")
+}
+
+#[cfg(test)]
+#[test]
+fn sidecar_validation_retries_transient_os_denial_but_never_accepts_persistent_denial() {
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+    let mut calls = 0;
+    retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        if calls == 1 {
+            Err(io::Error::from_raw_os_error(ERROR_ACCESS_DENIED as i32))
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+    assert_eq!(calls, 2);
+
+    let mut calls = 0;
+    let error = retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        Err(io::Error::from_raw_os_error(ERROR_ACCESS_DENIED as i32))
+    })
+    .unwrap_err();
+    assert_eq!(calls, 11);
+    assert_eq!(error.raw_os_error(), Some(ERROR_ACCESS_DENIED as i32));
+
+    let mut calls = 0;
+    let error = retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        Err(invalid("fixture invalid ACL"))
+    })
+    .unwrap_err();
+    assert_eq!(calls, 1);
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}
+
 impl DataDirectory {
     pub fn open(path: &Path) -> io::Result<Self> {
         validate_data_path(path)?;
@@ -833,7 +898,16 @@ impl DataDirectory {
         for suffix in ["", "-wal", "-shm", "-journal"] {
             let mut name = database.as_os_str().to_os_string();
             name.push(suffix);
-            self.validate_file(Path::new(&name))?;
+            let path = Path::new(&name);
+            let result = if suffix.is_empty() {
+                self.validate_file(path)
+            } else {
+                retry_sqlite_sidecar_validation(|| self.validate_file(path))
+            };
+            result.map_err(|error| {
+                let file = if suffix.is_empty() { "database" } else { suffix };
+                io::Error::new(error.kind(), format!("SQLite {file} validation: {error}"))
+            })?;
         }
         Ok(())
     }

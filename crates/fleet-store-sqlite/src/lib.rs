@@ -1572,6 +1572,49 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_sidecar_validation_during_connection_churn() {
+        let (store, path) = temp_store();
+        let connection = store.connection().unwrap();
+        connection
+            .execute_batch("CREATE TABLE churn_probe (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        drop(connection);
+        let store = std::sync::Arc::new(store);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let workers: Vec<_> = (0..4)
+            .map(|worker| {
+                let store = std::sync::Arc::clone(&store);
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for index in 0..64 {
+                        let connection = store.connection().unwrap();
+                        connection
+                            .execute(
+                                "INSERT INTO churn_probe VALUES (?1)",
+                                [worker * 64 + index],
+                            )
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let connection = store.connection().unwrap();
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM churn_probe", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 256);
+        assert!(SqliteStore::integrity(&connection).unwrap());
+        drop(connection);
+        drop(store);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_rejects_preexisting_unprotected_data_without_mutation() {
         let parent = std::env::temp_dir().join(format!(
             "gf-p2-unsafe-{}-{}",

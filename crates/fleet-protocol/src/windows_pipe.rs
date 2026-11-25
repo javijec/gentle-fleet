@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -536,11 +536,11 @@ fn open_runtime_directory(
 // Reject pre-existing directories with unexpected ACLs rather than taking
 // ownership or changing permissions on arbitrary paths.
 pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
+    private_directory(path, create, false)
+}
+
+fn private_directory(path: &Path, create: bool, inheritable: bool) -> io::Result<RuntimeGuard> {
     use std::path::Component;
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
-    };
-    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
     use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, FILE_READ_ATTRIBUTES};
     if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
         return Err(invalid(
@@ -557,7 +557,8 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
         ancestors.push(handle);
     }
     let sid = sid_string(&current_sid()?)?;
-    let expected = format!("O:{sid}D:P(A;;FA;;;{sid})");
+    let ace = if inheritable { "OICI" } else { "" };
+    let expected = format!("O:{sid}D:P(A;{ace};FA;;;{sid})");
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     if create {
         let mut descriptor = ptr::null_mut();
@@ -589,7 +590,33 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
     }
     // READ_CONTROL; hold the validated directory for the listener lifetime.
     let (handle, info) = open_runtime_directory(path, 0x0002_0000)?;
-    let raw = handle.as_raw_handle();
+    let actual = owner_dacl_string(handle.as_raw_handle())?;
+    // Auto-inheritance control flags can be set by the filesystem. In both
+    // accepted forms the protected DACL contains exactly the owner ACE.
+    if actual != expected
+        && !(inheritable && actual == format!("O:{sid}D:PAI(A;OICI;FA;;;{sid})"))
+    {
+        return Err(invalid(
+            "Fleet directory owner or DACL is not private; choose a new private directory",
+        ));
+    }
+    Ok(RuntimeGuard {
+        _ancestors: ancestors,
+        _directory: handle,
+        identity: (
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow,
+        ),
+    })
+}
+
+fn owner_dacl_string(raw: HANDLE) -> io::Result<String> {
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
+
     let flags = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let mut descriptor = ptr::null_mut();
     let status = unsafe {
@@ -635,20 +662,128 @@ pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
     unsafe {
         LocalFree(actual.cast());
     }
-    if actual_string != expected {
-        return Err(invalid(
-            "Fleet runtime owner or DACL is not private; choose a new runtime directory",
-        ));
+    Ok(actual_string)
+}
+
+/// A protected directory for SQLite and its inherited sidecar files.
+/// Unlike endpoint credentials, existing data is never removed or rewritten
+/// to repair permissions. Retain the ancestor/directory handles while in use.
+pub struct DataDirectory {
+    _guard: RuntimeGuard,
+    path: PathBuf,
+    sid: String,
+}
+
+fn validate_data_path(path: &Path) -> io::Result<()> {
+    use std::path::{Component, Prefix};
+
+    // Limit this cut to local drive paths. UNC and device namespaces require
+    // separate filesystem/locking validation.
+    if !path.is_absolute()
+        || !matches!(
+            path.components().next(),
+            Some(Component::Prefix(prefix))
+                if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        )
+    {
+        return Err(invalid("Fleet data path must be an absolute local drive path"));
     }
-    Ok(RuntimeGuard {
-        _ancestors: ancestors,
-        _directory: handle,
-        identity: (
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow,
-        ),
-    })
+    for component in path.components() {
+        match component {
+            Component::ParentDir => return Err(invalid("Fleet data path contains parent traversal")),
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if name.contains(':') || name.ends_with(['.', ' ']) {
+                    return Err(invalid("Fleet data path contains an ambiguous filename"));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+impl DataDirectory {
+    pub fn open(path: &Path) -> io::Result<Self> {
+        validate_data_path(path)?;
+        let guard = private_directory(path, true, true)?;
+        Ok(Self {
+            _guard: guard,
+            path: path.to_path_buf(),
+            sid: sid_string(&current_sid()?)?,
+        })
+    }
+
+    /// Validate existing database and sidecars before SQLite opens by name.
+    /// A missing sidecar is normal; SQLite may create/remove it concurrently.
+    /// The protected parent prevents other ordinary users from substituting
+    /// entries while the guard is held. Same-user processes are trusted.
+    pub fn validate_sqlite_files(&self, database: &Path) -> io::Result<()> {
+        validate_data_path(database)?;
+        if database.parent() != Some(self.path.as_path()) || database.file_name().is_none() {
+            return Err(invalid("SQLite path must be inside its guarded data directory"));
+        }
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut name = database.as_os_str().to_os_string();
+            name.push(suffix);
+            self.validate_file(Path::new(&name))?;
+        }
+        Ok(())
+    }
+
+    fn validate_file(&self, path: &Path) -> io::Result<()> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_DELETE, FILE_SHARE_WRITE,
+        };
+
+        let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let raw = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                0x0002_0000 | FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                ptr::null_mut(),
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+            || info.nNumberOfLinks != 1
+        {
+            return Err(invalid("Fleet data file must be a regular, unlinked file"));
+        }
+        let actual = owner_dacl_string(handle.as_raw_handle())?;
+        let sid = &self.sid;
+        // Accept a single inherited full-control ACE, or the equivalent
+        // explicit protected ACE on an existing owner-only file. No broad
+        // grants, additional ACEs, NULL DACLs, or alternate owners.
+        if ![
+            format!("O:{sid}D:AI(A;ID;FA;;;{sid})"),
+            format!("O:{sid}D:(A;ID;FA;;;{sid})"),
+            format!("O:{sid}D:P(A;;FA;;;{sid})"),
+            format!("O:{sid}D:PAI(A;;FA;;;{sid})"),
+        ]
+        .contains(&actual)
+        {
+            return Err(invalid("Fleet data file owner or DACL is not private"));
+        }
+        Ok(())
+    }
 }
 
 pub struct Listener {

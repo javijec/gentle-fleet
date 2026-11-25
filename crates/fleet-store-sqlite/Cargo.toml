@@ -8,3 +8,6 @@ license.workspace = true
 fleet-domain = { path = "../fleet-domain" }
 rusqlite = { version = "=0.43.0", features = ["bundled"] }
 serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+fleet-protocol = { path = "../fleet-protocol" }

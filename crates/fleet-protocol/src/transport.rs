@@ -15,6 +15,9 @@ use std::path::PathBuf;
 #[path = "windows_pipe.rs"]
 mod windows_pipe;
 
+#[cfg(windows)]
+pub use windows_pipe::DataDirectory;
+
 pub fn runtime_dir() -> PathBuf {
     std::env::var_os("FLEET_RUNTIME_DIR")
         .map(PathBuf::from)

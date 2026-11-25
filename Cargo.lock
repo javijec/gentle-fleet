@@ -230,6 +230,7 @@ name = "fleet-store-sqlite"
 version = "0.1.0"
 dependencies = [
  "fleet-domain",
+ "fleet-protocol",
  "rusqlite",
  "serde_json",
 ]

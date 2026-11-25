@@ -34,6 +34,7 @@ class LocalCITests(unittest.TestCase):
             self.assertTrue(quick < full)
             self.assertIn("build", full)
         self.assertIn("w1b-named-pipe", expected_ids("windows", "full"))
+        self.assertIn("w1c-persistence", expected_ids("windows", "full"))
         self.assertIn("e2e_p44_security", expected_ids("linux", "full"))
         self.assertIn("e2e_p61_sdk", expected_ids("linux", "full"))
         self.assertNotIn("e2e_p62b_desktop_gpui", expected_ids("linux", "full"))

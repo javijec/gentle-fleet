@@ -41,6 +41,8 @@ jobs:
         run: pwsh -NoProfile -File tests/windows/w1a-token-isolation.ps1
       - name: W1-B named pipe process and collision regression
         run: pwsh -NoProfile -File tests/windows/w1b-named-pipe.ps1
+      - name: W1-C persistence process regression
+        run: pwsh -NoProfile -File tests/windows/w1c-persistence.ps1
 
   windows-ipc:
     runs-on: windows-latest

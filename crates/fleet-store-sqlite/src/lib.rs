@@ -135,11 +135,26 @@ CREATE TABLE IF NOT EXISTS session_controls (
 
 pub struct SqliteStore {
     path: PathBuf,
+    #[cfg(windows)]
+    data_directory: fleet_protocol::transport::DataDirectory,
 }
 
 impl SqliteStore {
     pub fn open(path: impl Into<PathBuf>) -> StoreResult<Self> {
         let path = path.into();
+        #[cfg(windows)]
+        let data_directory = {
+            let parent = path.parent().ok_or_else(|| {
+                StoreError::new("store_dir_unavailable", "SQLite requires a private parent")
+            })?;
+            let directory = fleet_protocol::transport::DataDirectory::open(parent)
+                .map_err(|e| StoreError::new("insecure_store_dir", e.to_string()))?;
+            directory
+                .validate_sqlite_files(&path)
+                .map_err(|e| StoreError::new("insecure_store_file", e.to_string()))?;
+            directory
+        };
+        #[cfg(unix)]
         if let Some(parent) = path.parent() {
             let existed = parent.exists();
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -170,10 +185,12 @@ impl SqliteStore {
                     }
                 }
             }
-            #[cfg(not(unix))]
-            let _ = existed;
         }
-        let store = Self { path };
+        let store = Self {
+            path,
+            #[cfg(windows)]
+            data_directory,
+        };
         store.init()?;
         #[cfg(unix)]
         {
@@ -189,8 +206,16 @@ impl SqliteStore {
     }
 
     fn connection(&self) -> StoreResult<Connection> {
+        #[cfg(windows)]
+        self.data_directory
+            .validate_sqlite_files(&self.path)
+            .map_err(|e| StoreError::new("insecure_store_file", e.to_string()))?;
         let connection = Connection::open(&self.path)
             .map_err(|e| StoreError::new("store_open_failed", e.to_string()))?;
+        #[cfg(windows)]
+        self.data_directory
+            .validate_sqlite_files(&self.path)
+            .map_err(|e| StoreError::new("insecure_store_file", e.to_string()))?;
         // Foreign keys, busy_timeout and trusted schema are connection-scoped.
         // Calling configure() only in init() silently bypassed FK checks.
         connection
@@ -320,6 +345,10 @@ impl SessionStore for SqliteStore {
     fn init(&self) -> StoreResult<()> {
         let mut connection = self.connection()?;
         Self::configure(&connection)?;
+        #[cfg(windows)]
+        self.data_directory
+            .validate_sqlite_files(&self.path)
+            .map_err(|e| StoreError::new("insecure_store_file", e.to_string()))?;
         if !Self::integrity(&connection)? {
             return Err(StoreError::new(
                 "corrupt_database",
@@ -1518,6 +1547,60 @@ mod tests {
             .join("fleet.sqlite");
         let store = SqliteStore::open(path.clone()).unwrap();
         (store, path)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_wal_and_shm_inherit_private_acl() {
+        let (store, path) = temp_store();
+        let connection = store.connection().unwrap();
+        connection
+            .execute_batch("CREATE TABLE acl_probe (id INTEGER PRIMARY KEY); INSERT INTO acl_probe VALUES (1);")
+            .unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = path.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            assert!(Path::new(&sidecar).is_file(), "missing live SQLite sidecar");
+        }
+        store.data_directory.validate_sqlite_files(&path).unwrap();
+        let reader = store.connection().unwrap();
+        let count: i64 = reader
+            .query_row("SELECT count(*) FROM acl_probe", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_preexisting_unprotected_data_without_mutation() {
+        let parent = std::env::temp_dir().join(format!(
+            "gf-p2-unsafe-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join("fleet.sqlite");
+        std::fs::write(&path, b"fixture sentinel").unwrap();
+        let result = SqliteStore::open(&path);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"fixture sentinel");
+        std::fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_hardlinked_sidecar_without_mutation() {
+        let (store, path) = temp_store();
+        let parent = path.parent().unwrap();
+        let target = parent.join("sentinel");
+        std::fs::write(&target, b"fixture sentinel").unwrap();
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push("-journal");
+        std::fs::hard_link(&target, &sidecar).unwrap();
+        assert!(store.connection().is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"fixture sentinel");
+        std::fs::remove_file(&sidecar).unwrap();
+        std::fs::remove_file(&target).unwrap();
     }
 
     fn demo_event(seq: u64) -> Event {

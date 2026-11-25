@@ -23,23 +23,33 @@ fn to_api_error(error: fleet_agent::AgentError) -> fleet_protocol::ApiError {
     }
 }
 
-fn database_path() -> std::path::PathBuf {
-    if let Ok(path) = std::env::var("FLEET_DB_PATH") {
-        return std::path::PathBuf::from(path);
+fn database_path() -> std::io::Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    if let Some(path) = std::env::var_os("FLEET_DB_PATH") {
+        return Ok(PathBuf::from(path));
     }
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(unix)]
     let base = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/share"))
-        })
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("gentle-fleet").join("fleet.sqlite")
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        });
+    let base = base.filter(|path| path.is_absolute()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No absolute durable data root; set FLEET_DB_PATH",
+        )
+    })?;
+    Ok(base.join("gentle-fleet").join("fleet.sqlite"))
 }
 
 fn main() -> std::io::Result<()> {
     let registry = builtin_registry_from_env();
     let store = Arc::new(
-        SqliteStore::open(database_path())
+        SqliteStore::open(database_path()?)
             .map_err(|e| std::io::Error::other(format!("{}: {}", e.code, e.message)))?,
     );
     let host_id = std::env::var("FLEET_HOST_ID").unwrap_or_else(|_| "local-host".into());

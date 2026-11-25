@@ -369,3 +369,9 @@ GitHub Actions continúa BLOCKED por facturación. Usar alias SSH
 `javiomarchi` con verificación estricta de host key y el orquestador local.
 W1-C puede preparar el plan ahora; su implementación se inicia tras el gate
 automatizado de entrada. No merge a main ni release autorizado.
+
+## P7-H / W1-B — ejecución local del 25/11/2026
+
+El operador compartió la salida completa del coordinador sobre `834ce5251a9bbe7b29bf89e74e56f0e35c13f365`: Windows full 13/13, protocolo Windows 10/10 adicional, Linux full 77/77 (incluidos 21 E2E), sin FAIL/BLOCKED/SKIP. Total 100/100 checks reportados PASS, incluidos W1-A y W1-B. Ambos workers informaron el mismo SHA. El coordinador terminó con TypeError al imprimir el resumen (variable local que ocultaba la función summary); el código de pruebas y la escritura del informe preceden a ese error. No se declara exit code cero ni se atribuye PASS a Actions. El informe y los logs originales no se han revisado independientemente.
+
+Se corrige el defecto de presentación y se añade regresión del camino completo de finalización exitosa y fallida, sin modificar Rust, gates IPC ni lógica de aceptación. Repetir el gate sobre el nuevo SHA y revisar los logs para aceptar técnicamente W1-B/P7-H y autorizar implementación W1-C. Aislamiento real de dos SID permanece UNTESTED y diferido al release; no crear cuentas. No se inicia W1-C ni se declara release por este resultado.

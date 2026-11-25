@@ -1,11 +1,52 @@
 import base64
+import json
+from argparse import Namespace
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from both import remote_command, validate_native
+from both import coordinator, remote_command, validate_native
 
 
 class BothTests(unittest.TestCase):
+    def test_coordinator_final_summary_and_exit_code(self):
+        # Exercise the real finalization path, not only report validation.
+        args = Namespace(mode="w1c", windows="local", linux="fixture",
+                         windows_root=None, linux_root="/tmp/fixture")
+        sha = "a" * 40
+        for fail in (False, True):
+            with self.subTest(fail=fail), TemporaryDirectory() as directory:
+                root = Path(directory)
+
+                def invoke(_host, _root, platform, arguments, _sha, capture=False):
+                    status = "FAIL" if fail and platform == "linux" else "PASS"
+                    action = arguments[arguments.index("--worker") + 1]
+                    if action == "collect":
+                        record = {"status": status, "ci": {"checks": [{"status": status}]},
+                                  "protocol_runs": []}
+                        return SimpleNamespace(returncode=0, stdout=json.dumps(record))
+                    return SimpleNamespace(returncode=int(action == "run" and status == "FAIL"))
+
+                with patch("both.ROOT", root), patch("both.clean_head", return_value=sha), \
+                     patch("both.current_platform", return_value="windows"), \
+                     patch("both.invoke", side_effect=invoke), \
+                     patch("both.validate_native", side_effect=lambda record, *_: record["status"]), \
+                     patch("console.color_enabled", return_value=False), redirect_stdout(StringIO()) as output:
+                    code = coordinator(args)
+                expected = "FAIL" if fail else "AUTOMATED_PASS"
+                self.assertEqual(code, int(fail))
+                self.assertIn("TOTAL: " + expected, output.getvalue())
+                self.assertEqual("Report:" in output.getvalue(), fail)
+                report, = root.glob("reports/combined/*/combined.json")
+                data = json.loads(report.read_text(encoding="utf-8"))
+                self.assertEqual(data["status"], expected)
+                self.assertEqual(data["commit"], sha)
+                self.assertTrue(data["finished"])
+
     def test_remote_shell_quoting(self):
         root = "C:\\a folder\\repo & (test)"
         command = remote_command(root, ["--worker", "preflight"], "a" * 40)

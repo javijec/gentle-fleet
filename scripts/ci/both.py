@@ -159,11 +159,11 @@ def coordinator(args):
     run_id = uuid.uuid4().hex
     # The local worker owns the run folder on this machine if selected.
     # Keep coordinator reports in a separate directory.
-    summary = ROOT / "reports" / "combined" / run_id
-    summary.mkdir(parents=True, exist_ok=False)
+    summary_dir = ROOT / "reports" / "combined" / run_id
+    summary_dir.mkdir(parents=True, exist_ok=False)
     data = {"commit": sha, "mode": mode, "started": timestamp(),
             "status": "BLOCKED", "platforms": {}, "manual_review": "REQUIRED"}
-    output = summary / "combined.json"
+    output = summary_dir / "combined.json"
     write_json(output, data)
     try:
         for platform, (host, root) in hosts.items():
@@ -182,7 +182,7 @@ def coordinator(args):
                     continue
                 record = json.loads(collected.stdout)
                 status = validate_native(record, platform, sha, mode)
-                write_json(summary / f"{platform}.json", record)
+                write_json(summary_dir / f"{platform}.json", record)
                 checks = record.get("ci", {}).get("checks", []) + record.get("protocol_runs", [])
                 counts = {key: sum(check["status"] == key for check in checks)
                           for key in ("PASS", "FAIL", "BLOCKED", "SKIP")}

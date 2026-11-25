@@ -949,7 +949,10 @@ fn legacy_database_adoption_is_explicit_and_cannot_override_identity() {
     let denial = lease.bind_database_with_adoption(&db, true).unwrap_err();
     assert!(denial.to_string().contains("identity mismatch"));
     assert_eq!(std::fs::read(&backup).unwrap(), original);
-    assert_eq!(std::fs::read(&db).unwrap(), b"replacement database evidence");
+    assert_eq!(
+        std::fs::read(&db).unwrap(),
+        b"replacement database evidence"
+    );
     drop(lease);
     std::fs::remove_dir_all(root).unwrap();
 }

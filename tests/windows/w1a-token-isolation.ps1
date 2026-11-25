@@ -236,6 +236,59 @@ try {
             }
         }
     }
+    # A new boot must not inherit the previous boot's spool, even after the
+    # operating system releases the process lease. Retain all existing bytes.
+    $previousRunner = $runners | Where-Object { $_.Id -eq $identity1.pid } | Select-Object -First 1
+    if ($null -eq $previousRunner -or $previousRunner.HasExited) {
+        throw 'fixture runner missing before generation check'
+    }
+    $previousRunner.Kill()
+    if (-not $previousRunner.WaitForExit(5000)) { throw 'fixture runner did not terminate' }
+    $previousSpool = Join-Path (Split-Path -Parent $env:FLEET_DB_PATH) 'fleet-runner-w1a-one.spool.sqlite'
+    $snapshots = @{}
+    foreach ($suffix in @('', '-wal', '-shm', '-journal')) {
+        $candidate = $previousSpool + $suffix
+        if (Test-Path -LiteralPath $candidate) {
+            $snapshots[$candidate] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
+        }
+    }
+    $previousRuntime = $env:FLEET_RUNTIME_DIR
+    $env:FLEET_RUNTIME_DIR = Join-Path $root 'new-boot-runtime'
+    try {
+        $info = [Diagnostics.ProcessStartInfo]::new()
+        $info.FileName = Join-Path $bin 'fleet-runner.exe'
+        $info.UseShellExecute = $false
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        foreach ($argument in @('--runner-id', 'w1a-one', '--session', 'different-session',
+                               '--provider', 'fake', '--workspace', $root)) {
+            [void]$info.ArgumentList.Add($argument)
+        }
+        $replacement = [Diagnostics.Process]::Start($info)
+        try {
+            $out = $replacement.StandardOutput.ReadToEndAsync()
+            $err = $replacement.StandardError.ReadToEndAsync()
+            if (-not $replacement.WaitForExit(10000)) {
+                throw 'new runner boot adopted the previous spool'
+            }
+            if ($replacement.ExitCode -eq 0 -or $out.GetAwaiter().GetResult().Trim() -ne '' -or
+                $err.GetAwaiter().GetResult() -notmatch 'previous runner spool exists' -or
+                (Test-Path -LiteralPath (Join-Path $env:FLEET_RUNTIME_DIR 'fleet-runner-w1a-one.addr'))) {
+                throw 'replacement runner did not reject previous spool before publishing identity'
+            }
+        } finally {
+            if (-not $replacement.HasExited) { $replacement.Kill(); [void]$replacement.WaitForExit(5000) }
+            $replacement.Dispose()
+        }
+    } finally {
+        $env:FLEET_RUNTIME_DIR = $previousRuntime
+    }
+    foreach ($candidate in $snapshots.Keys) {
+        if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ne $snapshots[$candidate]) {
+            throw 'previous boot spool bytes changed'
+        }
+    }
+    Write-Output 'PASS: new runner boot cannot adopt a previous durable spool'
     Write-Output 'PASS: distinct durable runner spools have owner-only access'
     Write-Output 'PASS: daemon and runner credentials are isolated and invalid tokens are rejected'
 } finally {

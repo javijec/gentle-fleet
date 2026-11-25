@@ -413,3 +413,7 @@ El operador confirmó que pasó todo tras resolver checkout dirty y ejecutar el 
 ### W1-C — reserva exclusiva PASS reportado
 
 El operador confirmó que pasó todo tras el candidato de DataLease y la actualización de formato. HEAD remoto observado d49b0b96cfec1e0c6bea76d2b0e817db816e62ad; no se adjuntaron reportes nuevos vinculados al SHA ni logs. Se registra PASS reportado, no aceptación independiente. Nuevo candidato: Known Folder compartida y reserva de endpoint previa a la apertura de SQLite, con publicación posterior a recuperación. No se inicia W1-D.
+
+### W1-C — Known Folder y orden de arranque PASS reportado
+
+El operador confirmó que pasó todo tras 3e41ad8; HEAD remoto observado e12963c520f3536f67e15ac2dbacb6a41326b75f. No se adjuntaron nuevos informes ligados a ese SHA; el combined.json anterior corresponde a 770c806 FAIL y no acredita esta ejecución. Se conserva PASS reportado, no aceptación independiente. Candidato adicional: prohibir que un runner Windows recién creado adopte un spool preexistente. No merge ni inicio W1-D.

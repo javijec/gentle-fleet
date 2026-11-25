@@ -148,6 +148,58 @@ fn durable_spool_path(
     Ok(directory.join(name))
 }
 
+/// A new runner process has a new boot_id. It must never replay a spool
+/// belonging to a previous boot, even when the logical runner_id matches.
+/// Live reattach connects to the existing process and does not enter here.
+/// Caller holds the exclusive spool lease.
+#[cfg(windows)]
+fn reserve_fresh_spool(path: &std::path::Path) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| io::Error::other("spool requires a parent"))?;
+    let directory = fleet_protocol::transport::DataDirectory::open(parent)?;
+    directory.validate_sqlite_files(path)?;
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(suffix);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => return Err(io::Error::other("previous runner spool exists; explicit recovery required")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // Reserve a new regular file without truncating existing data. If
+    // startup subsequently fails, retain the reservation for explicit
+    // reconciliation rather than allowing an ambiguous automatic retry.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    directory.validate_private_file(path)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn fresh_spool_never_adopts_previous_boot_or_sidecar() {
+    let root = std::env::temp_dir().join(format!("gf-spool-boot-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let data = root.join("data");
+    let path = data.join("fleet-runner-one.spool.sqlite");
+    let lease = fleet_protocol::transport::DataLease::acquire(&data, "fleet-runner-one.spool.lease").unwrap();
+    reserve_fresh_spool(&path).unwrap();
+    std::fs::write(&path, b"previous boot").unwrap();
+    assert!(reserve_fresh_spool(&path).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"previous boot");
+    let other = data.join("fleet-runner-two.spool.sqlite");
+    let sidecar = data.join("fleet-runner-two.spool.sqlite-wal");
+    std::fs::write(&sidecar, b"unreconciled WAL").unwrap();
+    assert!(reserve_fresh_spool(&other).is_err());
+    assert!(!other.exists());
+    assert_eq!(std::fs::read(&sidecar).unwrap(), b"unreconciled WAL");
+    drop(lease);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[cfg(all(test, windows))]
 #[test]
 fn durable_spool_names_and_legacy_rejection() {
@@ -188,6 +240,8 @@ fn main() -> io::Result<()> {
             .ok_or_else(|| io::Error::other("spool requires a parent directory"))?,
         &format!("fleet-runner-{}.spool.lease", args.runner_id),
     )?;
+    #[cfg(windows)]
+    reserve_fresh_spool(&spool_path)?;
     let listener = LocalListener::bind_named(&format!("fleet-runner-{}", args.runner_id))?;
     let token = prepare_token(&args.runner_id)?;
     #[cfg(unix)]

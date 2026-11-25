@@ -60,3 +60,26 @@ Eliminar fallas reales de seguridad antes de W1-C.
 ## Alternativa de ejecución local
 
 Mientras Actions no arranque, se aplica la política de CI local de QUALITY.md y LOCAL_CI.md: full en Windows y Linux sobre el mismo SHA limpio, consolidación y revisión de logs. Esto sustituye únicamente el gate automatizado; Actions sigue BLOCKED y la prueba entre usuarios, integridad del directorio, identidad y cancelación bajo backpressure continúan siendo requisitos independientes. No hay PASS de W1-B por crear estos scripts.
+
+
+### Prueba manual con dos usuarios ordinarios autorizados
+
+Compilar binarios en el checkout del propietario con el perfil full.
+En la sesión Windows no elevada del propietario ejecutar:
+
+    pwsh -NoProfile -File tests/windows/w1b-cross-user.ps1 -Mode Owner
+
+Mantener esa consola abierta. En otra sesión Windows no elevada, de una
+cuenta de prueba ya autorizada y SID diferente, ejecutar una copia del mismo
+script (no copiar binarios, tokens ni archivos runtime del propietario):
+
+    pwsh -NoProfile -File w1b-cross-user.ps1 -Mode Probe -OwnerSid '<SID>' -Address '<Address>' -Runtime '<Runtime>'
+
+Usar exactamente los tres valores no secretos que imprime Owner. El probe
+exige Access Denied explícito; timeout o archivo inexistente no son PASS.
+Solo se intenta borrar un archivo de dirección del fixture aislado, nunca
+del runtime real. Volver a la consola Owner, pulsar Enter y verificar el
+control positivo posterior. Conservar ambas salidas sin credenciales.
+No crear cuentas ni alterar ACL del sistema sin autorización. Si no existe
+la segunda sesión autorizada, registrar BLOCKED. La prueba no certifica
+reparse points en antecesores ni el caso PID reutilizado.

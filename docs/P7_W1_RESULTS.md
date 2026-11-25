@@ -212,3 +212,36 @@ regresiones siguientes. Actions sigue **BLOCKED** por facturación.
 - **UNTESTED:** validación full Windows y Linux del nuevo SHA limpio y
   consolidación. W1-B permanece **ABIERTA**; no comenzar W1-C ni interpretar
   este documento como certificación de seguridad.
+
+
+## W1-B — cierre de carrera de cancelación y prueba entre cuentas (candidato)
+
+Se conservó el commit previo `a7c234a` (backpressure y reinicio con archivos
+obsoletos; PASS nativo consignado en el apartado anterior). El fallo de diseño
+identificado es la ventana entre clonar el handle y registrar ReadFile/WriteFile:
+CancelIoEx podía ejecutarse antes de la nueva operación. El gate de envío por
+stream ahora serializa únicamente el inicio de I/O y la cancelación; nunca se
+mantiene durante la espera. Shutdown::Read cancela el OVERLAPPED de lectura
+registrado y no todas las escrituras. Se añade una regresión con handle
+retenido antes de shutdown e intento de envío posterior; se endurece la
+regresión de escritura pendiente para exigir un error de cancelación.
+**UNTESTED** en este SHA: compilación y pruebas Windows (incluido shutdown
+direccional), Linux full y consolidación. No se ha reproducido el fallo
+histórico de carrera en un binario anterior desde este entorno.
+
+Identidad: se fija propietario SID explícito del objeto pipe y se verifica
+por handle en el cliente antes del intercambio. Es una comprobación
+independiente del PID y no sustituye la DACL del servidor. La consulta PID /
+OpenProcess sigue siendo una defensa adicional, no una prueba exacta de
+identidad ante reutilización; el análisis de esa ventana y el rechazo
+entre cuentas reales permanecen abiertos. No se atribuye PASS a la auditoría.
+
+Nuevo fixture manual `tests/windows/w1b-cross-user.ps1`: propietario y
+segunda cuenta ordinaria autorizada, controles positivos antes/después y
+negación explícita de conexión, enumeración, lectura y borrado de un
+endpoint desechable. No crea cuentas ni imprime secretos. **BLOCKED** hasta
+ejecutar ambos modos en Windows y obtener evidencia. El rechazo de reparse
+points del último componente y el guard de runtime existente se conservan;
+la seguridad de antecesores/reparse points de ruta completa sigue pendiente
+de solución y pruebas. GitHub Actions sigue BLOCKED por facturación.
+**W1-B ABIERTA; no merge ni W1-C.**

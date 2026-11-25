@@ -63,6 +63,7 @@ fn invalid(message: &'static str) -> io::Error {
 fn overlapped_op(
     handle: HANDLE,
     timeout: Option<std::time::Duration>,
+    stream: Option<(&Shared, bool)>,
     start: impl FnOnce(*mut OVERLAPPED, *mut u32) -> i32,
 ) -> io::Result<u32> {
     // Each operation owns its event and OVERLAPPED until completion, including
@@ -75,6 +76,20 @@ fn overlapped_op(
     let mut operation: OVERLAPPED = unsafe { std::mem::zeroed() };
     operation.hEvent = event.as_raw_handle();
     let mut transferred = 0u32;
+    // Serialize only submission, never the blocking wait. Shutdown takes
+    // this same gate, so it cannot miss an operation registered after cancel.
+    let mut gate =
+        stream.map(|(shared, _)| shared.submission.lock().expect("pipe submission poisoned"));
+    if let Some((shared, reading)) = stream {
+        if shared.stopped.load(Ordering::Acquire)
+            || (reading && shared.read_eof.load(Ordering::Acquire))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Fleet pipe disconnected",
+            ));
+        }
+    }
     if start(&mut operation, &mut transferred) != 0 {
         return Ok(transferred);
     }
@@ -82,11 +97,17 @@ fn overlapped_op(
     if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
         return Err(error);
     }
+    if let Some((_, true)) = stream {
+        if let Some(gate) = gate.as_mut() {
+            **gate = Some((&mut operation as *mut OVERLAPPED) as usize);
+        }
+    }
+    drop(gate);
     let milliseconds = timeout.map_or(INFINITE, |duration| {
         duration.as_millis().max(1).min((INFINITE - 1) as u128) as u32
     });
     let wait = unsafe { WaitForSingleObject(event.as_raw_handle(), milliseconds) };
-    if wait != WAIT_OBJECT_0 {
+    let result = if wait != WAIT_OBJECT_0 {
         let wait_error = if wait == WAIT_TIMEOUT {
             io::Error::new(io::ErrorKind::TimedOut, "Fleet pipe I/O timed out")
         } else {
@@ -98,24 +119,34 @@ fn overlapped_op(
             CancelIoEx(handle, &operation);
             GetOverlappedResult(handle, &operation, &mut transferred, 1);
         }
-        return Err(wait_error);
+        Err(wait_error)
+    } else if unsafe { GetOverlappedResult(handle, &operation, &mut transferred, 1) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(transferred)
+    };
+    if let Some((shared, true)) = stream {
+        // read_lock guarantees that only this reader can own the slot.
+        // Clear it under the gate before the stack OVERLAPPED goes away.
+        *shared.submission.lock().expect("pipe submission poisoned") = None;
     }
-    if unsafe { GetOverlappedResult(handle, &operation, &mut transferred, 1) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(transferred)
+    result
 }
 
 fn pipe_read(
     file: &File,
     buffer: &mut [u8],
     timeout: Option<std::time::Duration>,
+    shared: &Shared,
 ) -> io::Result<usize> {
     let handle = file.as_raw_handle();
     let len = buffer.len().min(u32::MAX as usize) as u32;
-    overlapped_op(handle, timeout, |operation, count| unsafe {
-        ReadFile(handle, buffer.as_mut_ptr(), len, count, operation)
-    })
+    overlapped_op(
+        handle,
+        timeout,
+        Some((shared, true)),
+        |operation, count| unsafe { ReadFile(handle, buffer.as_mut_ptr(), len, count, operation) },
+    )
     .map(|n| n as usize)
 }
 
@@ -123,12 +154,16 @@ fn pipe_write(
     file: &File,
     buffer: &[u8],
     timeout: Option<std::time::Duration>,
+    shared: &Shared,
 ) -> io::Result<usize> {
     let handle = file.as_raw_handle();
     let len = buffer.len().min(u32::MAX as usize) as u32;
-    overlapped_op(handle, timeout, |operation, count| unsafe {
-        WriteFile(handle, buffer.as_ptr(), len, count, operation)
-    })
+    overlapped_op(
+        handle,
+        timeout,
+        Some((shared, false)),
+        |operation, count| unsafe { WriteFile(handle, buffer.as_ptr(), len, count, operation) },
+    )
     .map(|n| n as usize)
 }
 
@@ -235,11 +270,43 @@ fn check_peer(handle: HANDLE, sid: &[u8], client: bool) -> io::Result<()> {
     Ok(())
 }
 
+fn check_pipe_owner(handle: HANDLE, sid: &[u8]) -> io::Result<()> {
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+
+    let mut owner = ptr::null_mut();
+    let mut descriptor = ptr::null_mut();
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let matches = !owner.is_null()
+        && unsafe { EqualSid(owner, sid.as_ptr().cast_mut().cast::<c_void>()) } != 0;
+    unsafe {
+        LocalFree(descriptor);
+    }
+    if !matches {
+        return Err(invalid("named-pipe object has a different owner SID"));
+    }
+    Ok(())
+}
+
 fn create_instance(name: &[u16], sid: &[u8], first: bool) -> io::Result<OwnedHandle> {
     let owner = sid_string(sid)?;
     // Protected DACL: ONLY this user may access the pipe. No Everyone,
     // Anonymous or broad Authenticated Users ACE is inherited.
-    let sddl = wide(&format!("D:P(A;;GA;;;{owner})"));
+    let sddl = wide(&format!("O:{owner}D:P(A;;GA;;;{owner})"));
     let mut descriptor = ptr::null_mut();
     if unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -535,7 +602,7 @@ impl Listener {
             .take()
             .ok_or_else(|| io::Error::other("listener closed"))?;
         let handle = instance.as_raw_handle();
-        let result = overlapped_op(handle, None, |operation, _| unsafe {
+        let result = overlapped_op(handle, None, None, |operation, _| unsafe {
             ConnectNamedPipe(handle, operation)
         });
         if let Err(error) = result {
@@ -561,6 +628,9 @@ struct Shared {
     file: Mutex<Option<Arc<File>>>,
     read_lock: Mutex<()>,
     write_lock: Mutex<()>,
+    // Address of the pending read OVERLAPPED, valid only while the read
+    // holds its direction lock. All access is serialized with submission.
+    submission: Mutex<Option<usize>>,
     read_eof: AtomicBool,
     write_eof: AtomicBool,
     stopped: AtomicBool,
@@ -576,6 +646,7 @@ impl Stream {
             file: Mutex::new(Some(Arc::new(file))),
             read_lock: Mutex::new(()),
             write_lock: Mutex::new(()),
+            submission: Mutex::new(None),
             read_eof: AtomicBool::new(false),
             write_eof: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
@@ -627,7 +698,7 @@ impl Stream {
                     // consumed only inside this transport implementation.
                     let file = self.file()?;
                     let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
-                    if pipe_write(&file, &[0], timeout)? != 1 {
+                    if pipe_write(&file, &[0], timeout, &self.0)? != 1 {
                         return Err(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "pipe EOF not sent",
@@ -636,10 +707,11 @@ impl Stream {
                 }
             }
             std::net::Shutdown::Read => {
+                let gate = self.0.submission.lock().expect("pipe submission poisoned");
                 self.0.read_eof.store(true, Ordering::Release);
-                if let Ok(file) = self.file() {
+                if let (Some(operation), Ok(file)) = (*gate, self.file()) {
                     unsafe {
-                        CancelIoEx(file.as_raw_handle(), ptr::null());
+                        CancelIoEx(file.as_raw_handle(), operation as *const OVERLAPPED);
                     }
                 }
             }
@@ -647,6 +719,7 @@ impl Stream {
                 // Abortive cancellation must never wait for peer input or
                 // write-buffer capacity. Graceful shutdown(Write) above is
                 // the only path that sends the in-band EOF marker.
+                let _gate = self.0.submission.lock().expect("pipe submission poisoned");
                 self.0.stopped.store(true, Ordering::Release);
                 self.0.read_eof.store(true, Ordering::Release);
                 self.0.write_eof.store(true, Ordering::Release);
@@ -682,7 +755,7 @@ impl Read for Stream {
         }
         let file = self.file()?;
         let timeout = *self.0.read_timeout.lock().expect("pipe timeout poisoned");
-        match pipe_read(&file, out, timeout) {
+        match pipe_read(&file, out, timeout, &self.0) {
             Ok(n) => {
                 if let Some(pos) = out[..n].iter().position(|b| *b == 0) {
                     self.0.read_eof.store(true, Ordering::Release);
@@ -728,7 +801,7 @@ impl Write for Stream {
         }
         let file = self.file()?;
         let timeout = *self.0.write_timeout.lock().expect("pipe timeout poisoned");
-        pipe_write(&file, bytes, timeout)
+        pipe_write(&file, bytes, timeout, &self.0)
     }
     fn flush(&mut self) -> io::Result<()> {
         // WriteFile completion has already handed bytes to the pipe. Calling
@@ -761,6 +834,9 @@ pub fn connect(address: &str) -> io::Result<Stream> {
         };
         if handle != INVALID_HANDLE_VALUE {
             let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+            // Object ownership is independent of the PID lookup and remains
+            // an additional fail-closed check even if a PID has been reused.
+            check_pipe_owner(handle.as_raw_handle(), &sid)?;
             check_peer(handle.as_raw_handle(), &sid, false)?;
             return Ok(Stream::new(File::from(handle)));
         }
@@ -803,10 +879,11 @@ mod tests {
         let file = client.file().unwrap();
         let (pending_tx, pending_rx) = mpsc::channel();
         let (done_tx, done_rx) = mpsc::channel();
+        let shared = Arc::clone(&client.0);
         let writer = std::thread::spawn(move || {
             let bytes = vec![b'x'; 8 * 1024 * 1024];
             let handle = file.as_raw_handle();
-            let result = overlapped_op(handle, None, |operation, count| {
+            let result = overlapped_op(handle, None, Some((&shared, false)), |operation, count| {
                 let result = unsafe {
                     WriteFile(handle, bytes.as_ptr(), bytes.len() as u32, count, operation)
                 };
@@ -826,9 +903,50 @@ mod tests {
         server.join().unwrap();
         assert!(pending, "fixture must establish a pending overlapped write");
         assert!(
-            result.is_ok(),
-            "shutdown failed to release the pending write"
+            result
+                .expect("shutdown failed to release the pending write")
+                .is_err(),
+            "cancelled write must not report success"
         );
+    }
+
+    #[test]
+    fn stale_handle_cannot_submit_io_after_shutdown() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let runtime = std::env::temp_dir().join(format!(
+            "gentle-fleet-submit-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let listener = Listener::bind(&runtime, "submission").unwrap();
+        let address = listener.address().to_owned();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let _stream = listener.accept().unwrap();
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        });
+        let client = connect(&address).unwrap();
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Exactly the problematic ordering: a clone obtains the handle,
+        // cancellation happens, and only then does the operation submit.
+        let file = client.file().unwrap();
+        client.shutdown(Shutdown::Both).unwrap();
+        let mut byte = [0u8; 1];
+        let read = pipe_read(
+            &file,
+            &mut byte,
+            Some(Duration::from_millis(200)),
+            &client.0,
+        );
+        let write = pipe_write(&file, b"x", Some(Duration::from_millis(200)), &client.0);
+        drop(file);
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(read.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(write.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]

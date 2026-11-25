@@ -680,9 +680,8 @@ pub fn local_app_data() -> io::Result<PathBuf> {
     use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
 
     let mut raw: *mut u16 = ptr::null_mut();
-    let result = unsafe {
-        SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, ptr::null_mut(), &mut raw)
-    };
+    let result =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, ptr::null_mut(), &mut raw) };
     // The documented allocator must be used even on failure.
     struct KnownFolder(*mut u16);
     impl Drop for KnownFolder {
@@ -707,7 +706,9 @@ pub fn local_app_data() -> io::Result<PathBuf> {
     }));
     validate_data_path(&path)?;
     if !path.is_dir() {
-        return Err(invalid("LocalAppData Known Folder is not an existing directory"));
+        return Err(invalid(
+            "LocalAppData Known Folder is not an existing directory",
+        ));
     }
     Ok(path)
 }

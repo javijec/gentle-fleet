@@ -222,9 +222,28 @@ try {
         -RedirectStandardError (Join-Path $root 'restart.err')
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     $restarted = $false
+    $lastProbe = 'no authenticated probe attempted'
+    $restartOut = Join-Path $root 'restart.out'
+    $restartErr = Join-Path $root 'restart.err'
+    # Do not connect using the old address while the new daemon holds a
+    # reserved pipe but has not completed startup. Require both publication
+    # and rotation of the token, then prove authentication by actual IPC.
     while ($deadline.Elapsed.TotalSeconds -lt 30 -and -not $daemon.HasExited) {
-        # A successful authenticated bridge proves the new daemon published
-        # matching address and token, rather than merely leaving stale files.
+        $ready = $false
+        try {
+            $ready = (Test-Path -LiteralPath $addressFile) -and
+                (Test-Path -LiteralPath $tokenFile) -and
+                ([IO.File]::ReadAllText($tokenFile) -ne $originalToken) -and
+                ((Get-Content -LiteralPath $restartOut -Raw) -match 'fleetd listening on')
+        } catch {
+            # A file may be transiently unavailable during publication.
+            $ready = $false
+        }
+        if (-not $ready) {
+            Start-Sleep -Milliseconds 100
+            continue
+        }
+        # A successful authenticated bridge must identify the new process.
         $probe = [Diagnostics.ProcessStartInfo]::new()
         $probe.FileName = Join-Path $bin 'fleet-ssh-bridge.exe'
         $probe.UseShellExecute = $false
@@ -240,12 +259,21 @@ try {
             if (-not $process.WaitForExit(3000)) {
                 $process.Kill()
                 [void]$process.WaitForExit(5000)
+                $lastProbe = 'bridge timed out after publication'
             } elseif ($process.ExitCode -eq 0) {
                 $frames = @($outputTask.GetAwaiter().GetResult() -split "\r?\n" |
                     Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object { $_ | ConvertFrom-Json })
-                if (@($frames | Where-Object { $_.request_id -eq 'restart' -and $_.result.Ok.type -eq 'hello' }).Count -eq 1) {
+                $hello = @($frames | Where-Object {
+                    $_.request_id -eq 'restart' -and $_.result.PSObject.Properties.Name -contains 'Ok' -and
+                    $_.result.Ok.type -eq 'hello' -and $_.result.Ok.server_id -eq "fleetd-$($daemon.Id)"
+                })
+                if ($hello.Count -eq 1) {
                     $restarted = $true
+                } else {
+                    $lastProbe = 'bridge did not return Hello for the restarted daemon PID'
                 }
+            } else {
+                $lastProbe = "bridge exit $($process.ExitCode): $($errorTask.GetAwaiter().GetResult())"
             }
         } finally {
             if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) }
@@ -253,7 +281,15 @@ try {
         }
         if (-not $restarted) { Start-Sleep -Milliseconds 100 } else { break }
     }
-    if (-not $restarted) { throw 'daemon did not authenticate after restart with stale endpoints' }
+    if (-not $restarted) {
+        $state = if ($daemon.HasExited) { "exit=$($daemon.ExitCode)" } else { 'still running' }
+        $diagnostics = if (Test-Path -LiteralPath $restartErr) {
+            Get-Content -LiteralPath $restartErr -Raw
+        } else { '<no stderr>' }
+        # Never print token or raw Hello frames. The fixture root is cleaned
+        # in finally, so preserve startup diagnostics in the CI step log.
+        throw "daemon did not authenticate after restart with stale endpoints ($state); last probe: $lastProbe; daemon stderr: $diagnostics"
+    }
     Write-Output 'PASS: stale endpoint files replaced after unclean daemon restart'
     Write-Output 'PASS: named pipe endpoint rejects invalid token and active endpoint collision'
 } finally {

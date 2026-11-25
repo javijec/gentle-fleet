@@ -28,11 +28,13 @@ fn main() -> std::io::Result<()> {
     // Reserve the durable root before opening SQLite or performing recovery.
     // The OS releases this lease when the daemon is terminated.
     #[cfg(windows)]
-    let _data_lease = fleet_protocol::transport::daemon_data_lease(&database)?;
+    let _data_lease = fleet_protocol::transport::daemon_data_lease(&database)
+        .map_err(|error| std::io::Error::new(error.kind(), format!("reserve durable data: {error}")))?;
     // Reserve both authorities before opening SQLite. Publishing credentials
     // remains deferred until initialization and recovery are complete.
     #[cfg(windows)]
-    let reserved_listener = LocalListener::reserve_daemon()?;
+    let reserved_listener = LocalListener::reserve_daemon()
+        .map_err(|error| std::io::Error::new(error.kind(), format!("reserve daemon endpoint: {error}")))?;
     let registry = builtin_registry_from_env();
     let store = Arc::new(
         SqliteStore::open(database)
@@ -61,7 +63,8 @@ fn main() -> std::io::Result<()> {
         Err(error) => eprintln!("runner recovery incomplete: {error}"),
     }
     #[cfg(windows)]
-    let listener = reserved_listener.publish()?;
+    let listener = reserved_listener.publish()
+        .map_err(|error| std::io::Error::new(error.kind(), format!("publish daemon endpoint: {error}")))?;
     #[cfg(unix)]
     let listener = LocalListener::bind()?;
     let expected = expected_token()?;

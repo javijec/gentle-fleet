@@ -211,7 +211,16 @@ impl LocalListener {
 
     /// Reserve the daemon endpoint without publishing readiness credentials.
     pub fn reserve_daemon() -> io::Result<ReservedDaemonListener> {
-        Ok(ReservedDaemonListener(Self::reserve_named("fleetd")?))
+        let listener = Self::reserve_named("fleetd")?;
+        // The physical pipe name is stable across daemon boots. Once we own
+        // the exclusive endpoint, withdraw stale readiness before recovery.
+        // A competing daemon cannot reach this step or remove live files.
+        match std::fs::remove_file(address_file_named("fleetd")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        Ok(ReservedDaemonListener(listener))
     }
 
     pub fn bind_named(name: &str) -> io::Result<Self> {

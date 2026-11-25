@@ -405,3 +405,7 @@ El operador compartió SUMMARY: Windows 24 PASS, Linux 77 PASS, cero FAIL/BLOCKE
 ### W1-C.4 — gate automatizado reportado PASS
 
 El operador confirmó que pasó todo tras W1-C.4. HEAD remoto comprobado b32c1ec85cc0d5859088bd94362e40d575af9fa5; no se adjuntaron resumen, SHA ejecutado ni logs. PASS reportado, no certificación independiente ni release. W1-C.5 comienza con la lectura única del journal desde SDK y CLI, y una regresión de terminación de proceso SQLite. No se modifica main.
+
+### W1-C.5 — gate automatizado reportado PASS
+
+El operador confirmó que pasó todo tras resolver checkout dirty y ejecutar el candidato W1-C.5. HEAD remoto observado 2b4e80f8dc19e22f2cf23c65cc7c8783798bbf9f; no se adjuntó resumen, SHA ejecutado ni logs, por lo que no se atribuye conteo exacto ni revisión independiente. Los cinco subcortes tienen resultados automatizados reportados favorables. Se mantiene W1-C abierta por pendientes de aceptación y se añade candidato de exclusividad de raíz y spool Windows. Main sin cambios.

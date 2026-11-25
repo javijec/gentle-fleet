@@ -706,6 +706,62 @@ fn validate_data_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Exclusive, nonblocking process reservation in a private data directory.
+/// Keep the lock file after release; deleting it would split the lock identity.
+pub struct DataLease {
+    _file: std::fs::File,
+    _directory: DataDirectory,
+}
+
+impl DataLease {
+    pub fn acquire(directory: &Path, name: &str) -> io::Result<Self> {
+        // The callers supply canonical, reserved filenames, not paths.
+        if name.is_empty()
+            || !name.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || b"-_.".contains(&byte)
+            })
+            || !name.ends_with(".lease")
+        {
+            return Err(invalid("invalid durable lease name"));
+        }
+        let guard = DataDirectory::open(directory)?;
+        let path = directory.join(name);
+        guard.validate_private_file(&path)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        guard.validate_private_file(&path)?;
+        file.try_lock().map_err(|error| {
+            io::Error::other(format!("durable storage lease unavailable: {error}"))
+        })?;
+        Ok(Self {
+            _file: file,
+            _directory: guard,
+        })
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn durable_lease_rejects_alias_and_reopens_after_release() {
+    let root = std::env::temp_dir().join(format!("gf-data-lease-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let data = root.join("data");
+    let first = DataLease::acquire(&data, "fleetd.lease").unwrap();
+    assert!(DataLease::acquire(&root.join("DATA"), "fleetd.lease").is_err());
+    let other = DataLease::acquire(&data, "fleet-runner-one.spool.lease").unwrap();
+    assert!(DataLease::acquire(&data, "fleet-runner-one.spool.lease").is_err());
+    drop(other);
+    drop(first);
+    drop(DataLease::acquire(&data, "fleetd.lease").unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 impl DataDirectory {
     pub fn open(path: &Path) -> io::Result<Self> {
         validate_data_path(path)?;

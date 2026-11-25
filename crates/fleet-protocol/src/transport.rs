@@ -16,7 +16,25 @@ use std::path::PathBuf;
 mod windows_pipe;
 
 #[cfg(windows)]
-pub use windows_pipe::DataDirectory;
+pub use windows_pipe::{DataDirectory, DataLease};
+
+/// Windows uses one daemon per private durable root (runner spool filenames
+/// are also scoped to that root). Reserve the lease namespace from SQLite.
+#[cfg(windows)]
+pub fn daemon_data_lease(database: &std::path::Path) -> io::Result<DataLease> {
+    let filename = database
+        .file_name()
+        .ok_or_else(|| io::Error::other("durable database needs a filename"))?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    if filename.starts_with("fleet-runner-") || filename == "fleetd.lease" {
+        return Err(io::Error::other("database conflicts with reserved durable storage namespace"));
+    }
+    let parent = database
+        .parent()
+        .ok_or_else(|| io::Error::other("durable database needs a parent"))?;
+    DataLease::acquire(parent, "fleetd.lease")
+}
 
 /// Resolve the daemon database path and the root for durable runner state.
 pub fn database_path() -> io::Result<PathBuf> {

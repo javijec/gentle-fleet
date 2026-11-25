@@ -138,9 +138,8 @@ fn durable_spool_path(
         .ok_or_else(|| io::Error::other("durable database requires a parent directory"))?;
     // Reserve the entire spool filename namespace, including SQLite sidecars.
     if database.file_name().is_some_and(|file| {
-        file.to_string_lossy()
-            .to_ascii_lowercase()
-            .starts_with("fleet-runner-")
+        let file = file.to_string_lossy().to_ascii_lowercase();
+        file.starts_with("fleet-runner-") || file == "fleetd.lease"
     }) {
         return Err(io::Error::other(
             "daemon database conflicts with reserved runner spool namespace",
@@ -180,6 +179,14 @@ fn main() -> io::Result<()> {
         &args.runner_id,
         &runtime_dir(),
         &fleet_protocol::transport::database_path()?,
+    )?;
+    // Reserve the spool before publishing a pipe/token or opening SQLite.
+    #[cfg(windows)]
+    let _spool_lease = fleet_protocol::transport::DataLease::acquire(
+        spool_path
+            .parent()
+            .ok_or_else(|| io::Error::other("spool requires a parent directory"))?,
+        &format!("fleet-runner-{}.spool.lease", args.runner_id),
     )?;
     let listener = LocalListener::bind_named(&format!("fleet-runner-{}", args.runner_id))?;
     let token = prepare_token(&args.runner_id)?;

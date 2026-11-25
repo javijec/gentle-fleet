@@ -11,6 +11,7 @@ $data = Join-Path $root 'private data'
 $db = Join-Path $data 'fleet.sqlite'
 $workspace = Join-Path $root 'workspace with spaces'
 $daemon = $null
+$competitor = $null
 $previousRuntime = [Environment]::GetEnvironmentVariable('FLEET_RUNTIME_DIR', 'Process')
 $previousDb = [Environment]::GetEnvironmentVariable('FLEET_DB_PATH', 'Process')
 
@@ -99,6 +100,36 @@ try {
     $before = @( (Invoke-FixtureCli @('workspace', 'list')) -split "`r?`n" |
         Where-Object { ($_ -split "`t")[0] -eq $id } )
     if ($before.Count -ne 1) { throw 'registered workspace missing or duplicated' }
+
+    # Distinct runtime and a case alias of the same durable root must not
+    # let a second daemon reach SQLite or recovery.
+    $env:FLEET_RUNTIME_DIR = Join-Path $root 'competitor-runtime'
+    $env:FLEET_DB_PATH = Join-Path $root 'PRIVATE DATA/other.sqlite'
+    $competitor = Start-FixtureDaemon 'competitor'
+    try {
+        if (-not $competitor.WaitForExit(10000)) {
+            throw 'second daemon did not reject the occupied durable root'
+        }
+        if ($competitor.ExitCode -eq 0 -or
+            (Test-Path -LiteralPath $env:FLEET_DB_PATH) -or
+            (Test-Path -LiteralPath (Join-Path $env:FLEET_RUNTIME_DIR 'fleetd.addr'))) {
+            throw 'second daemon opened another database or published an endpoint in the same root'
+        }
+        if ((Get-Content -LiteralPath (Join-Path $root 'competitor.err') -Raw) -notmatch 'durable storage lease unavailable') {
+            throw 'second daemon did not fail at the expected durable lease'
+        }
+    } finally {
+        if (-not $competitor.HasExited) { $competitor.Kill(); [void]$competitor.WaitForExit(5000) }
+        $competitor.Dispose()
+        $competitor = $null
+        $env:FLEET_RUNTIME_DIR = $runtime
+        $env:FLEET_DB_PATH = $db
+    }
+    if ($daemon.HasExited) { throw 'original daemon stopped during lease contention' }
+    $stillThere = Invoke-FixtureCli @('workspace', 'list')
+    if ($stillThere -notmatch [regex]::Escape($id)) { throw 'original workspace lost during lease contention' }
+    Assert-PrivateData (Join-Path $data 'fleetd.lease') $false
+    Write-Output 'PASS: distinct runtimes cannot share an occupied durable data root'
 
     $daemon.Kill()
     if (-not $daemon.WaitForExit(10000)) { throw 'fixture daemon did not terminate' }

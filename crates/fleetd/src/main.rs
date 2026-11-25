@@ -24,9 +24,14 @@ fn to_api_error(error: fleet_agent::AgentError) -> fleet_protocol::ApiError {
 }
 
 fn main() -> std::io::Result<()> {
+    let database = database_path()?;
+    // Reserve the durable root before opening SQLite or performing recovery.
+    // The OS releases this lease when the daemon is terminated.
+    #[cfg(windows)]
+    let _data_lease = fleet_protocol::transport::daemon_data_lease(&database)?;
     let registry = builtin_registry_from_env();
     let store = Arc::new(
-        SqliteStore::open(database_path()?)
+        SqliteStore::open(database)
             .map_err(|e| std::io::Error::other(format!("{}: {}", e.code, e.message)))?,
     );
     let host_id = std::env::var("FLEET_HOST_ID").unwrap_or_else(|_| "local-host".into());

@@ -174,3 +174,5 @@ Subcortes C.1 SQLite, C.2 spool, C.3 journals y C.4 catálogo SSH: gates automat
 W1-C.5: PASS automatizado reportado tras 2b4e80f. Nuevo candidato de exclusividad durable Windows pendiente de validación. Los cinco subcortes tienen PASS reportado, pero los pendientes de aceptación enumerados en P7_W1_C_PLAN.md mantienen W1-C abierta.
 
 W1-C: gate completo PASS reportado tras 3d2bb26; candidato adicional de identidad física de DB Windows pendiente de validación. No se modifica main ni se inicia W1-D.
+
+W1-C: W1-B 10/10 y full conjunto PASS reportados tras 2d38d1a. Guía de migración conservadora y regresiones adicionales de adopción explícita en candidato; revisar logs del gate y alcance de aceptación antes de cierre. No se inicia W1-D.

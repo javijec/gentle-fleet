@@ -796,6 +796,11 @@ impl DataLease {
     /// must not silently become the authority for existing runner spools.
     /// Retain the returned handle until daemon exit to prevent replacement.
     pub fn bind_database(&mut self, database: &Path) -> io::Result<File> {
+        let adopt = std::env::var_os("FLEET_ADOPT_LEGACY_DB").as_deref() == Some(OsStr::new("1"));
+        self.bind_database_with_adoption(database, adopt)
+    }
+
+    fn bind_database_with_adoption(&mut self, database: &Path, adopt: bool) -> io::Result<File> {
         use std::io::{Seek, SeekFrom};
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
@@ -826,9 +831,7 @@ impl DataLease {
                     ));
                 }
             }
-            if exists
-                && std::env::var_os("FLEET_ADOPT_LEGACY_DB").as_deref() != Some(OsStr::new("1"))
-            {
+            if exists && !adopt {
                 return Err(invalid(
                     "unbound legacy database; explicit adoption after backup required",
                 ));
@@ -908,6 +911,75 @@ fn durable_lease_rejects_alias_and_reopens_after_release() {
     drop(other);
     drop(first);
     drop(DataLease::acquire(&data, "fleetd.lease").unwrap());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn legacy_database_adoption_is_explicit_and_cannot_override_identity() {
+    let root = std::env::temp_dir().join(format!("gf-legacy-db-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let data = root.join("data");
+    let db = data.join("fleet.sqlite");
+    let mut lease = DataLease::acquire(&data, "fleetd.lease").unwrap();
+    // This fixture checks the filesystem policy, not the SQLite file format.
+    let original = b"legacy database evidence";
+    std::fs::write(&db, original).unwrap();
+    let denial = lease.bind_database_with_adoption(&db, false).unwrap_err();
+    assert!(denial.to_string().contains("explicit adoption"));
+    assert_eq!(std::fs::read(&db).unwrap(), original);
+
+    let spool = data.join("fleet-runner-legacy.spool.sqlite");
+    std::fs::write(&spool, b"unreconciled spool").unwrap();
+    let denial = lease.bind_database_with_adoption(&db, true).unwrap_err();
+    assert!(denial.to_string().contains("unbound legacy runner state"));
+    assert_eq!(std::fs::read(&spool).unwrap(), b"unreconciled spool");
+    // Delete only our synthetic evidence to exercise the permitted case.
+    std::fs::remove_file(spool).unwrap();
+
+    drop(lease.bind_database_with_adoption(&db, true).unwrap());
+    drop(lease);
+    assert!(!std::fs::read(data.join("fleetd.lease")).unwrap().is_empty());
+    let mut lease = DataLease::acquire(&data, "fleetd.lease").unwrap();
+    drop(lease.bind_database_with_adoption(&db, false).unwrap());
+
+    let backup = data.join("fixture-original.sqlite");
+    std::fs::rename(&db, &backup).unwrap();
+    std::fs::write(&db, b"replacement database evidence").unwrap();
+    let denial = lease.bind_database_with_adoption(&db, true).unwrap_err();
+    assert!(denial.to_string().contains("identity mismatch"));
+    assert_eq!(std::fs::read(&backup).unwrap(), original);
+    assert_eq!(std::fs::read(&db).unwrap(), b"replacement database evidence");
+    drop(lease);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn orphan_sidecar_and_torn_identity_remain_intact_even_with_adoption() {
+    let root = std::env::temp_dir().join(format!("gf-torn-db-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let data = root.join("data");
+    let db = data.join("fleet.sqlite");
+    let mut lease = DataLease::acquire(&data, "fleetd.lease").unwrap();
+    let wal = data.join("fleet.sqlite-wal");
+    std::fs::write(&wal, b"unreconciled WAL").unwrap();
+    let denial = lease.bind_database_with_adoption(&db, true).unwrap_err();
+    assert!(denial.to_string().contains("orphan SQLite sidecar"));
+    assert!(!db.exists());
+    assert_eq!(std::fs::read(&wal).unwrap(), b"unreconciled WAL");
+    drop(lease);
+
+    let marker = data.join("fleetd.lease");
+    std::fs::write(&marker, b"fleet-db-v1:incomplete").unwrap();
+    std::fs::write(&db, b"original database").unwrap();
+    let mut lease = DataLease::acquire(&data, "fleetd.lease").unwrap();
+    let denial = lease.bind_database_with_adoption(&db, true).unwrap_err();
+    assert!(denial.to_string().contains("identity mismatch"));
+    drop(lease);
+    assert_eq!(std::fs::read(&marker).unwrap(), b"fleet-db-v1:incomplete");
+    assert_eq!(std::fs::read(&wal).unwrap(), b"unreconciled WAL");
+    assert_eq!(std::fs::read(&db).unwrap(), b"original database");
     std::fs::remove_dir_all(root).unwrap();
 }
 

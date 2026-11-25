@@ -85,7 +85,7 @@ def plan(os_name, profile):
         for script in sorted((ROOT / "tests").glob("*.sh")):
             items.append(step("syntax-" + script.stem, ["bash", "-n", str(script)]))
         for name in E2E:
-            req = ("sshd",) if name in {"e2e_p51_ssh", "e2e_p52_two_hosts", "e2e_p62b_desktop_gpui"} else ()
+            req = ("sshd",) if name in {"e2e_p51_ssh", "e2e_p52_two_hosts"} else ()
             env = {"GF_E2E_FAKE_ONLY": "1"} if name in FAKE_ONLY else {}
             items.append(step(name, ["bash", "tests/" + name + ".sh"], ("build",), req, env))
     return items

@@ -173,3 +173,42 @@ la corrección elimina esa posibilidad de colisión.
 y full local en ambos hosts sobre el nuevo SHA. Si vuelve a ocurrir el bloqueo,
 investigar apertura/configuración de SQLite en bases realmente independientes.
 GitHub Actions sigue BLOCKED; no se declara W1-B cerrada ni se inicia W1-C.
+
+## W1-B — auditoría y regresiones adicionales (24/11/2026)
+
+Base `175fad22ed1478d0f8d8d7822361a3c2b45d114b`: el usuario
+reporta full Windows y Linux PASS y 10/10 ejecuciones de fleet-core Windows
+PASS. Estos resultados corresponden a esa base, no al commit que añade las
+regresiones siguientes. Actions sigue **BLOCKED** por facturación.
+
+- **PASS**, Windows nativo, `cargo test -p fleet-protocol --locked`: 14 tests,
+  incluido `full_shutdown_cancels_pending_write_under_backpressure`. Este
+  confirma `ERROR_IO_PENDING` para una escritura overlapped de 8 MiB hacia
+  un peer que no lee, solicita `Shutdown::Both` y exige que termine en 3 s.
+  No cubre todas las carreras de cancelación.
+- **PASS**, Windows nativo, `pwsh -NoProfile -File
+  tests/windows/w1b-named-pipe.ps1`: además de los controles existentes,
+  mata el daemon, conserva `.addr` y `.token`, reinicia y comprueba un Hello
+  autenticado mediante el bridge real. No es una prueba de reattach de runner.
+- **UNTESTED / riesgo:** `read` y `write` pueden obtener una referencia al
+  handle antes de `Shutdown::Both`; `CancelIoEx` puede ejecutarse antes de
+  registrar su operación overlapped. Esa secuencia no queda cubierta por la
+  prueba de escritura ya pendiente y requiere regresión sincronizada y arreglo
+  si se reproduce. `Shutdown::Read` cancela todas las operaciones del handle,
+  no solamente lecturas; su interacción con escritura también requiere prueba.
+- **UNTESTED / riesgo:** `GetNamedPipe*ProcessId` seguido de `OpenProcess`
+  no demuestra que el PID no haya sido reutilizado entre ambas llamadas.
+  La DACL del pipe y el token aportan defensas separadas, pero no sustituyen
+  una prueba o solución de identidad vinculada al peer.
+- **UNTESTED / riesgo:** el runtime comprueba propietario y DACL protegida
+  exacta y rechaza reparse points en el último componente, manteniendo un
+  handle sin compartir DELETE. Esto no acredita por inspección el tratamiento
+  de reparse points en componentes antecesores ni permisos efectivos
+  `DELETE_CHILD` mediante otra identidad.
+- **BLOCKED:** prueba efectiva entre dos SID. El usuario confirma cuentas
+  autorizadas y ofrece ejecutar el componente en la segunda sesión, pero
+  todavía no hay fixture ni evidencia de rechazo ejecutada entre sesiones.
+  No se han creado cuentas ni registrado credenciales.
+- **UNTESTED:** validación full Windows y Linux del nuevo SHA limpio y
+  consolidación. W1-B permanece **ABIERTA**; no comenzar W1-C ni interpretar
+  este documento como certificación de seguridad.

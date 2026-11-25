@@ -148,6 +148,54 @@ try {
     if (([IO.File]::ReadAllText($addressFile)).Trim() -ne $address) {
         throw 'second daemon replaced the active endpoint'
     }
+    # An unclean shutdown leaves both files behind. The next daemon must
+    # replace them only after reserving the endpoint, and remain usable.
+    $daemon.Kill()
+    if (-not $daemon.WaitForExit(10000)) { throw 'daemon did not exit after kill' }
+    $daemon.Dispose()
+    $daemon = $null
+    if (-not (Test-Path $addressFile) -or -not (Test-Path (Join-Path $runtime 'fleetd.token'))) {
+        throw 'fixture did not retain stale endpoint files'
+    }
+    $env:FLEET_DB_PATH = $originalDb
+    $daemon = Start-Process (Join-Path $bin 'fleetd.exe') -PassThru `
+        -RedirectStandardOutput (Join-Path $root 'restart.out') `
+        -RedirectStandardError (Join-Path $root 'restart.err')
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    $restarted = $false
+    while ($deadline.Elapsed.TotalSeconds -lt 30 -and -not $daemon.HasExited) {
+        # A successful authenticated bridge proves the new daemon published
+        # matching address and token, rather than merely leaving stale files.
+        $probe = [Diagnostics.ProcessStartInfo]::new()
+        $probe.FileName = Join-Path $bin 'fleet-ssh-bridge.exe'
+        $probe.UseShellExecute = $false
+        $probe.RedirectStandardInput = $true
+        $probe.RedirectStandardOutput = $true
+        $probe.RedirectStandardError = $true
+        $process = [Diagnostics.Process]::Start($probe)
+        try {
+            $process.StandardInput.WriteLine('{"kind":"request","request_id":"restart","request":{"type":"hello","client_id":"w1b-restart","token":null}}')
+            $process.StandardInput.Close()
+            $outputTask = $process.StandardOutput.ReadToEndAsync()
+            $errorTask = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(3000)) {
+                $process.Kill()
+                [void]$process.WaitForExit(5000)
+            } elseif ($process.ExitCode -eq 0) {
+                $frames = @($outputTask.GetAwaiter().GetResult() -split "\r?\n" |
+                    Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object { $_ | ConvertFrom-Json })
+                if (@($frames | Where-Object { $_.request_id -eq 'restart' -and $_.result.Ok.type -eq 'hello' }).Count -eq 1) {
+                    $restarted = $true
+                }
+            }
+        } finally {
+            if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) }
+            $process.Dispose()
+        }
+        if (-not $restarted) { Start-Sleep -Milliseconds 100 } else { break }
+    }
+    if (-not $restarted) { throw 'daemon did not authenticate after restart with stale endpoints' }
+    Write-Output 'PASS: stale endpoint files replaced after unclean daemon restart'
     Write-Output 'PASS: named pipe endpoint rejects invalid token and active endpoint collision'
 } finally {
     if ($null -ne $competitor) {

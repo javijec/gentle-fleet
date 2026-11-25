@@ -783,6 +783,55 @@ mod tests {
     use std::net::Shutdown;
 
     #[test]
+    fn full_shutdown_cancels_pending_write_under_backpressure() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-pressure-{}", uuid::Uuid::new_v4()));
+        let listener = Listener::bind(&runtime, "pressure").unwrap();
+        let address = listener.address().to_owned();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let _stream = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(15));
+        });
+        let client = connect(&address).unwrap();
+        accepted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let file = client.file().unwrap();
+        let (pending_tx, pending_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let bytes = vec![b'x'; 8 * 1024 * 1024];
+            let handle = file.as_raw_handle();
+            let result = overlapped_op(handle, None, |operation, count| {
+                let result = unsafe {
+                    WriteFile(handle, bytes.as_ptr(), bytes.len() as u32, count, operation)
+                };
+                let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                let pending = result == 0 && error == ERROR_IO_PENDING;
+                let _ = pending_tx.send(pending);
+                unsafe { windows_sys::Win32::Foundation::SetLastError(error) };
+                result
+            });
+            let _ = done_tx.send(result);
+        });
+        let pending = pending_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        client.shutdown(Shutdown::Both).unwrap();
+        let result = done_rx.recv_timeout(Duration::from_secs(3));
+        let _ = release_tx.send(());
+        writer.join().unwrap();
+        server.join().unwrap();
+        assert!(pending, "fixture must establish a pending overlapped write");
+        assert!(
+            result.is_ok(),
+            "shutdown failed to release the pending write"
+        );
+    }
+
+    #[test]
     fn half_close_drains_pending_reply_without_truncation() {
         let runtime =
             std::env::temp_dir().join(format!("gentle-fleet-pipe-test-{}", uuid::Uuid::new_v4()));

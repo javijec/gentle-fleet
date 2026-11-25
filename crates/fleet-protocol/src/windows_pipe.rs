@@ -477,11 +477,11 @@ fn open_runtime_directory(
 // Reject pre-existing directories with unexpected ACLs rather than taking
 // ownership or changing permissions on arbitrary paths.
 pub fn private_runtime(path: &Path, create: bool) -> io::Result<RuntimeGuard> {
+    use std::path::Component;
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
-    use std::path::Component;
     use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, FILE_READ_ATTRIBUTES};
     if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
         return Err(invalid(
@@ -962,10 +962,8 @@ mod tests {
         use std::sync::mpsc;
         use std::time::Duration;
 
-        let runtime = std::env::temp_dir().join(format!(
-            "gentle-fleet-submit-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let runtime =
+            std::env::temp_dir().join(format!("gentle-fleet-submit-test-{}", uuid::Uuid::new_v4()));
         let listener = Listener::bind(&runtime, "submission").unwrap();
         let address = listener.address().to_owned();
         let (ready_tx, ready_rx) = mpsc::channel();

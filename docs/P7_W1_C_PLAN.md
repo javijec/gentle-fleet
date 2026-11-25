@@ -1,6 +1,6 @@
 # P7-W1-C — persistencia segura del motor
 
-**Estado (25/11/2026): PREPARACIÓN, IMPLEMENTACIÓN BLOQUEADA por el gate W1-B/P7-H.** Base auditada `10d2912`. La decisión de diferir dos SID al release permanece; no equivale a PASS. No modificar los contratos IPC de W1-B ni iniciar W1-D/E/F en este corte.
+**Estado (25/11/2026): gate automatizado W1-B/P7-H PASS reportado; preparación de primera regresión W1-C y revisión de logs pendiente.** Base auditada `10d2912`. La decisión de diferir dos SID al release permanece; no equivale a PASS. No modificar los contratos IPC de W1-B ni iniciar W1-D/E/F en este corte.
 
 ## Entrada reproducible
 
@@ -52,3 +52,11 @@ Primera historia vertical: daemon + almacenamiento SQLite con ruta durable y fix
 ## Gate de salida
 
 Full nativo Windows/Linux del mismo SHA limpio, consolidación PASS, regresiones W1-A/B, protocolo Windows 10/10 y las nuevas pruebas W1-C de rutas, ACL, WAL, concurrencia y crash, con logs revisados. Cero defectos P0/P1 confirmados pendientes; registrar límites y evidencia real/fixture por separado. No iniciar W1-D–F ni W2 ni merge a main. No reintroducir GUI.
+
+## Primera regresión de proceso (preparación, UNTESTED)
+
+`tests/windows/w1c-persistence.ps1` crea un checkout de datos desechables con espacios, arranca un daemon nativo aislado, registra un workspace por CLI, comprueba persistencia del mismo ID después de TerminateProcess y verifica propietario, ACL privada y ausencia de reparse points en el directorio de datos y DB. Conserva evidencia separada de cada comprobación, no toca almacenes reales ni ejecuta proveedores. El fixture debe fallar contra la implementación Windows previa por la ACL de datos no protegida. No se ha ejecutado todavía y no acredita WAL/SHM vivos, transacciones concurrentes o aislamiento entre SID. Ejecutar explícitamente tras build; no se incorpora al full hasta implementar el primer corte (no ocultar un fallo de un gate existente).
+
+    pwsh -NoProfile -File tests/windows/w1c-persistence.ps1
+
+La historia siguiente debe resolver creación privada con herencia para sidecars antes de SQLite, validación de archivos preexistentes y resolución de rutas durables. No usar el helper de credenciales que borra archivos. No iniciar W1-D/E/F.

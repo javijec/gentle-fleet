@@ -95,3 +95,7 @@ el modelo de amenaza ni el gate de release. Ver P7_W1_RESULTS.md.
 ## P7-H (25/11/2026)
 
 Workspace headless integrado con P6. La nueva validación full Windows/Linux y las regresiones W1-A/B permanecen UNTESTED; no se trasladan PASS históricos al candidato. Aislamiento entre SID sigue diferido al release, no PASS.
+
+### Revalidación posterior
+
+El operador confirmó PASS del gate automatizado Windows/Linux y protocolo 10/10 tras la corrección del coordinador en `c1b3d77`. Ver `P7_W1_RESULTS.md`. Esta evidencia sustituye el estado UNTESTED automatizado del candidato anterior; revisión independiente de logs no realizada. Dos SID siguen UNTESTED hasta release. No es aceptación de Windows como plataforma de producción.

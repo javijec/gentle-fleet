@@ -162,3 +162,7 @@ P6-H fue integrada en main mediante PR #2 (`7700b6a`), con gate Linux y smoke Op
 ### Preparación W1-C
 
 Auditoría de persistencia y plan de implementación en [P7_W1_C_PLAN.md](P7_W1_C_PLAN.md). Gate de entrada automatizado mediante `scripts/ci/w1c_entry.py`, que ejecuta full conjunto y protocolo Windows 10/10 sin sustituir revisión de logs ni los criterios W1-B. Estado: preparación; no se autoriza implementar hasta aceptar el gate vigente.
+
+### Revalidación automatizada de entrada W1-C (25/11/2026)
+
+PASS reportado del gate full conjunto y protocolo Windows 10/10 en `c1b3d77`, tras la corrección del resumen. El detalle anterior de 100/100 está registrado en resultados W1. P7-H y W1-B tienen evidencia automatizada favorable; la revisión de logs para la aceptación técnica limitada permanece pendiente de evidencia. Se prepara la primera regresión negra W1-C de persistencia y ACL; no se ha implementado ni aceptado la protección de datos. No se rebajan los criterios ni se crean cuentas adicionales.

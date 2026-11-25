@@ -42,9 +42,13 @@ impl Journal {
             .ok_or_else(|| invalid("journal needs a parent directory"))?;
         if !path.is_absolute()
             || path.file_name().is_none()
-            || path.components().any(|part| part == std::path::Component::ParentDir)
+            || path
+                .components()
+                .any(|part| part == std::path::Component::ParentDir)
         {
-            return Err(invalid("journal requires an absolute path without parent traversal"));
+            return Err(invalid(
+                "journal requires an absolute path without parent traversal",
+            ));
         }
         #[cfg(windows)]
         let directory = {
@@ -56,7 +60,10 @@ impl Journal {
         {
             use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
             if writing {
-                std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)?;
             }
             let metadata = std::fs::symlink_metadata(parent)?;
             if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
@@ -121,7 +128,9 @@ impl Journal {
             if last[0] != b'\n' {
                 // Never concatenate a new record to a torn record or erase
                 // an uncertain operation. Operator recovery is explicit.
-                return Err(invalid("incomplete final journal record; recovery required"));
+                return Err(invalid(
+                    "incomplete final journal record; recovery required",
+                ));
             }
         }
         Ok(())
@@ -159,7 +168,8 @@ mod tests {
     struct Fixture(PathBuf);
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("gf-sdk-journal-{}", uuid::Uuid::new_v4()));
+            let root =
+                std::env::temp_dir().join(format!("gf-sdk-journal-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&root).unwrap();
             Self(root)
         }
@@ -197,7 +207,10 @@ mod tests {
             .lines()
             .map(|line| {
                 let record: serde_json::Value = serde_json::from_str(line).unwrap();
-                (record["writer"].as_u64().unwrap(), record["index"].as_u64().unwrap())
+                (
+                    record["writer"].as_u64().unwrap(),
+                    record["index"].as_u64().unwrap(),
+                )
             })
             .collect();
         assert_eq!(content.lines().count(), 128);
@@ -214,7 +227,10 @@ mod tests {
         file.sync_data().unwrap();
         drop(file);
         let before = std::fs::read(&path).unwrap();
-        assert!(read(&path).unwrap_err().to_string().contains("incomplete final"));
+        assert!(read(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("incomplete final"));
         assert!(append(&path, b"{\"next\":2}\n").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
@@ -230,13 +246,20 @@ mod tests {
         ] {
             append(&path, record).unwrap();
         }
-        assert_eq!(crate::load_cursor_at(&path, &crate::Host::Local, "s").unwrap(), 7);
+        assert_eq!(
+            crate::load_cursor_at(&path, &crate::Host::Local, "s").unwrap(),
+            7
+        );
         assert_eq!(
             crate::load_cursor_at(&path, &crate::Host::Ssh("other".into()), "s").unwrap(),
             99
         );
         append(&path, b"{\"seq\":\"invalid\"}\n").unwrap();
-        append(&path, b"{\"host\":\"local\",\"session_id\":\"s\",\"seq\":8}\n").unwrap();
+        append(
+            &path,
+            b"{\"host\":\"local\",\"session_id\":\"s\",\"seq\":8}\n",
+        )
+        .unwrap();
         assert!(matches!(
             crate::load_cursor_at(&path, &crate::Host::Local, "s"),
             Err(crate::ClientError::Protocol(_))

@@ -873,7 +873,9 @@ fn load_cursor_at(path: &std::path::Path, host: &Host, session_id: &str) -> Resu
             record["session_id"].as_str(),
             record["seq"].as_u64(),
         ) else {
-            return Err(ClientError::Protocol("invalid cursor journal record".into()));
+            return Err(ClientError::Protocol(
+                "invalid cursor journal record".into(),
+            ));
         };
         if record_host == host_key && record_session == session_id {
             cursor = seq.max(cursor);

@@ -401,3 +401,7 @@ El operador confirmó que pasó todo tras activar --auto-format. HEAD remoto com
 ### W1-C.3 — gate automatizado reportado PASS
 
 El operador compartió SUMMARY: Windows 24 PASS, Linux 77 PASS, cero FAIL/BLOCKED/SKIP, TOTAL AUTOMATED_PASS. HEAD remoto comprobado 63534b91c336e957e7965ff81ea5fbcd663b786d; resumen no incluye SHA ni logs. Se registra PASS automatizado reportado, no certificación independiente ni de release. Se avanza al candidato W1-C.4. Pendientes y límites de W1-C.3 conservados en el plan.
+
+### W1-C.4 — gate automatizado reportado PASS
+
+El operador confirmó que pasó todo tras W1-C.4. HEAD remoto comprobado b32c1ec85cc0d5859088bd94362e40d575af9fa5; no se adjuntaron resumen, SHA ejecutado ni logs. PASS reportado, no certificación independiente ni release. W1-C.5 comienza con la lectura única del journal desde SDK y CLI, y una regresión de terminación de proceso SQLite. No se modifica main.

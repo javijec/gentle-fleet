@@ -45,6 +45,8 @@ jobs:
         run: pwsh -NoProfile -File tests/windows/w1c-persistence.ps1
       - name: W1-C SSH catalog process regression
         run: pwsh -NoProfile -File tests/windows/w1c-ssh-config.ps1
+      - name: W1-C operation journal recovery regression
+        run: pwsh -NoProfile -File tests/windows/w1c-journal-recovery.ps1
 
   windows-ipc:
     runs-on: windows-latest

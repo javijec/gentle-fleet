@@ -166,3 +166,7 @@ Auditoría de persistencia y plan de implementación en [P7_W1_C_PLAN.md](P7_W1_
 ### Revalidación automatizada de entrada W1-C (25/11/2026)
 
 PASS reportado del gate full conjunto y protocolo Windows 10/10 en `c1b3d77`, tras la corrección del resumen. El detalle anterior de 100/100 está registrado en resultados W1. P7-H y W1-B tienen evidencia automatizada favorable; la revisión de logs para la aceptación técnica limitada permanece pendiente de evidencia. Se prepara la primera regresión negra W1-C de persistencia y ACL; no se ha implementado ni aceptado la protección de datos. No se rebajan los criterios ni se crean cuentas adicionales.
+
+### Estado W1-C (25/11/2026)
+
+Subcortes C.1 SQLite, C.2 spool, C.3 journals y C.4 catálogo SSH: gates automatizados PASS reportados por el operador. C.5 candidato de recuperación integral: unificación CLI/SDK y regresión de terminación SQLite, pendiente de validación. Ver P7_W1_C_PLAN.md para pendientes y límites; no se acepta W1-C completa ni se inicia W1-D.

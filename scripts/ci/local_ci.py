@@ -85,6 +85,7 @@ def plan(os_name, profile):
             step("w1b-named-pipe", ["pwsh", "-NoProfile", "-File", "tests/windows/w1b-named-pipe.ps1"], ("build", "ipc-build")),
             step("w1c-persistence", ["pwsh", "-NoProfile", "-File", "tests/windows/w1c-persistence.ps1"], ("build", "ipc-build")),
             step("w1c-ssh-config", ["pwsh", "-NoProfile", "-File", "tests/windows/w1c-ssh-config.ps1"], ("build", "ipc-build")),
+            step("w1c-journal-recovery", ["pwsh", "-NoProfile", "-File", "tests/windows/w1c-journal-recovery.ps1"], ("build", "ipc-build")),
         ]
     else:
         for script in sorted((ROOT / "tests").glob("*.sh")):

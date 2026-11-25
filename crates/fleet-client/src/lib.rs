@@ -838,9 +838,53 @@ fn subscription_connection(
     result
 }
 
-fn operation_journal_path() -> Result<PathBuf> {
+/// Path used by all Fleet clients for durable remote operation attempts.
+pub fn operation_journal_path() -> Result<PathBuf> {
     journal::path("FLEET_OPERATION_JOURNAL", "operations.jsonl")
         .map_err(|error| ClientError::Transport(format!("operation journal: {error}")))
+}
+
+/// One recorded remote operation attempt, not proof of daemon acceptance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationAttempt {
+    pub host: String,
+    pub kind: String,
+    pub target: String,
+    pub operation_key: String,
+    pub created_at_unix_ms: u64,
+}
+
+/// Read the private operation journal. Retain repeated and uncertain attempts;
+/// reconcile using get_operation, never by automatic resend.
+pub fn recorded_operation_attempts() -> Result<Vec<OperationAttempt>> {
+    let path = operation_journal_path()?;
+    let content = journal::read(&path)
+        .map_err(|error| ClientError::State(format!("operation journal: {error}")))?;
+    parse_operation_attempts(&content)
+}
+
+fn parse_operation_attempts(content: &str) -> Result<Vec<OperationAttempt>> {
+    content.lines().map(|line| {
+        let value: serde_json::Value = serde_json::from_str(line)
+            .map_err(|_| ClientError::Protocol("corrupt operation journal record".into()))?;
+        let invalid = || ClientError::Protocol("invalid operation journal record".into());
+        let field = |name: &str| value[name].as_str().map(str::to_owned).ok_or_else(invalid);
+        let record = OperationAttempt {
+            host: field("host")?,
+            kind: field("kind")?,
+            target: field("target")?,
+            operation_key: field("operation_key")?,
+            created_at_unix_ms: value["created_at_unix_ms"].as_u64().ok_or_else(invalid)?,
+        };
+        if record.host.is_empty()
+            || record.target.is_empty()
+            || record.operation_key.is_empty()
+            || !matches!(record.kind.as_str(), "prompt" | "answer" | "import-history")
+        {
+            return Err(invalid());
+        }
+        Ok(record)
+    }).collect()
 }
 
 fn cursor_journal_path() -> Result<PathBuf> {
@@ -1078,6 +1122,16 @@ mod tests {
             session_id: "ses_1".into(),
         };
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn operation_attempts_retain_uncertain_keys_and_reject_corrupt_records() {
+        let line = r#"{"host":"lab","kind":"prompt","target":"ses_1","operation_key":"key","created_at_unix_ms":1}"#;
+        let records = parse_operation_attempts(&format!("{line}\n{line}\n")).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].operation_key, "key");
+        assert_eq!(records[0], records[1]);
+        assert!(parse_operation_attempts(&format!("{line}\n{{}}\n")).is_err());
     }
 
     #[test]

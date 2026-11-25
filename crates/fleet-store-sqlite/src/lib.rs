@@ -1603,6 +1603,69 @@ mod tests {
         std::fs::remove_file(&target).unwrap();
     }
 
+    // The child is this exact test binary, not a real daemon or provider.
+    // The environment is scoped to the child and the ready file proves that
+    // both the committed and uncommitted writes happened before termination.
+    #[test]
+    fn native_process_crash_preserves_only_committed_transactions() {
+        const CHILD_DB: &str = "GF_TEST_SQLITE_CRASH_CHILD_DB";
+        if let Some(path) = std::env::var_os(CHILD_DB) {
+            let path = PathBuf::from(path);
+            let store = SqliteStore::open(&path).unwrap();
+            let connection = store.connection().unwrap();
+            connection.execute_batch(
+                "CREATE TABLE crash_probe (id INTEGER PRIMARY KEY);
+                 BEGIN IMMEDIATE; INSERT INTO crash_probe VALUES (1); COMMIT;
+                 BEGIN IMMEDIATE; INSERT INTO crash_probe VALUES (2);",
+            ).unwrap();
+            std::fs::write(path.with_file_name("ready"), b"ready").unwrap();
+            // Keep the connection and its transaction live until killed.
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            panic!("fixture process was not terminated");
+        }
+        let (store, path) = temp_store();
+        drop(store);
+        let ready = path.with_file_name("ready");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::native_process_crash_preserves_only_committed_transactions", "--nocapture"])
+            .env(CHILD_DB, &path)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let reached = loop {
+            if child.try_wait().unwrap().is_some() {
+                break false;
+            }
+            if ready.exists() {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        // Always reap the specific fixture child, including on timeout.
+        let killed = child.kill();
+        let status = child.wait().unwrap();
+        assert!(reached, "child did not reach the active transaction");
+        killed.unwrap();
+        assert!(!status.success());
+        let store = SqliteStore::open(&path).unwrap();
+        let connection = store.connection().unwrap();
+        let ids = connection.prepare("SELECT id FROM crash_probe ORDER BY id")
+            .unwrap().query_map([], |row| row.get::<_, i64>(0))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ids, vec![1]);
+        assert!(SqliteStore::integrity(&connection).unwrap());
+        let violations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(violations, 0);
+        drop(connection);
+        drop(store);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     fn demo_event(seq: u64) -> Event {
         Event {
             event_id: format!("e{seq}"),

@@ -1,46 +1,19 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
-use std::fs;
-use std::path::PathBuf;
-
-use fleet_client::{FleetClient, Host};
+use fleet_client::{operation_journal_path, recorded_operation_attempts, FleetClient, Host};
 use fleet_domain::EventKind;
 use fleet_protocol::{Request, Response};
 use fleet_ssh::{add_host, find_host, load_hosts, remove_host, HostConfig};
 
-/// Keep an operation key durably on the CLIENT before sending any remote
-/// effect. SSH can fail after the daemon accepts a request but before its ACK.
-fn operation_journal_path() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("FLEET_OPERATION_JOURNAL") {
-        return Ok(PathBuf::from(path));
-    }
-    let root = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .ok_or("HOME or XDG_STATE_HOME required for durable remote operations")?;
-    Ok(root.join("gentle-fleet/operations.jsonl"))
-}
-
 fn show_pending(selected_host: Option<&str>) -> Result<(), String> {
-    let path = operation_journal_path()?;
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("cannot read operation journal: {e}")),
-    };
-    for line in content.lines() {
-        let record: serde_json::Value =
-            serde_json::from_str(line).map_err(|e| format!("invalid operation journal: {e}"))?;
-        let host = record["host"].as_str().unwrap_or("");
-        if selected_host.is_some_and(|selected| selected != host) {
+    let attempts = recorded_operation_attempts().map_err(|error| error.to_string())?;
+    for record in attempts {
+        if selected_host.is_some_and(|selected| selected != record.host) {
             continue;
         }
         println!(
             "{}\t{}\t{}\t{}",
-            host,
-            record["kind"].as_str().unwrap_or(""),
-            record["target"].as_str().unwrap_or(""),
-            record["operation_key"].as_str().unwrap_or("")
+            record.host, record.kind, record.target, record.operation_key
         );
     }
     Ok(())
@@ -65,7 +38,7 @@ impl Client {
                 _ => None,
             };
             if let Some(key) = entry {
-                let path = operation_journal_path()?;
+                let path = operation_journal_path().map_err(|error| error.to_string())?;
                 eprintln!(
                     "remote operation_key={key} host={alias} (journal={})",
                     path.display()

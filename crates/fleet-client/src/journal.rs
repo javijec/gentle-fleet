@@ -171,10 +171,14 @@ pub(super) fn read_complete_prefix(path: &Path) -> io::Result<(String, usize)> {
     };
     let mut bytes = Vec::new();
     journal.file.read_to_end(&mut bytes)?;
-    let end = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let end = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
     let trailing = bytes.len() - end;
     bytes.truncate(end);
-    let prefix = String::from_utf8(bytes).map_err(|_| invalid("invalid UTF-8 in complete journal records"))?;
+    let prefix = String::from_utf8(bytes)
+        .map_err(|_| invalid("invalid UTF-8 in complete journal records"))?;
     Ok((prefix, trailing))
 }
 
@@ -284,20 +288,36 @@ mod tests {
         append(&path, b"{\"confirmed\":1}\n").unwrap();
         let mut child = ChildGuard(
             std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "journal::tests::journal_lock_released_after_native_writer_termination"])
+                .args([
+                    "--exact",
+                    "journal::tests::journal_lock_released_after_native_writer_termination",
+                ])
                 .env(CHILD_PATH, &path)
                 .spawn()
                 .unwrap(),
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while !path.with_file_name("ready").exists() {
-            assert!(child.0.try_wait().unwrap().is_none(), "fixture child exited before ready");
-            assert!(std::time::Instant::now() < deadline, "fixture child timed out");
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "fixture child exited before ready"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture child timed out"
+            );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(child.0.try_wait().unwrap().is_none());
-        let probe = OpenOptions::new().read(true).write(true).open(&path).unwrap();
-        assert!(probe.try_lock().is_err(), "writer lock was not exclusive across processes");
+        let probe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(
+            probe.try_lock().is_err(),
+            "writer lock was not exclusive across processes"
+        );
         child.0.kill().unwrap();
         assert!(!child.0.wait().unwrap().success());
         probe.try_lock().unwrap();

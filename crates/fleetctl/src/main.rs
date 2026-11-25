@@ -1,6 +1,9 @@
 //! Fleet CLI P1: cliente delgado de la API compartida; no gestiona procesos.
 
-use fleet_client::{inspect_operation_journal, operation_journal_path, recorded_operation_attempts, FleetClient, Host};
+use fleet_client::{
+    inspect_operation_journal, operation_journal_path, recorded_operation_attempts, FleetClient,
+    Host,
+};
 use fleet_domain::EventKind;
 use fleet_protocol::{Request, Response};
 use fleet_ssh::{add_host, find_host, load_hosts, remove_host, HostConfig};
@@ -10,7 +13,10 @@ fn show_pending(selected_host: Option<&str>, inspect: bool) -> Result<(), String
         let result = inspect_operation_journal().map_err(|error| error.to_string())?;
         (result.attempts, result.incomplete_tail_bytes)
     } else {
-        (recorded_operation_attempts().map_err(|error| error.to_string())?, 0)
+        (
+            recorded_operation_attempts().map_err(|error| error.to_string())?,
+            0,
+        )
     };
     for record in attempts {
         if selected_host.is_some_and(|selected| selected != record.host) {

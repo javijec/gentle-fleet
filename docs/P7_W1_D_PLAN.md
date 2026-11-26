@@ -109,3 +109,31 @@ Gate `cef2689`: **FAIL** en W1-D lifecycle por `StopUnconfirmed`/timeout RPC tra
 ## Diagnóstico acotado del fallo intermitente
 
 Candidato de diagnóstico (sin modificar los plazos, locks ni la política de cierre): `runner_rpc_timeout` distingue espera del lock RPC, escritura de la solicitud y espera de respuesta. Las regresiones existentes verifican el diagnóstico de lock y peer silencioso en Unix y de respuesta en named pipe Windows. No se registra RED observado ni PASS: falta ejecutar nativamente. El objetivo inmediato es reproducir el fallo `w1d-lifecycle` con este diagnóstico y corregir únicamente su causa demostrada; después completar las regresiones negativas de W1-D y ejecutar un único gate full final sobre el SHA limpio. No iniciar W1-E hasta aceptar W1-D. No se reabre W1-C por este hallazgo.
+
+
+## Candidato de consolidación W1-D
+
+Se evita que nuevas llamadas RPC normales (incluidos Pending, Status, Submit y
+ACK) se adelanten a Shutdown: se anuncia la intención antes de esperar el mutex
+y se comprueba antes y después de adquirirlo. Una llamada en curso conserva
+su plazo existente; no se corta preventivamente una trama sana. Un ACK que
+se rechace durante el cierre no adelanta el cursor ni borra el spool: el evento
+se persiste antes de ACK. Si no se verifica el cierre, el estado sigue incierto;
+no se reabre automáticamente esa conexión para prompts. No se aumentan los
+plazos de producción. El runner informa StopUnconfirmed si no puede admitir
+el comando de cierre, en lugar de ignorar el resultado de try_send.
+
+La prueba de named pipe Windows sincroniza el mutex ocupado con Shutdown y
+comprueba que un nuevo Status no se encola ni se transmite. El fixture
+w1d-lifecycle.ps1 ejecuta por defecto siete escenarios aislados: ciclo positivo,
+ejecutable ausente, ejecutable incorrecto, interrupción correcta/incorrecta,
+stop con turno activo, fallo de close y close bloqueado. Para repetición dirigida
+se puede ejecutar -Scenario Lifecycle. No se cambia la composición del gate
+ni se cuentan escenarios como nuevos checks de CI. Los tests previos de identidad,
+timeout, respuesta tipada, Child y limpieza de procesos se conservan.
+
+Estado: candidato UNTESTED. La contención es una deficiencia estática mitigada,
+no causa comprobada del fallo de cef2689. Falta evidencia nativa, pruebas
+integradas de Hello inválido y silencio de startup, e inspección efectiva de
+herencia de handles/descendientes; no afirmar W1-D cerrada. No se modifica
+main, ni se inicia W1-E. FakeDriver no acredita proveedores reales.

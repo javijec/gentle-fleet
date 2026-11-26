@@ -690,7 +690,21 @@ fn serve_daemon(
                     .clone(),
             }),
             RunnerRequest::Shutdown => {
-                let _ = commands.try_send(DriverCommand::Stop);
+                if let Err(error) = commands.try_send(DriverCommand::Stop) {
+                    let message = match error {
+                        TrySendError::Full(_) => "driver command queue full",
+                        TrySendError::Disconnected(_) => "driver command channel disconnected",
+                    };
+                    write_runner_frame(
+                        &mut writer,
+                        &RunnerFrame::Notice {
+                            code: "StopUnconfirmed".into(),
+                            message: message.into(),
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                    continue;
+                }
                 let received = closed_rx
                     .lock()
                     .expect("closed channel poisoned")

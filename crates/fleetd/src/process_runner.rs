@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,7 @@ struct ProcessHandle {
     next_request: AtomicU64,
     child: Mutex<Option<std::process::Child>>,
     last_seq: AtomicU64,
+    shutdown_requested: AtomicBool,
 }
 
 fn io_error(error: std::io::Error) -> AgentError {
@@ -169,6 +170,7 @@ impl ProcessHandle {
             next_request: AtomicU64::new(1),
             child: Mutex::new(None),
             last_seq: AtomicU64::new(0),
+            shutdown_requested: AtomicBool::new(false),
         };
         let token = std::fs::read_to_string(runtime_dir().join(format!("{name}.token")))
             .map_err(io_error)?;
@@ -197,8 +199,22 @@ impl ProcessHandle {
         Ok(handle)
     }
 
+    fn ensure_rpc_open(&self) -> Result<(), AgentError> {
+        if self.shutdown_requested.load(Ordering::Acquire) {
+            return Err(AgentError {
+                code: "runner_stopping".into(),
+                message: "runner shutdown requested; new RPC refused".into(),
+            });
+        }
+        Ok(())
+    }
+
     fn rpc(&self, request: RunnerRequest) -> Result<RunnerResponse, AgentError> {
+        self.ensure_rpc_open()?;
         let mut io = self.io.lock().expect("runner stream poisoned");
+        // A caller that passed the first check before Shutdown must not
+        // overtake it after acquiring the mutex.
+        self.ensure_rpc_open()?;
         self.rpc_locked(
             &mut io,
             request,
@@ -215,6 +231,12 @@ impl ProcessHandle {
         request: RunnerRequest,
         timeout: Duration,
     ) -> Result<RunnerResponse, AgentError> {
+        if matches!(&request, RunnerRequest::Shutdown) {
+            // Stop admitting ordinary RPCs before waiting for the existing
+            // one. Do not cancel a healthy in-flight frame or reopen an
+            // uncertain connection on a failed Shutdown.
+            self.shutdown_requested.store(true, Ordering::Release);
+        }
         let deadline = Instant::now() + timeout;
         let timeout_error = |phase: &str| AgentError {
             code: "runner_rpc_timeout".into(),
@@ -387,6 +409,7 @@ impl RunnerHandle for ProcessHandle {
     }
 
     fn recv(&self, _timeout: Duration) -> Result<Option<RunnerEvent>, AgentError> {
+        self.ensure_rpc_open()?;
         if let Some(event) = self.buffered.lock().expect("buffered poisoned").pop_front() {
             return Ok(Some(event));
         }
@@ -726,6 +749,7 @@ mod tests {
                     next_request: AtomicU64::new(1),
                     child: Mutex::new(None),
                     last_seq: AtomicU64::new(0),
+                    shutdown_requested: AtomicBool::new(false),
                 },
                 peer,
             )
@@ -737,6 +761,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, "runner_rpc_timeout");
         assert!(error.message.contains("waiting for RPC lock"));
+        assert_eq!(
+            handle.rpc(RunnerRequest::Status).unwrap_err().code,
+            "runner_stopping"
+        );
         drop(held);
 
         let (handle, _peer) = pair();
@@ -822,12 +850,29 @@ mod tests {
             next_request: AtomicU64::new(1),
             child: Mutex::new(None),
             last_seq: AtomicU64::new(0),
+            shutdown_requested: AtomicBool::new(false),
         };
+        let handle = std::sync::Arc::new(handle);
+        let held = handle.io.lock().unwrap();
         let (done_tx, done_rx) = mpsc::channel();
+        let worker_handle = std::sync::Arc::clone(&handle);
         let worker = std::thread::spawn(move || {
-            let _ =
-                done_tx.send(handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_secs(1)));
+            let _ = done_tx.send(
+                worker_handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_secs(2)),
+            );
         });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !handle.shutdown_requested.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline, "Shutdown was not announced");
+            std::thread::yield_now();
+        }
+        // The old RPC still owns the mutex. A poll must reject immediately,
+        // not queue behind it or send another frame ahead of Shutdown.
+        assert_eq!(
+            handle.rpc(RunnerRequest::Status).unwrap_err().code,
+            "runner_stopping"
+        );
+        drop(held);
         seen_rx
             .recv_timeout(Duration::from_secs(3))
             .expect("peer did not receive Shutdown");

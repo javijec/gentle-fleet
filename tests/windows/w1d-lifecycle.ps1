@@ -1,6 +1,18 @@
-# First native lifecycle regression; no external provider or user data.
+# Native lifecycle regressions; no external provider or user data.
+param(
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
+    [string]$Scenario = 'All'
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Scenario -eq 'All') {
+    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
+        Write-Output "W1-D scenario: $case"
+        & $PSCommandPath -Scenario $case
+    }
+    return
+}
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $root = Join-Path ([IO.Path]::GetTempPath()) ("fleet w1d " + [guid]::NewGuid().ToString('N'))
@@ -40,6 +52,17 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
     if ($info.Environment.ContainsKey('FLEET_RUNNER_BIN')) {
         throw 'fixture must not pass a runner binary override'
     }
+    if ($Executable -eq (Join-Path $bin 'fleetd.exe')) {
+        if ($Scenario -in @('Interrupt', 'ActiveStop')) {
+            $info.Environment['FLEET_FAKE_DEFER_TERMINAL'] = '1'
+        }
+        if ($Scenario -eq 'CloseFailure') {
+            $info.Environment['FLEET_FAKE_FAIL_CLOSE'] = '1'
+        }
+        if ($Scenario -eq 'CloseBlocked') {
+            $info.Environment['FLEET_FAKE_BLOCK_CLOSE'] = '1'
+        }
+    }
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($info)
     $process | Add-Member -NotePropertyName FixtureStdout -NotePropertyValue ($process.StandardOutput.ReadToEndAsync())
@@ -59,7 +82,7 @@ function Stop-OwnedProcess($Process) {
     }
 }
 
-function Invoke-FixtureCli([string[]]$Arguments) {
+function Invoke-FixtureCli([string[]]$Arguments, [string]$ExpectedError = '') {
     $process = Start-OwnedProcess (Join-Path $bin 'fleetctl.exe') $Arguments
     try {
         if (-not $process.WaitForExit(20000)) { throw "CLI timed out: $($Arguments[0])" }
@@ -67,8 +90,10 @@ function Invoke-FixtureCli([string[]]$Arguments) {
             $err = if ($process.FixtureStderr.IsCompletedSuccessfully) {
                 $process.FixtureStderr.GetAwaiter().GetResult()
             } else { '<stderr unavailable>' }
+            if ($ExpectedError -and $err -match $ExpectedError) { return $err }
             throw "CLI $($Arguments[0]) exit $($process.ExitCode): $err"
         }
+        if ($ExpectedError) { throw "CLI unexpectedly succeeded: $($Arguments[0])" }
         if (-not $process.FixtureStdout.Wait(5000)) { throw 'CLI stdout did not close' }
         return $process.FixtureStdout.GetAwaiter().GetResult().Trim()
     } finally {
@@ -159,11 +184,48 @@ function Assert-Stopped($Fixture) {
     if ($timeline -notmatch '\tsession_state\tStopped') { throw 'durable Stopped event missing' }
 }
 
+function Start-DeferredTurn([string]$Session) {
+    $script:fixtureOperationKey = [guid]::NewGuid().ToString('N')
+    $receipt = (Invoke-FixtureCli @('prompt', $Session, 'W1-D deferred turn')) -split "\t"
+    if ($receipt.Count -ne 3 -or $receipt[1] -ne $Session -or -not $receipt[2]) {
+        throw 'deferred prompt receipt is invalid'
+    }
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $timeline = Invoke-FixtureCli @('timeline', $Session, '--since', '0', '--limit', '256')
+        if ($timeline -match '\tturn_completed\t') { throw 'deferred turn completed before interrupt or stop' }
+        if ($timeline -match '\tdelta\t') { return $receipt[2] }
+        Start-Sleep -Milliseconds 100
+    } while ($deadline.Elapsed.TotalSeconds -lt 20)
+    throw 'deferred turn did not produce a delta'
+}
+
+function Assert-UnconfirmedStop($Fixture) {
+    $null = Invoke-FixtureCli @('stop', $Fixture.Session) 'StopUnconfirmed'
+    if ($Fixture.Process.HasExited) { throw 'unconfirmed close unexpectedly killed the runner' }
+    $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+        Where-Object { ($_ -split "\t")[0] -eq $Fixture.Session })
+    if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'StopUnconfirmed') {
+        throw 'unconfirmed stop state missing'
+    }
+    $timeline = Invoke-FixtureCli @('timeline', $Fixture.Session, '--since', '0', '--limit', '256')
+    if ($timeline -notmatch '\tsession_state\tStopUnconfirmed' -or $timeline -match '\tsession_state\tStopped') {
+        throw 'unconfirmed stop produced an invalid durable state'
+    }
+}
+
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
     New-Item -ItemType Directory -Path $bin, $workspace | Out-Null
     foreach ($exe in @('fleetd.exe', 'fleet-runner.exe', 'fleetctl.exe')) {
+        if ($exe -eq 'fleet-runner.exe' -and $Scenario -in @('MissingRunner', 'InvalidRunner')) {
+            continue
+        }
         Copy-Item -LiteralPath (Join-Path $repo "target/debug/$exe") -Destination $bin
+    }
+    if ($Scenario -eq 'InvalidRunner') {
+        # An owned executable exits with CLI usage, without announcing runner identity.
+        Copy-Item -LiteralPath (Join-Path $bin 'fleetctl.exe') -Destination $runnerExe
     }
     # No FLEET_RUNNER_BIN: exercise default sibling executable resolution.
     $sentinel = Start-OwnedProcess (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 180')
@@ -187,7 +249,90 @@ try {
     $registered = @((Invoke-FixtureCli @('workspace', 'list')) -split "\r?\n" |
         Where-Object { ($_ -split "\t", 2)[0] -ceq $workspaceId })
     if ($registered.Count -ne 1) { throw 'registered workspace ID not found in catalog' }
+    if ($Scenario -in @('MissingRunner', 'InvalidRunner')) {
+        $expected = if ($Scenario -eq 'MissingRunner') { 'runner_io' } else { 'runner_identity_invalid' }
+        $null = Invoke-FixtureCli @('session', 'create', '--workspace', $workspaceId, '--provider', 'fake') $expected
+        Track-RunnerChildren
+        if ($runners.Count -ne 0 -or $daemon.HasExited -or $sentinel.HasExited) {
+            throw 'failed startup leaked an owned process or affected an unrelated process'
+        }
+        $rows = Invoke-FixtureCli @('session', 'list')
+        if ($rows -match '\tRunning(\t|$)') { throw 'failed startup reported a running session' }
+        Write-Output "PASS: $Scenario fails closed without reporting Running"
+        return
+    }
     $first = New-FixtureSession $workspaceId
+    if ($Scenario -in @('Interrupt', 'ActiveStop')) {
+        $turn = Start-DeferredTurn $first.Session
+        if ($Scenario -eq 'Interrupt') {
+            $null = Invoke-FixtureCli @('interrupt', $first.Session, 'not-the-active-turn') 'TurnMismatch'
+            $before = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+            if ($before -match '\tturn_completed\t') { throw 'wrong turn produced a terminal event' }
+            $reply = Invoke-FixtureCli @('interrupt', $first.Session, $turn)
+            if ($reply -ne (@('interrupted', $first.Session, $turn) -join [char]9)) {
+                throw 'interrupt receipt mismatch'
+            }
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $timeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+                $terminals = @($timeline -split "\r?\n" | Where-Object { $_ -match '\tturn_completed\t' })
+                if ($terminals.Count -gt 0) { break }
+                Start-Sleep -Milliseconds 100
+            } while ($deadline.Elapsed.TotalSeconds -lt 20)
+            if ($terminals.Count -ne 1 -or $terminals[0] -notmatch '\tturn_completed\tInterrupted
+    if ($first.Session -eq $second.Session -or $first.Process.Id -eq $second.Process.Id) {
+        throw 'runner/session identity was reused'
+    }
+    Assert-CompletedTurn $first.Session 'W1-D first fixture prompt'
+    Assert-CompletedTurn $second.Session 'W1-D second fixture prompt'
+    Write-Output 'PASS: native daemon launches sibling runners in paths with spaces; both stream and complete'
+    Assert-Stopped $first
+    if ($second.Process.HasExited -or $sentinel.HasExited -or $daemon.HasExited) {
+        throw 'stopping first runner affected another process'
+    }
+    Assert-CompletedTurn $second.Session 'W1-D second runner continues after stop'
+    Assert-Stopped $second
+    if ($sentinel.HasExited -or $daemon.HasExited) { throw 'session stop affected unrelated process' }
+    Write-Output 'PASS: confirmed stop observes owned runner exit and leaves independent runner, daemon and sentinel alive'
+} finally {
+    try {
+        Track-RunnerChildren
+    } finally {
+        # Stop only recorded handles, never use taskkill /IM or a persisted PID.
+        try {
+            foreach ($process in $runners.Values) { Stop-OwnedProcess $process }
+        } finally {
+            try { Stop-OwnedProcess $daemon } finally {
+                try { Stop-OwnedProcess $sentinel } finally {
+                    Remove-Item -LiteralPath $root -Recurse -Force
+                }
+            }
+        }
+    }
+}
+) {
+                throw 'expected exactly one Interrupted terminal event'
+            }
+        }
+        Assert-Stopped $first
+        if ($Scenario -eq 'ActiveStop') {
+            $timeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+            if ($timeline -notmatch "\tturn_uncertain\t$([regex]::Escape($turn))\t" -or
+                $timeline -match '\tturn_completed\t') {
+                throw 'stop during active turn fabricated a terminal result or lost uncertainty'
+            }
+        }
+        if ($daemon.HasExited -or $sentinel.HasExited) { throw 'stop affected an unrelated process' }
+        Write-Output "PASS: $Scenario produces the expected durable result"
+        return
+    }
+    if ($Scenario -in @('CloseFailure', 'CloseBlocked')) {
+        Assert-CompletedTurn $first.Session 'W1-D before failed close'
+        Assert-UnconfirmedStop $first
+        if ($daemon.HasExited -or $sentinel.HasExited) { throw 'failed close affected an unrelated process' }
+        Write-Output "PASS: $Scenario remains StopUnconfirmed; no forced kill reported as success"
+        return
+    }
     $second = New-FixtureSession $workspaceId
     if ($first.Session -eq $second.Session -or $first.Process.Id -eq $second.Process.Id) {
         throw 'runner/session identity was reused'

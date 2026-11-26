@@ -556,12 +556,9 @@ impl OpenCodeDriver {
                 self.descriptor.availability = ProviderAvailability::Unavailable;
                 // Installation evidence is not proof of a compatible service.
                 #[cfg(windows)]
-                if let Ok(stdout) = fleet_agent::process::provider_command(
-                    "opencode",
-                    "FLEET_OPENCODE_BIN",
-                    None,
-                )
-                .and_then(|command| fleet_agent::process::version_stdout(&command))
+                if let Ok(stdout) =
+                    fleet_agent::process::provider_command("opencode", "FLEET_OPENCODE_BIN", None)
+                        .and_then(|command| fleet_agent::process::version_stdout(&command))
                 {
                     let version = String::from_utf8_lossy(&stdout);
                     if let Some(part) = version

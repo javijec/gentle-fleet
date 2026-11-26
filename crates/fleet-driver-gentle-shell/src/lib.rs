@@ -855,14 +855,9 @@ impl DriverFactory for GentleShellFactory {
                 message: "Gentle Shell is outside the supported version range".into(),
             });
         }
-        let mut rpc = JsonlRpc::spawn_command(
-            &std::env::temp_dir(),
-            command,
-            &args,
-            &environment,
-            true,
-        )
-        .map_err(map_rpc)?;
+        let mut rpc =
+            JsonlRpc::spawn_command(&std::env::temp_dir(), command, &args, &environment, true)
+                .map_err(map_rpc)?;
         let mut desktop = DesktopClient::new();
         let result = (|| -> Result<Vec<NativeSessionInfo>, AgentError> {
             desktop.negotiate(&mut rpc).map_err(AgentError::from)?;

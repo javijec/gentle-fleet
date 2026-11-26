@@ -101,10 +101,11 @@ fn native_sessions_dir() -> Result<PathBuf, AgentError> {
     let path = std::env::var_os("PI_SESSION_DIR")
         .map(PathBuf::from)
         .or_else(|| fleet_agent::process::user_home().map(|home| home.join(".pi/agent/sessions")));
-    path.filter(|path| path.is_absolute()).ok_or_else(|| AgentError {
-        code: "session_dir_unavailable".into(),
-        message: "Pi session directory requires an absolute path or a user home".into(),
-    })
+    path.filter(|path| path.is_absolute())
+        .ok_or_else(|| AgentError {
+            code: "session_dir_unavailable".into(),
+            message: "Pi session directory requires an absolute path or a user home".into(),
+        })
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -689,7 +690,8 @@ impl DriverFactory for PiFactory {
 
     fn probe(&self) -> ProviderDescriptor {
         let mut descriptor = PiDriver::new().probe();
-        if descriptor.availability == ProviderAvailability::Available && descriptor.controls.is_empty()
+        if descriptor.availability == ProviderAvailability::Available
+            && descriptor.controls.is_empty()
         {
             descriptor.controls = discover_controls();
         }

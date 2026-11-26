@@ -41,7 +41,9 @@ pub fn resolve_native_exe(
         return if is_native(candidate) {
             Ok(candidate.as_os_str().to_owned())
         } else {
-            Err(unavailable("provider override must be an existing absolute .exe"))
+            Err(unavailable(
+                "provider override must be an existing absolute .exe",
+            ))
         };
     }
     if let Some(path) = path {
@@ -55,7 +57,9 @@ pub fn resolve_native_exe(
             }
         }
     }
-    Err(unavailable("native provider .exe not found in absolute PATH entries"))
+    Err(unavailable(
+        "native provider .exe not found in absolute PATH entries",
+    ))
 }
 
 /// Construct a command without interpolating any argument into a shell.
@@ -85,7 +89,9 @@ pub fn provider_command(
                             .any(|allowed| ext.eq_ignore_ascii_case(allowed))
                     })
             {
-                return Err(unavailable("provider JS must be an existing absolute .js/.mjs/.cjs"));
+                return Err(unavailable(
+                    "provider JS must be an existing absolute .js/.mjs/.cjs",
+                ));
             }
             let node = resolve_native_exe(
                 "node",
@@ -176,7 +182,9 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
             if output.is_none() {
                 match rx.try_recv() {
                     Ok(Ok(bytes)) if bytes.len() <= MAX_VERSION_BYTES => output = Some(bytes),
-                    Ok(_) => return Err(unavailable("provider version output invalid or too large")),
+                    Ok(_) => {
+                        return Err(unavailable("provider version output invalid or too large"))
+                    }
                     Err(mpsc::TryRecvError::Disconnected) => {
                         return Err(unavailable("provider version reader disconnected"));
                     }

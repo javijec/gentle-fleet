@@ -236,9 +236,9 @@ impl CodexDriver {
 
     /// Comprobación barata para `ListAgents`: detecta versión sin abrir sesión.
     pub fn probe(&mut self) -> ProviderDescriptor {
-        match codex_program().and_then(|program| {
-            detect_version(&program).map(|version| (program, version))
-        }) {
+        match codex_program()
+            .and_then(|program| detect_version(&program).map(|version| (program, version)))
+        {
             Ok((program, version)) => {
                 self.descriptor = metadata_with(
                     version.clone(),

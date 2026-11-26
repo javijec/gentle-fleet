@@ -5,7 +5,14 @@ use fleet_agent::process::provider_command;
 use std::ffi::OsString;
 use std::path::Path;
 
-const ARGS: &[&str] = &["espacio ñ", "a&b|c^d", "%PATH%!VAR!", "quote\"x", "tail\\", ""];
+const ARGS: &[&str] = &[
+    "espacio ñ",
+    "a&b|c^d",
+    "%PATH%!VAR!",
+    "quote\"x",
+    "tail\\",
+    "",
+];
 
 fn assert_child_args() {
     let mut args = std::env::args_os().skip(1);
@@ -32,7 +39,8 @@ fn run_fixture(dir: &Path) {
         provider_command("provider-fixture", "FLEET_TEST_PROVIDER_BIN", None).unwrap()
     };
     #[cfg(not(windows))]
-    let mut command = provider_command(exe.to_str().unwrap(), "FLEET_TEST_PROVIDER_BIN", None).unwrap();
+    let mut command =
+        provider_command(exe.to_str().unwrap(), "FLEET_TEST_PROVIDER_BIN", None).unwrap();
 
     assert!(command
         .args(ARGS)

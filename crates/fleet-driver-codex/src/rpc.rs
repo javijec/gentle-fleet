@@ -160,7 +160,13 @@ impl RpcClient {
     /// Arranca `codex app-server` heredando el entorno (incluidas las
     /// credenciales nativas). No copia ni escribe `auth.json` ni `CODEX_HOME`.
     pub fn spawn(workspace: &Path) -> Result<Self, RpcError> {
-        let mut child = Command::new("codex")
+        let program = super::codex_program()
+            .map_err(|error| RpcError::new(error.code, error.message))?;
+        Self::spawn_with_program(workspace, &program)
+    }
+
+    pub fn spawn_with_program(workspace: &Path, program: &std::ffi::OsStr) -> Result<Self, RpcError> {
+        let mut child = Command::new(program)
             .arg("app-server")
             .current_dir(workspace)
             .stdin(Stdio::piped())
@@ -438,13 +444,17 @@ impl RpcClient {
         // Cerrar stdin es la señal de apagado ordenado del App Server.
         drop(self.stdin.take());
         match self.child.wait_timeout(Duration::from_secs(2)) {
-            Ok(Some(_)) => Ok(()),
+            Ok(Some(status)) if status.success() => Ok(()),
+            Ok(Some(_)) => Err(RpcError::new(
+                "StopUnconfirmed",
+                "App Server exited unsuccessfully after close",
+            )),
             Ok(None) => {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
                 Err(RpcError::new(
                     "StopUnconfirmed",
-                    "App Server required SIGKILL after close",
+                    "App Server required forced termination after close",
                 ))
             }
             Err(error) => Err(RpcError::new("StopUnconfirmed", error.to_string())),

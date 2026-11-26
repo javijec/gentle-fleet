@@ -207,3 +207,8 @@ Se incorpora una prueba negra de proceso Windows para concurrencia de turnos, ai
 ### W1-F — implementación completa; gate PASS reportado (26/11/2026)
 
 Operador confirma PASS integral modo w1f tras corrección SHM; HEAD remoto observado `8662aea`. W1-A–F implementación completa, pendiente revisión de evidencia original para aceptación técnica limitada. No repetir gate sin motivo concreto. Siguiente corte W2 (proveedores Windows nativos), tras revisión. Ver P7_W1_RESULTS.md. No release ni merge a main.
+
+
+### Inicio W2 (26/11/2026)
+
+Por instrucción del propietario se inicia W2 sobre W1-F con PASS integral reportado, sin declarar aceptación formal de W1 antes de revisión de evidencia. Primer corte W2-A: resolución nativa de Codex y smoke real chat/streaming/replay/cierre opt-in. Ver [plan W2](P7_W2_PLAN.md). Los restantes checks reales y proveedores siguen pendientes. Sin cambios de rango de compatibilidad, main, W4 ni release.

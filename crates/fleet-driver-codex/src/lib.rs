@@ -7,6 +7,7 @@ mod events;
 mod rpc;
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -45,8 +46,56 @@ fn text(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn detect_version() -> Result<ProviderVersion, AgentError> {
-    let output = Command::new("codex")
+#[cfg(windows)]
+fn resolve_windows_codex(
+    override_path: Option<&OsStr>,
+    path: Option<&OsStr>,
+) -> Result<OsString, AgentError> {
+    fn is_native(path: &std::path::Path) -> bool {
+        path.is_absolute()
+            && path.extension().and_then(OsStr::to_str).is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+            && path.is_file()
+    }
+    if let Some(value) = override_path {
+        let candidate = std::path::Path::new(value);
+        if is_native(candidate) {
+            return Ok(candidate.as_os_str().to_owned());
+        }
+        return Err(AgentError {
+            code: "provider_unavailable".into(),
+            message: "FLEET_CODEX_BIN must be an existing absolute native .exe path".into(),
+        });
+    }
+    if let Some(path) = path {
+        for directory in std::env::split_paths(path) {
+            let candidate = directory.join("codex.exe");
+            if is_native(&candidate) {
+                return Ok(candidate.into_os_string());
+            }
+        }
+    }
+    Err(AgentError {
+        code: "provider_unavailable".into(),
+        message: "native codex.exe not found; set FLEET_CODEX_BIN to the installed executable (not a .cmd shim)".into(),
+    })
+}
+
+fn codex_program() -> Result<OsString, AgentError> {
+    #[cfg(windows)]
+    {
+        resolve_windows_codex(
+            std::env::var_os("FLEET_CODEX_BIN").as_deref(),
+            std::env::var_os("PATH").as_deref(),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(OsString::from("codex"))
+    }
+}
+
+fn detect_version(program: &OsStr) -> Result<ProviderVersion, AgentError> {
+    let output = Command::new(program)
         .arg("--version")
         .output()
         .map_err(|error| AgentError {
@@ -232,7 +281,7 @@ impl CodexDriver {
 
     /// Comprobación barata para `ListAgents`: detecta versión sin abrir sesión.
     pub fn probe(&mut self) -> ProviderDescriptor {
-        match detect_version() {
+        match codex_program().and_then(|program| detect_version(&program)) {
             Ok(version) => {
                 self.descriptor = metadata_with(
                     version.clone(),
@@ -247,7 +296,7 @@ impl CodexDriver {
                 self.descriptor.availability = ProviderAvailability::Unavailable;
             }
         }
-        if self.descriptor.controls.is_empty() {
+        if self.descriptor.availability == ProviderAvailability::Available && self.descriptor.controls.is_empty() {
             self.descriptor.controls = discover_controls();
         }
         self.descriptor.clone()
@@ -363,7 +412,8 @@ impl AgentDriver for CodexDriver {
                 message: "Codex workspace is not a directory".into(),
             });
         }
-        let version = detect_version()?;
+        let program = codex_program()?;
+        let version = detect_version(&program)?;
         if !COMPATIBILITY.compatible(&version) {
             return Err(AgentError {
                 code: "incompatible_version".into(),
@@ -375,7 +425,7 @@ impl AgentDriver for CodexDriver {
         }
         self.descriptor = metadata_with(version.clone(), ProviderAvailability::Available);
         self.workspace = Some(ctx.workspace.clone());
-        let mut rpc = RpcClient::spawn(&ctx.workspace).map_err(to_agent_error)?;
+        let mut rpc = RpcClient::spawn_with_program(&ctx.workspace, &program).map_err(to_agent_error)?;
         let initialize = rpc
             .call(
                 "initialize",
@@ -988,6 +1038,33 @@ pub fn register_codex(registry: &mut ProviderRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_codex_resolves_native_exe_without_shell_or_relative_lookup() {
+        let dir = std::env::temp_dir().join(format!(
+            "fleet codex resolver & {}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let executable = dir.join("codex.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        let shim = dir.join("codex.cmd");
+        std::fs::write(&shim, b"@exit /b 1").unwrap();
+        let paths = std::env::join_paths([&dir]).unwrap();
+        assert_eq!(
+            resolve_windows_codex(None, Some(&paths)).unwrap(),
+            executable.as_os_str()
+        );
+        assert_eq!(
+            resolve_windows_codex(Some(executable.as_os_str()), None).unwrap(),
+            executable.as_os_str()
+        );
+        assert!(resolve_windows_codex(Some(shim.as_os_str()), Some(&paths)).is_err());
+        assert!(resolve_windows_codex(Some(OsStr::new("codex.exe")), Some(&paths)).is_err());
+        assert!(resolve_windows_codex(None, Some(OsStr::new("."))).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn factory_declares_only_supported_capabilities() {

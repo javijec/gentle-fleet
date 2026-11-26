@@ -888,6 +888,162 @@ mod tests {
     }
 
     #[test]
+    fn hello_rejects_wrong_identity_on_native_transport() {
+        const CHILD: &str = "GF_TEST_WRONG_HELLO_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let runtime = std::env::temp_dir().join(format!("gfh-{}", uuid::Uuid::new_v4()));
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process_runner::tests::hello_rejects_wrong_identity_on_native_transport",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("FLEET_RUNTIME_DIR", &runtime)
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    let _ = std::fs::remove_dir_all(&runtime);
+                    assert!(status.success(), "native Hello fixture failed: {status}");
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    terminate_startup_child(&mut child).unwrap();
+                    let _ = std::fs::remove_dir_all(&runtime);
+                    panic!("native Hello fixture exceeded deadline");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        use fleet_protocol::transport::LocalListener;
+        let identity = RunnerIdentity {
+            runner_id: "hello-test".into(),
+            session_id: "ses-test".into(),
+            provider_id: "fake".into(),
+            host_id: "local-host".into(),
+            boot_id: "expected-boot".into(),
+            pid: std::process::id(),
+            protocol_version: RUNNER_WIRE.into(),
+            generation: 1,
+        };
+        let listener = LocalListener::bind_named("fleet-runner-hello-test").unwrap();
+        let token = uuid::Uuid::new_v4().to_string();
+        let path = runtime_dir().join("fleet-runner-hello-test.token");
+        #[cfg(windows)]
+        fleet_protocol::transport::write_private_file(&path, token.as_bytes()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap()
+                .write_all(token.as_bytes())
+                .unwrap();
+        }
+        let expected = identity.clone();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let frame = read_runner_frame(&mut reader).unwrap().unwrap();
+            let RunnerFrame::Request {
+                request_id,
+                request:
+                    RunnerRequest::Hello {
+                        identity: offered,
+                        token: offered_token,
+                    },
+            } = frame
+            else {
+                panic!("expected authenticated Hello");
+            };
+            assert_eq!(offered, expected);
+            assert_eq!(offered_token, token);
+            let mut wrong = expected;
+            wrong.boot_id = "wrong-boot".into();
+            write_runner_frame(
+                &mut stream,
+                &RunnerFrame::Response {
+                    request_id,
+                    result: Ok(RunnerResponse::Hello {
+                        identity: wrong,
+                        status: "active".into(),
+                        last_ack_seq: 0,
+                        pending_count: 0,
+                        protocol_version: RUNNER_WIRE.into(),
+                    }),
+                },
+            )
+            .unwrap();
+            release_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+        });
+        let error = ProcessHandle::connect(identity)
+            .err()
+            .expect("wrong Hello identity was accepted");
+        assert_eq!(error.code, "runner_identity_invalid");
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn owned_runner_spawn_does_not_inherit_unrelated_private_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const CHILD: &str = "GF_TEST_PRIVATE_HANDLE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let mut byte = [0];
+            let _ = std::io::stdin().read(&mut byte);
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("fleet-handle-{}", uuid::Uuid::new_v4()));
+        let open_exclusive = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&path)
+        };
+        let private = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(open_exclusive().is_err(), "exclusive-handle control failed");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process_runner::tests::owned_runner_spawn_does_not_inherit_unrelated_private_file",
+            ])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(private);
+        // Reopening succeeds only after every exclusive handle to the file
+        // has closed. Keep the child alive with its stdin pipe for the probe.
+        let child_alive = child.try_wait().unwrap().is_none();
+        let reopened = open_exclusive();
+        terminate_startup_child(&mut child).unwrap();
+        let exclusive_released = reopened.is_ok();
+        drop(reopened);
+        std::fs::remove_file(path).unwrap();
+        assert!(child_alive, "child exited before handle inheritance probe");
+        assert!(exclusive_released, "child retained an unrelated private handle");
+    }
+
+    #[test]
     fn startup_identity_requires_complete_bounded_frame() {
         for bytes in [
             b"".to_vec(),

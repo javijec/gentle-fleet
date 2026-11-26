@@ -137,3 +137,20 @@ no causa comprobada del fallo de cef2689. Falta evidencia nativa, pruebas
 integradas de Hello inválido y silencio de startup, e inspección efectiva de
 herencia de handles/descendientes; no afirmar W1-D cerrada. No se modifica
 main, ni se inicia W1-E. FakeDriver no acredita proveedores reales.
+
+
+### Regresiones adicionales de startup y handles
+
+La suite candidata incorpora un octavo escenario Windows: ejecutable nativo
+silencioso (fixture Rust sin dependencias ni descendientes), ejecutado a través
+de CreateSession con el plazo real de startup. El watchdog del test admite
+90s; producción conserva 70s. Debe devolver runner_startup_timeout, sin hijo
+vivo ni sesión Running. El fixture compila con rustc del toolchain existente.
+Se agrega una prueba de Hello sobre IPC nativo (Unix socket y named pipe), en
+subproceso de test con runtime aislado y watchdog externo, que rechaza boot_id
+incorrecto aun si el peer devuelve una respuesta tipada. La regresión Windows
+de herencia usa un archivo ajeno abierto de forma exclusiva, comprueba un
+control negativo y verifica que se puede reabrir tras soltar el handle padre
+mientras un hijo con stdio redirigido sigue vivo. No prueba todos los handles
+heredables explícitos ni descendientes de proveedores reales; esas garantías
+no se declaran. UNTESTED hasta ejecución nativa; no hay nuevo PASS ni cierre.

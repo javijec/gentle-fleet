@@ -1,13 +1,13 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($Scenario -eq 'All') {
-    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
+    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
         Write-Output "W1-D scenario: $case"
         & $PSCommandPath -Scenario $case
     }
@@ -85,7 +85,9 @@ function Stop-OwnedProcess($Process) {
 function Invoke-FixtureCli([string[]]$Arguments, [string]$ExpectedError = '') {
     $process = Start-OwnedProcess (Join-Path $bin 'fleetctl.exe') $Arguments
     try {
-        if (-not $process.WaitForExit(20000)) { throw "CLI timed out: $($Arguments[0])" }
+        $timeout = if ($Scenario -eq 'SilentRunner' -and $Arguments[0] -eq 'session' -and
+            $Arguments[1] -eq 'create') { 90000 } else { 20000 }
+        if (-not $process.WaitForExit($timeout)) { throw "CLI timed out: $($Arguments[0])" }
         if ($process.ExitCode -ne 0) {
             $err = if ($process.FixtureStderr.IsCompletedSuccessfully) {
                 $process.FixtureStderr.GetAwaiter().GetResult()
@@ -218,7 +220,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 try {
     New-Item -ItemType Directory -Path $bin, $workspace | Out-Null
     foreach ($exe in @('fleetd.exe', 'fleet-runner.exe', 'fleetctl.exe')) {
-        if ($exe -eq 'fleet-runner.exe' -and $Scenario -in @('MissingRunner', 'InvalidRunner')) {
+        if ($exe -eq 'fleet-runner.exe' -and $Scenario -in @('MissingRunner', 'InvalidRunner', 'SilentRunner')) {
             continue
         }
         Copy-Item -LiteralPath (Join-Path $repo "target/debug/$exe") -Destination $bin
@@ -226,6 +228,13 @@ try {
     if ($Scenario -eq 'InvalidRunner') {
         # An owned executable exits with CLI usage, without announcing runner identity.
         Copy-Item -LiteralPath (Join-Path $bin 'fleetctl.exe') -Destination $runnerExe
+    }
+    if ($Scenario -eq 'SilentRunner') {
+        # Native fixture does not spawn descendants or write to stdout.
+        & rustc --edition=2021 (Join-Path $PSScriptRoot 'fixtures/w1d-silent-runner.rs') -o $runnerExe
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runnerExe)) {
+            throw 'silent runner fixture did not compile'
+        }
     }
     # No FLEET_RUNNER_BIN: exercise default sibling executable resolution.
     $sentinel = Start-OwnedProcess (Join-Path $PSHOME 'pwsh.exe') @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 180')
@@ -249,8 +258,12 @@ try {
     $registered = @((Invoke-FixtureCli @('workspace', 'list')) -split "\r?\n" |
         Where-Object { ($_ -split "\t", 2)[0] -ceq $workspaceId })
     if ($registered.Count -ne 1) { throw 'registered workspace ID not found in catalog' }
-    if ($Scenario -in @('MissingRunner', 'InvalidRunner')) {
-        $expected = if ($Scenario -eq 'MissingRunner') { 'runner_io' } else { 'runner_identity_invalid' }
+    if ($Scenario -in @('MissingRunner', 'InvalidRunner', 'SilentRunner')) {
+        $expected = switch ($Scenario) {
+            'MissingRunner' { 'runner_io' }
+            'InvalidRunner' { 'runner_identity_invalid' }
+            'SilentRunner' { 'runner_startup_timeout' }
+        }
         $null = Invoke-FixtureCli @('session', 'create', '--workspace', $workspaceId, '--provider', 'fake') $expected
         Track-RunnerChildren
         if ($runners.Count -ne 0 -or $daemon.HasExited -or $sentinel.HasExited) {

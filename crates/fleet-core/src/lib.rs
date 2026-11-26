@@ -21,8 +21,8 @@ use fleet_domain::store::{
 };
 use fleet_domain::{
     AgentEvent, ControlState, DomainEvent, Event, EventKind, HostId, ProviderDescriptor,
-    ProviderId, RunnerEvent, RunnerIdentity, RunnerMode, RunnerStatus, SessionId, SessionState, TurnState,
-    TurnStatus, WorkspaceId,
+    ProviderId, RunnerEvent, RunnerIdentity, RunnerMode, RunnerStatus, SessionId, SessionState,
+    TurnState, TurnStatus, WorkspaceId,
 };
 use runner::{RunnerCommand, RunnerHandle, RunnerLaunchContext, RunnerLauncher};
 
@@ -831,8 +831,14 @@ impl SessionManager {
         self.store
             .mark_session_approvals_uncertain(session_id)
             .map_err(to_agent_error)?;
-        for approval in self.store.list_approvals(Some(session_id)).map_err(to_agent_error)? {
-            state.approvals.insert(approval.approval_id.clone(), approval);
+        for approval in self
+            .store
+            .list_approvals(Some(session_id))
+            .map_err(to_agent_error)?
+        {
+            state
+                .approvals
+                .insert(approval.approval_id.clone(), approval);
         }
         Ok(())
     }
@@ -864,10 +870,9 @@ impl SessionManager {
                 // Also reconcile approvals left by an older daemon that
                 // recorded runner loss without updating its approval catalog.
                 let mut state = self.state.lock().expect("manager poisoned");
-                if let Err(error) = self.sync_uncertain_approvals_locked(
-                    &mut state,
-                    &record.identity.session_id,
-                ) {
+                if let Err(error) =
+                    self.sync_uncertain_approvals_locked(&mut state, &record.identity.session_id)
+                {
                     if state.storage_fault.is_none() {
                         state.storage_fault = Some(error.message.clone());
                     }
@@ -877,9 +882,7 @@ impl SessionManager {
             }
             if matches!(
                 record.status,
-                RunnerStatus::Stopped
-                    | RunnerStatus::StopUnconfirmed
-                    | RunnerStatus::Stopping
+                RunnerStatus::Stopped | RunnerStatus::StopUnconfirmed | RunnerStatus::Stopping
             ) {
                 continue;
             }

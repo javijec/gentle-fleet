@@ -160,7 +160,11 @@ impl ProcessHandle {
         let name = format!("fleet-runner-{}", identity.runner_id);
         let stream = connect_named(&name).map_err(io_error)?;
         #[cfg(windows)]
-        let peer_process = Some(stream.capture_server_process(identity.pid).map_err(io_error)?);
+        let peer_process = Some(
+            stream
+                .capture_server_process(identity.pid)
+                .map_err(io_error)?,
+        );
         let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
         let cancellation = stream.try_clone().map_err(io_error)?;
         let handle = Self {
@@ -206,7 +210,10 @@ impl ProcessHandle {
         // the live endpoint. Recheck the same retained process after Hello.
         #[cfg(windows)]
         if let Some(process) = &handle.peer_process {
-            handle.cancellation.verify_server_process(process).map_err(io_error)?;
+            handle
+                .cancellation
+                .verify_server_process(process)
+                .map_err(io_error)?;
         }
         Ok(handle)
     }
@@ -497,7 +504,8 @@ impl RunnerHandle for ProcessHandle {
         }
         #[cfg(windows)]
         if let Some(process) = &self.peer_process {
-            return process.wait_success(EXIT_TIMEOUT)
+            return process
+                .wait_success(EXIT_TIMEOUT)
                 .map_err(|error| stop_unconfirmed(&error.to_string()));
         }
         Err(stop_unconfirmed(

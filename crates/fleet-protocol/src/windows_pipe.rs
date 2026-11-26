@@ -42,8 +42,9 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, GetCurrentThread, GetExitCodeProcess, OpenProcess, OpenProcessToken,
-    OpenThreadToken, WaitForSingleObject, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, GetCurrentThread, GetExitCodeProcess, OpenProcess,
+    OpenProcessToken, OpenThreadToken, WaitForSingleObject, INFINITE,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 
@@ -1286,7 +1287,10 @@ impl PeerProcess {
                 }
                 Ok(())
             }
-            WAIT_TIMEOUT => Err(io::Error::new(io::ErrorKind::TimedOut, "reattached runner exit not observed")),
+            WAIT_TIMEOUT => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "reattached runner exit not observed",
+            )),
             _ => Err(io::Error::last_os_error()),
         }
     }
@@ -1320,19 +1324,38 @@ impl Stream {
         let file = self.file()?;
         let raw = file.as_raw_handle();
         let mut pid = 0;
-        if unsafe { GetNamedPipeServerProcessId(raw, &mut pid) } == 0 || pid == 0 || pid != expected_pid {
-            return Err(invalid("named-pipe server PID does not match runner identity"));
+        if unsafe { GetNamedPipeServerProcessId(raw, &mut pid) } == 0
+            || pid == 0
+            || pid != expected_pid
+        {
+            return Err(invalid(
+                "named-pipe server PID does not match runner identity",
+            ));
         }
         const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_ACCESS, 0, pid) };
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_ACCESS,
+                0,
+                pid,
+            )
+        };
         if process.is_null() {
             return Err(io::Error::last_os_error());
         }
         let handle = unsafe { OwnedHandle::from_raw_handle(process) };
         let sid = current_sid()?;
         let peer = sid_of_process(handle.as_raw_handle())?;
-        if unsafe { EqualSid(sid.as_ptr().cast_mut().cast(), peer.as_ptr().cast_mut().cast()) } == 0 {
-            return Err(invalid("named-pipe server process has a different user SID"));
+        if unsafe {
+            EqualSid(
+                sid.as_ptr().cast_mut().cast(),
+                peer.as_ptr().cast_mut().cast(),
+            )
+        } == 0
+        {
+            return Err(invalid(
+                "named-pipe server process has a different user SID",
+            ));
         }
         let process = PeerProcess { handle, pid };
         process.verify_live_server(raw)?;

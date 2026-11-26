@@ -211,10 +211,10 @@ impl OpenCodeDriver {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null()),
         )
-            .map_err(|e| AgentError {
-                code: "provider_unavailable".into(),
-                message: format!("cannot start `opencode serve`: {e}"),
-            })?;
+        .map_err(|e| AgentError {
+            code: "provider_unavailable".into(),
+            message: format!("cannot start `opencode serve`: {e}"),
+        })?;
         let stdout = child.stdout.take().ok_or_else(|| AgentError {
             code: "provider_unavailable".into(),
             message: "opencode serve stdout is missing".into(),
@@ -249,10 +249,13 @@ impl OpenCodeDriver {
         }
         let Some(password) = password.filter(|value| !value.is_empty() && listening) else {
             drop(rx);
-            child.kill().and_then(|_| child.wait()).map_err(|_| AgentError {
-                code: "StopUnconfirmed".into(),
-                message: "OpenCode startup cleanup unconfirmed".into(),
-            })?;
+            child
+                .kill()
+                .and_then(|_| child.wait())
+                .map_err(|_| AgentError {
+                    code: "StopUnconfirmed".into(),
+                    message: "OpenCode startup cleanup unconfirmed".into(),
+                })?;
             return Err(AgentError {
                 code: "provider_unavailable".into(),
                 message: "opencode serve did not announce readiness and password".into(),

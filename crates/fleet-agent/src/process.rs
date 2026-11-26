@@ -189,9 +189,9 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
                     if !status.success() {
                         return Err(unavailable("provider version probe exited unsuccessfully"));
                     }
-                    child
-                        .ensure_tree_empty()
-                        .map_err(|_| unavailable("provider version probe left active descendants"))?;
+                    child.ensure_tree_empty().map_err(|_| {
+                        unavailable("provider version probe left active descendants")
+                    })?;
                     exited = true;
                 }
             }
@@ -231,7 +231,9 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
                 std::thread::sleep(Duration::from_millis(10));
             }
             if !reader.is_finished() {
-                return Err(unavailable("provider version reader cancellation unconfirmed"));
+                return Err(unavailable(
+                    "provider version reader cancellation unconfirmed",
+                ));
             }
             let _ = reader.join();
         }
@@ -352,7 +354,10 @@ mod tests {
         sentinel.wait().unwrap();
 
         let error = capture_stdout(fixture("tree"), VERSION_TIMEOUT).unwrap_err();
-        assert_eq!(error.message, "provider version probe left active descendants");
+        assert_eq!(
+            error.message,
+            "provider version probe left active descendants"
+        );
     }
 
     #[cfg(windows)]
@@ -400,7 +405,10 @@ mod tests {
         let stdout = owner.stdout.take().unwrap();
         let (tx, rx) = mpsc::sync_channel(1);
         let reader = std::thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
                 if let Some(pid) = line
                     .split("job child pid=")
                     .nth(1)
@@ -423,7 +431,9 @@ mod tests {
             }
             let child = unsafe { OwnedHandle::from_raw_handle(handle) };
             if unsafe { WaitForSingleObject(child.as_raw_handle(), 0) } != WAIT_TIMEOUT {
-                return Err(std::io::Error::other("fixture child not alive before owner death"));
+                return Err(std::io::Error::other(
+                    "fixture child not alive before owner death",
+                ));
             }
             Ok(child)
         })();

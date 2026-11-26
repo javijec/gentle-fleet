@@ -90,8 +90,7 @@ impl OwnedChild {
         {
             // Root exit and job accounting may become observable at different
             // instants. Give the job a small bounded grace period to drain.
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(200);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
             while self.job.active()? != 0 {
                 if std::time::Instant::now() >= deadline {
                     self.kill()?;

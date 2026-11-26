@@ -99,3 +99,18 @@ Workspace headless integrado con P6. La nueva validación full Windows/Linux y l
 ### Revalidación posterior
 
 El operador confirmó PASS del gate automatizado Windows/Linux y protocolo 10/10 tras la corrección del coordinador en `c1b3d77`. Ver `P7_W1_RESULTS.md`. Esta evidencia sustituye el estado UNTESTED automatizado del candidato anterior; revisión independiente de logs no realizada. Dos SID siguen UNTESTED hasta release. No es aceptación de Windows como plataforma de producción.
+
+
+## Actualización W1 (26/11/2026)
+
+| Alcance | Estado actualizado |
+|---|---|
+| W1-A/B/C | Aceptación histórica de desarrollo con límites documentados |
+| W1-D/E/F, FakeDriver y proceso nativo | Implementación completa; PASS integral reportado |
+| Full Windows/Linux, protocolo 10/10, Lifecycle 20/20 | Gate w1f reportado PASS; informes originales pendientes de revisión |
+| Regresión SHM de lifecycle-19 | Corrección publicada; revalidación reportada PASS |
+| Pruebas manuales de seguridad diferidas | UNTESTED/BLOCKED según evidencia, no PASS |
+| OpenCode, Codex, Pi, Gentle Shell Windows reales | W2 pendiente |
+| SSH bidireccional a servidor Windows | W4 pendiente |
+
+HEAD remoto observado `8662aea`; no se verificó el SHA ejecutado mediante JSON. Esta actualización no certifica release ni sustituye criterios de P7_W1_F_PLAN.md y QUALITY.md. La matriz histórica anterior se conserva como evidencia de versiones previas.

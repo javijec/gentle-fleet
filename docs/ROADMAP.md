@@ -202,3 +202,8 @@ Pruebas dirigidas y gate conjunto modo w1c reportados PASS por el operador tras 
 ### W1-F — candidato de aceptación integral (26/11/2026)
 
 Se incorpora una prueba negra de proceso Windows para concurrencia de turnos, aislamiento, decisión única de aprobación, backpressure tipado, replay exacto y parada durable. Se integra en full Windows y workflow. El coordinador incorpora modo w1f con full Windows/Linux, protocolo 10/10 y Lifecycle 20/20 sobre mismo SHA limpio. Ver [plan W1-F](P7_W1_F_PLAN.md). Candidato UNTESTED; no se declaran cerrados D/E/F hasta evidencia revisada. No main, W2 ni release.
+
+
+### W1-F — implementación completa; gate PASS reportado (26/11/2026)
+
+Operador confirma PASS integral modo w1f tras corrección SHM; HEAD remoto observado `8662aea`. W1-A–F implementación completa, pendiente revisión de evidencia original para aceptación técnica limitada. No repetir gate sin motivo concreto. Siguiente corte W2 (proveedores Windows nativos), tras revisión. Ver P7_W1_RESULTS.md. No release ni merge a main.

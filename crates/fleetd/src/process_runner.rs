@@ -736,6 +736,99 @@ mod tests {
         assert_eq!(error.code, "runner_rpc_timeout");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn shutdown_deadline_cancels_real_named_pipe_peer() {
+        const CHILD: &str = "GF_TEST_NAMED_PIPE_SHUTDOWN_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let runtime =
+                std::env::temp_dir().join(format!("fleet-shutdown-test-{}", uuid::Uuid::new_v4()));
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process_runner::tests::shutdown_deadline_cancels_real_named_pipe_peer",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("FLEET_RUNTIME_DIR", &runtime)
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "named pipe fixture failed: {status}");
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("named pipe fixture exceeded deadline");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let _ = std::fs::remove_dir_all(runtime);
+            return;
+        }
+
+        use fleet_protocol::transport::LocalListener;
+        let listener = LocalListener::bind_named("shutdown-test").unwrap();
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let frame = read_runner_frame(&mut reader).unwrap().unwrap();
+            assert!(matches!(
+                frame,
+                RunnerFrame::Request {
+                    request: RunnerRequest::Shutdown,
+                    ..
+                }
+            ));
+            seen_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let stream = connect_named("shutdown-test").unwrap();
+        let cancellation = stream.try_clone().unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let handle = ProcessHandle {
+            identity: RunnerIdentity {
+                runner_id: "runner-test".into(),
+                session_id: "ses-test".into(),
+                provider_id: "fake".into(),
+                host_id: "local-host".into(),
+                boot_id: "boot".into(),
+                pid: 1,
+                protocol_version: RUNNER_WIRE.into(),
+                generation: 1,
+            },
+            io: Mutex::new(RunnerIo {
+                writer: stream,
+                reader,
+            }),
+            cancellation,
+            buffered: Mutex::new(VecDeque::new()),
+            next_request: AtomicU64::new(1),
+            child: Mutex::new(None),
+            last_seq: AtomicU64::new(0),
+        };
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ =
+                done_tx.send(handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_secs(1)));
+        });
+        seen_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("peer did not receive Shutdown");
+        let result = done_rx
+            .recv_timeout(Duration::from_secs(4))
+            .expect("Shutdown cancellation hung");
+        assert_eq!(result.unwrap_err().code, "runner_rpc_timeout");
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        server.join().unwrap();
+    }
+
     #[test]
     fn startup_identity_requires_complete_bounded_frame() {
         for bytes in [

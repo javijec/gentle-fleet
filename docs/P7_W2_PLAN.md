@@ -134,3 +134,8 @@ BLOCKED, no PASS; OpenCode conserva cancel_turn=false. Las herramientas
 se solicitan en modo lectura sin cambios a los permisos nativos, no es un
 sandbox de archivos para Pi/Gentle Shell. Se prueba el nuevo JSONL con
 FakeDriver en el escenario Lifecycle (sin turnos de pago adicionales).
+
+Diagnóstico sin consumo de modelo: `--inspect-fixture <ruta TEMP>` (repetible)
+consulta solo fixtures retenidos por API y guarda conteos sin texto; si
+el daemon ya no responde, BLOCKED. `--real --stop-only` prueba apertura y
+cierre de todos o de uno sin prompt. El full se mantiene para aceptación.

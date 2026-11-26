@@ -461,8 +461,79 @@ class Fixture:
             self.mark("cleanup", "FAIL", "fixture cleanup not confirmed")
 
 
+def inspect_fixture(root):
+    """Read only the durable API of an earlier isolated fixture."""
+    root = root.resolve()
+    require(root.parent == Path(tempfile.gettempdir()).resolve()
+            and root.name.startswith("fleet w2 ")
+            and (root / "runtime" / "fleetd.addr").is_file(),
+            "expected an existing W2 fixture runtime in TEMP")
+    exe = ROOT / "target/debug/fleetctl.exe"
+    require(exe.is_file(), "build fleetctl first")
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("FLEET_")}
+    env.update(FLEET_RUNTIME_DIR=str(root / "runtime"),
+               FLEET_DB_PATH=str(root / "private data" / "fleet.sqlite"),
+               FLEET_OPERATION_JOURNAL=str(root / "private client" / "operations.jsonl"),
+               FLEET_CURSOR_JOURNAL=str(root / "private client" / "cursors.jsonl"))
+
+    def read_cli(*argv):
+        result = subprocess.run([str(exe), *argv], env=env, cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8",
+                                timeout=20)
+        require(result.returncode == 0, f"read-only {argv[0]} failed")
+        return result.stdout.rstrip("\r\n")
+
+    rows = [row.split("\t") for row in read_cli("session", "list").splitlines()]
+    summary = {"fixture": root.name, "sessions": []}
+    for row in rows:
+        require(len(row) == 5, "invalid session list row")
+        session, provider, _, state, turn_state = row
+        require(provider in PROVIDERS, "unexpected provider in W2 fixture")
+        events = []
+        while True:
+            page = jsonl(read_cli("timeline", session, "--since", str(len(events)),
+                                  "--limit", "256", "--json"))
+            for event in page:
+                require(event["seq"] == len(events) + 1 and event["session_id"] == session,
+                        "invalid fixture timeline sequence")
+                events.append(event)
+            require(len(events) <= 8192, "fixture timeline exceeds limit")
+            if len(page) < 256:
+                break
+        turns = {}
+        for event in events:
+            kind = event["kind"]
+            if kind.get("turn_id"):
+                turns.setdefault(kind["turn_id"], []).append(kind)
+        turn_rows = []
+        for kinds in turns.values():
+            user = next((k["text"] for k in kinds if k["type"] == "user_message"), "")
+            marker = re.search(r"\bFLEET_[0-9A-F]{32}\b", user)
+            expected = marker.group(0) if marker else None
+            if expected is None and user.startswith("Read fixture.txt"):
+                try:
+                    path = root / "workspace with spaces" / "fixture.txt"
+                    if path.stat().st_size <= 128:
+                        content = path.read_text(encoding="utf-8").strip()
+                        if re.fullmatch(r"FLEET_[0-9A-F]{32}", content):
+                            expected = content
+                except (OSError, UnicodeError):
+                    pass
+            turn_rows.append(turn_diagnostics(kinds, expected))
+        summary["sessions"].append({
+            "provider": provider, "state": state, "turn_state": turn_state,
+            "turns": turn_rows,
+            "notice_reasons": [reason for e in events if e["kind"]["type"] == "agent_notice"
+                               for reason in [stop_reason(e["kind"]["message"])]
+                               if reason != "unknown"],
+        })
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--inspect-fixture", type=Path, action="append",
+                        help="read-only diagnostic of a retained W2 fixture; no model call")
     parser.add_argument("--real", action="store_true", help="authorize real model turns")
     parser.add_argument("--provider", choices=("all", *PROVIDERS), default="all")
     parser.add_argument("--stop-only", action="store_true", help="open/close session without a model turn")
@@ -475,6 +546,26 @@ def main():
                    "gentle-shell-bin", "gentle-shell-js", "node-bin"):
         parser.add_argument("--" + option, type=Path)
     args = parser.parse_args()
+    if args.inspect_fixture:
+        if os.name != "nt":
+            print("BLOCKED: fixture inspection requires Windows")
+            return 1
+        rows = []
+        failed = False
+        for root in args.inspect_fixture:
+            try:
+                rows.append(inspect_fixture(root))
+            except (Failure, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+                rows.append({"fixture": root.name, "status": "BLOCKED",
+                             "detail": str(error) if isinstance(error, Failure) else type(error).__name__})
+                failed = True
+        report_dir = ROOT / "reports/w2"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / ("inspection-" + uuid.uuid4().hex + ".json")
+        report_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        print(json.dumps(rows, indent=2))
+        print("Report:", report_path)
+        return int(failed)
     if os.name != "nt" or not args.real:
         print("BLOCKED: requires native Windows and explicit --real")
         return 1

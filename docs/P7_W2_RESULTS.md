@@ -155,3 +155,9 @@ final, sin inventar deltas. El smoke registra conteos y presencia del marker,
 no texto, y etiquetas de error de stop; --stop-only evita llamadas de modelo.
 La causa real de ausencia de texto y de cada stop aún requiere confirmación
 nativa. UNTESTED; no se declara cierre de W2 ni cambios a main.
+
+Se añade inspección de fixtures retenidos por API pública de solo lectura,
+sin arrancar daemon, enviar prompt, reintentar stop ni imprimir texto de
+proveedor. Si el daemon original no responde, informa BLOCKED. El reporte
+contiene conteos de deltas, mensajes, herramientas, terminales y razones
+clasificadas de parada. No se lee DB SQLite por fuera de Fleet.

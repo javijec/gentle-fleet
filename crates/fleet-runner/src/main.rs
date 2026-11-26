@@ -22,6 +22,7 @@ use spool::Spool;
 // Must exceed the provider's 2s graceful EOF wait, but stay below the
 // daemon's 5s Shutdown RPC deadline. A timeout is still StopUnconfirmed.
 const DRIVER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+type DriverCloseResult = Result<(), String>;
 
 struct Args {
     runner_id: String,
@@ -324,7 +325,7 @@ fn spawn_driver_loop(
     commands: Receiver<DriverCommand>,
     shared: Arc<RunnerShared>,
     startup: Sender<Result<(), String>>,
-    closed_tx: Sender<Result<(), String>>,
+    closed_tx: Sender<DriverCloseResult>,
 ) {
     let spool = Arc::clone(&shared.spool);
     let pending_approvals = Arc::clone(&shared.pending_approvals);
@@ -517,7 +518,7 @@ fn serve_daemon(
     identity: RunnerIdentity,
     shared: Arc<RunnerShared>,
     commands: SyncSender<DriverCommand>,
-    closed_rx: Arc<Mutex<Receiver<Result<(), String>>>>,
+    closed_rx: Arc<Mutex<Receiver<DriverCloseResult>>>,
 ) -> Result<(), String> {
     let spool = &shared.spool;
     let pending_approvals = &shared.pending_approvals;

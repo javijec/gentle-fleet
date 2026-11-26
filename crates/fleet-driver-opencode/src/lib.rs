@@ -569,7 +569,8 @@ impl OpenCodeDriver {
     /// servidor. Detecta versión real cuando el servicio de usuario responde.
     pub fn probe(&mut self) -> ProviderDescriptor {
         // Explicit owned mode does not inspect or attach to the user's service.
-        if std::env::var_os("FLEET_OPENCODE_MODE").as_deref() == Some(std::ffi::OsStr::new("owned")) {
+        if std::env::var_os("FLEET_OPENCODE_MODE").as_deref() == Some(std::ffi::OsStr::new("owned"))
+        {
             self.descriptor.mode = RunnerMode::Owned;
             self.descriptor.availability = ProviderAvailability::Unavailable;
             if let Ok(version) = Self::installed_version() {

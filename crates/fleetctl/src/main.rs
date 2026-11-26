@@ -123,7 +123,10 @@ fn run() -> Result<(), String> {
             match client.call(Request::ListAgents)? {
                 Response::Agents { agents } => {
                     if args.iter().any(|a| a == "--json") {
-                        println!("{}", serde_json::to_string(&agents).map_err(|e| e.to_string())?);
+                        println!(
+                            "{}",
+                            serde_json::to_string(&agents).map_err(|e| e.to_string())?
+                        );
                         return Ok(());
                     }
                     for agent in agents {
@@ -359,7 +362,10 @@ fn controls(args: &[String], selected_host: Option<&str>) -> Result<(), String> 
     match client.call(Request::ListControls { session_id })? {
         Response::Controls { controls } => {
             if args.iter().any(|a| a == "--json") {
-                println!("{}", serde_json::to_string(&controls).map_err(|e| e.to_string())?);
+                println!(
+                    "{}",
+                    serde_json::to_string(&controls).map_err(|e| e.to_string())?
+                );
                 return Ok(());
             }
             for control in controls {
@@ -492,7 +498,10 @@ fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
             Err(error) => return Err(error.to_string()),
         };
         if json {
-            println!("{}", serde_json::to_string(&event).map_err(|e| e.to_string())?);
+            println!(
+                "{}",
+                serde_json::to_string(&event).map_err(|e| e.to_string())?
+            );
         } else {
             println!("{}\t{}", event.seq, describe(&event.kind));
         }
@@ -573,7 +582,10 @@ fn timeline(args: &[String], selected_host: Option<&str>) -> Result<(), String> 
             let json = args.iter().any(|a| a == "--json");
             for event in events {
                 if json {
-                    println!("{}", serde_json::to_string(&event).map_err(|e| e.to_string())?);
+                    println!(
+                        "{}",
+                        serde_json::to_string(&event).map_err(|e| e.to_string())?
+                    );
                 } else {
                     println!(
                         "{}\t{}\t{}",

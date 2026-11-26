@@ -215,12 +215,7 @@ impl ProcessHandle {
         // A caller that passed the first check before Shutdown must not
         // overtake it after acquiring the mutex.
         self.ensure_rpc_open()?;
-        self.rpc_locked(
-            &mut io,
-            request,
-            None,
-            &Cell::new("writing RPC request"),
-        )
+        self.rpc_locked(&mut io, request, None, &Cell::new("writing RPC request"))
     }
 
     // Include contention for the per-runner RPC lock in the deadline. Cancel
@@ -857,9 +852,8 @@ mod tests {
         let (done_tx, done_rx) = mpsc::channel();
         let worker_handle = std::sync::Arc::clone(&handle);
         let worker = std::thread::spawn(move || {
-            let _ = done_tx.send(
-                worker_handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_secs(2)),
-            );
+            let _ = done_tx
+                .send(worker_handle.rpc_bounded(RunnerRequest::Shutdown, Duration::from_secs(2)));
         });
         let deadline = Instant::now() + Duration::from_secs(1);
         while !handle.shutdown_requested.load(Ordering::Acquire) {
@@ -1040,7 +1034,10 @@ mod tests {
         drop(reopened);
         std::fs::remove_file(path).unwrap();
         assert!(child_alive, "child exited before handle inheritance probe");
-        assert!(exclusive_released, "child retained an unrelated private handle");
+        assert!(
+            exclusive_released,
+            "child retained an unrelated private handle"
+        );
     }
 
     #[test]

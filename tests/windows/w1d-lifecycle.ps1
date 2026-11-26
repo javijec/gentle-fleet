@@ -1,13 +1,13 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($Scenario -eq 'All') {
-    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
+    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
         Write-Output "W1-D scenario: $case"
         & $PSCommandPath -Scenario $case
     }
@@ -53,8 +53,11 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
         throw 'fixture must not pass a runner binary override'
     }
     if ($Executable -eq (Join-Path $bin 'fleetd.exe')) {
-        if ($Scenario -in @('Interrupt', 'ActiveStop')) {
+        if ($Scenario -in @('Interrupt', 'InterruptFailure', 'ActiveStop')) {
             $info.Environment['FLEET_FAKE_DEFER_TERMINAL'] = '1'
+        }
+        if ($Scenario -eq 'InterruptFailure') {
+            $info.Environment['FLEET_FAKE_FAIL_INTERRUPT'] = '1'
         }
         if ($Scenario -eq 'CloseFailure') {
             $info.Environment['FLEET_FAKE_FAIL_CLOSE'] = '1'
@@ -231,7 +234,7 @@ try {
     }
     if ($Scenario -eq 'SilentRunner') {
         # Native fixture does not spawn descendants or write to stdout.
-        & rustc --edition=2021 (Join-Path $PSScriptRoot 'fixtures/w1d-silent-runner.rs') -o $runnerExe
+        & rustc --edition=2021 --crate-name w1d_silent_runner (Join-Path $PSScriptRoot 'fixtures/w1d-silent-runner.rs') -o $runnerExe
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runnerExe)) {
             throw 'silent runner fixture did not compile'
         }
@@ -275,7 +278,7 @@ try {
         return
     }
     $first = New-FixtureSession $workspaceId
-    if ($Scenario -in @('Interrupt', 'ActiveStop')) {
+    if ($Scenario -in @('Interrupt', 'InterruptFailure', 'ActiveStop')) {
         $turn = Start-DeferredTurn $first.Session
         if ($Scenario -eq 'Interrupt') {
             $null = Invoke-FixtureCli @('interrupt', $first.Session, 'not-the-active-turn') 'TurnMismatch'
@@ -327,8 +330,26 @@ try {
                 throw 'expected exactly one Interrupted terminal event'
             }
         }
+        if ($Scenario -eq 'InterruptFailure') {
+            # Submit accepts the command into the runner queue, not proof of
+            # an Interrupted terminal event. Observe the driver's actual error.
+            $reply = Invoke-FixtureCli @('interrupt', $first.Session, $turn)
+            if ($reply -ne (@('interrupted', $first.Session, $turn) -join [char]9)) {
+                throw 'interrupt receipt mismatch'
+            }
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $timeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+                if ($timeline -match '\tturn_completed\t') { throw 'failed interrupt fabricated a terminal result' }
+                if ($timeline -match '\tagent_error\t.*injected fake interrupt failure') { break }
+                Start-Sleep -Milliseconds 100
+            } while ($deadline.Elapsed.TotalSeconds -lt 20)
+            if ($timeline -notmatch '\tagent_error\t.*injected fake interrupt failure') {
+                throw 'driver interrupt failure was not observed'
+            }
+        }
         Assert-Stopped $first
-        if ($Scenario -eq 'ActiveStop') {
+        if ($Scenario -in @('ActiveStop', 'InterruptFailure')) {
             $timeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
             if ($timeline -notmatch "\tturn_uncertain\t$([regex]::Escape($turn))\t" -or
                 $timeline -match '\tturn_completed\t') {

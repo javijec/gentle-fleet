@@ -154,3 +154,9 @@ control negativo y verifica que se puede reabrir tras soltar el handle padre
 mientras un hijo con stdio redirigido sigue vivo. No prueba todos los handles
 heredables explícitos ni descendientes de proveedores reales; esas garantías
 no se declaran. UNTESTED hasta ejecución nativa; no hay nuevo PASS ni cierre.
+
+El noveno escenario, InterruptFailure, espera el error real emitido por
+FakeDriver después de la recepción del comando de interrupción, exige que no
+se fabrique TurnCompleted y verifica TurnUncertain al detener la sesión. Se
+mantienen las regresiones core de ACK sin terminal. No se cambia el wire ni se
+promete entrega efectiva de interrupción por el recibo de Submit.

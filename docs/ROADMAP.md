@@ -182,3 +182,8 @@ W1-C: gate automatizado final 103/103 PASS (Windows 26, Linux 77) sobre `846a4b2
 W1-C: revalidación automatizada final tras cuatro correcciones prioritarias y primera vertical W1-D: **104/104 PASS** sobre `c4f2abcb9438a88acc6bc42501049ef639a48133` (27 Windows, 77 Linux). Solo resta revisión técnica de evidencia y riesgos para cerrar W1-C con alcance limitado; no repetir gate sin motivo concreto. W1-D preparada, primera vertical positiva PASS automatizado, aceptación integral pendiente. Main y criterios release intactos. Ver P7_W1_RESULTS.md y P7_W1_D_PLAN.md.
 
 Tras revisión de la evidencia de `c4f2abc`, **W1-C cerrada técnicamente para desarrollo con alcance limitado; W1-D abierta**. Los requisitos manuales y reales de release permanecen sin cambios. La aceptación integral de W1-D requiere sus regresiones negativas, ciclo de vida y validación nativa; no adelantar W1-E/F ni W2. Ver resultados y plan W1-D.
+
+
+### W1-D — candidato consolidado (26/11/2026)
+
+W1-D permanece ABIERTA: prioridad de Shutdown, diagnóstico por fase y regresiones nativas negativas implementadas como candidato; falta validación dirigida y gate full del SHA limpio. No reabrir W1-C sin regresión confirmada. Próximo paso tras aceptar W1-D: W1-E. Ver P7_W1_D_PLAN.md y P7_W1_RESULTS.md. No se modifica main ni se declaran PASS nuevos.

@@ -1,6 +1,6 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'ApprovalRecovery')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
@@ -53,6 +53,12 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
         throw 'fixture must not pass a runner binary override'
     }
     if ($Executable -eq (Join-Path $bin 'fleetd.exe')) {
+        if ($Scenario -eq 'Recovery') {
+            $info.Environment['FLEET_FAKE_SLOW_TURN_MS'] = '8000'
+        }
+        if ($Scenario -in @('RunnerLoss', 'ApprovalRecovery')) {
+            $info.Environment['FLEET_FAKE_APPROVAL'] = '1'
+        }
         if ($Scenario -in @('Interrupt', 'InterruptFailure', 'ActiveStop')) {
             $info.Environment['FLEET_FAKE_DEFER_TERMINAL'] = '1'
         }
@@ -189,6 +195,67 @@ function Assert-Stopped($Fixture) {
     if ($timeline -notmatch '\tsession_state\tStopped') { throw 'durable Stopped event missing' }
 }
 
+function Restart-FixtureDaemon {
+    if ($null -ne $script:daemon) {
+        Stop-OwnedProcess $script:daemon
+        $script:daemon = $null
+    }
+    # Only this isolated fixture owns the old endpoint. Remove readiness
+    # after the old daemon's exit, never touch the live runner endpoints.
+    $addr = Join-Path $runtime 'fleetd.addr'
+    if (Test-Path -LiteralPath $addr) { Remove-Item -LiteralPath $addr -Force }
+    $script:daemon = Start-OwnedProcess (Join-Path $bin 'fleetd.exe') @()
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $addr)) {
+        if ($script:daemon.HasExited -or $deadline.Elapsed.TotalSeconds -gt 30) {
+            throw 'restarted daemon did not publish endpoint'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+function Assert-ContiguousTimeline([string]$Timeline) {
+    $expected = 1
+    foreach ($line in ($Timeline -split "\r?\n")) {
+        $fields = $line -split "\t", 2
+        if ($fields.Count -ne 2 -or $fields[0] -ne [string]$expected) {
+            throw "timeline has a duplicate or gap at sequence $expected"
+        }
+        $expected++
+    }
+}
+
+function Assert-RecoveredTurn($Fixture, [string]$Key, [string]$Message) {
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $timeline = Invoke-FixtureCli @('timeline', $Fixture.Session, '--since', '0', '--limit', '256')
+        $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+            Where-Object { ($_ -split "\t")[0] -eq $Fixture.Session })
+        $op = (Invoke-FixtureCli @('operation', $Key)) -split "\t"
+        if ($rows.Count -eq 1 -and ($rows[0] -split "\t")[3] -eq 'Running' -and
+            ($rows[0] -split "\t")[4] -eq 'Completed' -and $op.Count -ge 4 -and
+            $op[3] -eq 'Completed' -and $timeline -match '\tturn_completed\tCompleted') { break }
+        Start-Sleep -Milliseconds 100
+    } while ($deadline.Elapsed.TotalSeconds -lt 30)
+    if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'Running' -or
+        ($rows[0] -split "\t")[4] -ne 'Completed' -or $op.Count -lt 4 -or $op[3] -ne 'Completed') {
+        throw 'recovery did not restore the completed turn and operation'
+    }
+    Assert-ContiguousTimeline $timeline
+    $lines = @($timeline -split "\r?\n")
+    foreach ($pattern in @("\tuser\t$([regex]::Escape($Message))$", '\tdelta\tHello $',
+        '\tdelta\tfrom fake$', '\ttool_completed\tfake_echo\ttrue$', '\tturn_completed\tCompleted$')) {
+        if (@($lines | Where-Object { $_ -match $pattern }).Count -ne 1) {
+            throw "recovered timeline missing or duplicated event: $pattern"
+        }
+    }
+    if ($Fixture.Process.HasExited) { throw 'original runner exited during recovery' }
+    Track-RunnerChildren
+    if ($runners.Count -ne 1) { throw 'recovery launched a substitute runner' }
+    $replay = Invoke-FixtureCli @('watch', $Fixture.Session, '--since', '0', '--count', [string]$lines.Count)
+    if ($replay -cne $timeline) { throw 'durable replay differs from timeline' }
+}
+
 function Start-DeferredTurn([string]$Session) {
     $script:fixtureOperationKey = [guid]::NewGuid().ToString('N')
     $receipt = (Invoke-FixtureCli @('prompt', $Session, 'W1-D deferred turn')) -split "\t"
@@ -278,6 +345,106 @@ try {
         return
     }
     $first = New-FixtureSession $workspaceId
+    if ($Scenario -in @('Recovery', 'RunnerLoss', 'ApprovalRecovery')) {
+        $key = [guid]::NewGuid().ToString('N')
+        $script:fixtureOperationKey = $key
+        $message = 'W1-E recovery fixture prompt'
+        $receipt = (Invoke-FixtureCli @('prompt', $first.Session, $message)) -split "\t"
+        if ($receipt.Count -ne 3 -or $receipt[1] -ne $first.Session -or -not $receipt[2]) {
+            throw 'recovery prompt receipt mismatch'
+        }
+        $before = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+        if ($before -match '\tturn_completed\t') { throw 'turn completed before daemon fault' }
+        $approvalId = $null
+        if ($Scenario -ne 'Recovery') {
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $pending = Invoke-FixtureCli @('approvals', '--session', $first.Session)
+                $fields = $pending -split "\t"
+                if ($fields.Count -eq 5 -and $fields[1] -eq $first.Session -and $fields[3] -eq 'pending') {
+                    $approvalId = $fields[0]
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            } while ($deadline.Elapsed.TotalSeconds -lt 20)
+            if (-not $approvalId) { throw 'pending approval was not observed' }
+        }
+        Stop-OwnedProcess $daemon
+        $script:daemon = $null
+        if ($first.Process.HasExited -or $sentinel.HasExited) { throw 'runner did not survive daemon termination' }
+        if ($Scenario -eq 'Recovery') {
+            $probeExe = Join-Path $repo 'target/debug/examples/w1e_spool_probe.exe'
+            $spool = Join-Path $root "private data/fleet-runner-runner-$($first.Session).spool.sqlite"
+            $probe = Start-OwnedProcess $probeExe @($spool, $receipt[2], $key)
+            try {
+                if (-not $probe.WaitForExit(20000) -or $probe.ExitCode -ne 0) {
+                    throw 'offline spool probe did not observe an unacknowledged terminal'
+                }
+                Write-Output 'PASS: terminal committed to original runner spool while daemon was absent'
+            } finally {
+                Stop-OwnedProcess $probe
+            }
+        }
+        if ($Scenario -eq 'RunnerLoss') {
+            $first.Process.Kill()
+            if (-not $first.Process.WaitForExit(5000)) { throw 'owned runner did not terminate' }
+        }
+        Restart-FixtureDaemon
+        if ($Scenario -eq 'RunnerLoss') {
+            $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+                Where-Object { ($_ -split "\t")[0] -eq $first.Session })
+            if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'NeedsReconciliation') {
+                throw 'lost runner did not leave session NeedsReconciliation'
+            }
+            $approval = (Invoke-FixtureCli @('approval', $approvalId)) -split "\t"
+            if ($approval.Count -lt 4 -or $approval[3] -ne 'uncertain') {
+                throw 'lost runner approval was not classified uncertain'
+            }
+            $script:fixtureOperationKey = [guid]::NewGuid().ToString('N')
+            $null = Invoke-FixtureCli @('prompt', $first.Session, 'must not execute') 'reconciliation|runner|session'
+            $script:fixtureOperationKey = [guid]::NewGuid().ToString('N')
+            $null = Invoke-FixtureCli @('answer', $approvalId, 'once') 'NeedsReconciliation'
+            Track-RunnerChildren
+            if ($runners.Count -ne 1 -or -not $first.Process.HasExited -or $sentinel.HasExited) {
+                throw 'recovery created a substitute runner or affected sentinel'
+            }
+            Write-Output 'PASS: lost runner remains uncertain; no prompt, approval or replacement dispatched'
+            return
+        }
+        if ($Scenario -eq 'ApprovalRecovery') {
+            $approval = (Invoke-FixtureCli @('approval', $approvalId)) -split "\t"
+            if ($approval.Count -lt 4 -or $approval[3] -ne 'pending') {
+                throw 'pending approval was changed without an explicit decision'
+            }
+            $script:fixtureOperationKey = [guid]::NewGuid().ToString('N')
+            $answerKey = $script:fixtureOperationKey
+            $null = Invoke-FixtureCli @('answer', $approvalId, 'once')
+            $null = Invoke-FixtureCli @('answer', $approvalId, 'once')
+        }
+        Assert-RecoveredTurn $first $key $message
+        if ($Scenario -eq 'ApprovalRecovery') {
+            $approval = (Invoke-FixtureCli @('approval', $approvalId)) -split "\t"
+            $timeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256')
+            if ($approval[3] -ne 'accepted' -or @($timeline -split "\r?\n" |
+                Where-Object { $_ -match '\tapproval_resolved\t' }).Count -ne 1) {
+                throw 'approval recovery duplicated or lost the explicit decision'
+            }
+            $op = (Invoke-FixtureCli @('operation', $answerKey)) -split "\t"
+            if ($op.Count -lt 4 -or $op[3] -ne 'Completed') { throw 'approval decision not durable' }
+        }
+        Assert-Stopped $first
+        if ($daemon.HasExited -or $sentinel.HasExited) { throw 'reattached stop affected unrelated process' }
+        Restart-FixtureDaemon
+        $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+            Where-Object { ($_ -split "\t")[0] -eq $first.Session })
+        if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'Stopped') {
+            throw 'stopped session was revived after daemon restart'
+        }
+        Track-RunnerChildren
+        if ($runners.Count -ne 1 -or $sentinel.HasExited) { throw 'unexpected runner or sentinel exit' }
+        Write-Output "PASS: $Scenario authenticated replay and confirmed stop after reattach"
+        return
+    }
     if ($Scenario -in @('Interrupt', 'InterruptFailure', 'ActiveStop')) {
         $turn = Start-DeferredTurn $first.Session
         if ($Scenario -eq 'Interrupt') {

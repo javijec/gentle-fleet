@@ -817,6 +817,23 @@ impl SessionManager {
         Ok(())
     }
 
+    fn mark_failed_recovery(&self, identity: &RunnerIdentity) -> Result<(), AgentError> {
+        self.store
+            .update_runner_status(&identity.runner_id, RunnerStatus::Uncertain)
+            .map_err(to_agent_error)?;
+        self.store
+            .mark_session_approvals_uncertain(&identity.session_id)
+            .map_err(to_agent_error)?;
+        let approvals = self.store
+            .list_approvals(Some(&identity.session_id))
+            .map_err(to_agent_error)?;
+        let mut state = self.state.lock().expect("manager poisoned");
+        for approval in approvals {
+            state.approvals.insert(approval.approval_id.clone(), approval);
+        }
+        Ok(())
+    }
+
     /// Reintenta adjuntar runners persistentes tras reiniciar el daemon.
     /// Sin evidencia de identidad no se crea ningún runner sustituto.
     pub fn recover_runners(self: &Arc<Self>) -> Result<Vec<String>, AgentError> {
@@ -894,34 +911,18 @@ impl SessionManager {
             let handle = match self.launcher.launch(context) {
                 Ok(handle) => handle,
                 Err(_) => {
-                    let _ = self
-                        .store
-                        .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain);
-                    let _ = self
-                        .store
-                        .mark_session_approvals_uncertain(&record.identity.session_id);
+                    self.mark_failed_recovery(&record.identity)?;
                     continue;
                 }
             };
             let attached = handle.identity();
-            if attached.runner_id != record.identity.runner_id
-                || attached.boot_id != record.identity.boot_id
-                || attached.generation != record.identity.generation
-                || !attached.host_id.eq(&self.host_id)
-            {
-                let _ = self
-                    .store
-                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain);
+            if attached != &record.identity || !attached.host_id.eq(&self.host_id) {
+                self.mark_failed_recovery(&record.identity)?;
                 continue;
             }
             // A valid socket/token alone does not prove the provider survived.
             if !handle.provider_alive().unwrap_or(false) {
-                self.store
-                    .update_runner_status(&record.identity.runner_id, RunnerStatus::Uncertain)
-                    .map_err(to_agent_error)?;
-                self.store
-                    .mark_session_approvals_uncertain(&record.identity.session_id)
-                    .map_err(to_agent_error)?;
+                self.mark_failed_recovery(&record.identity)?;
                 continue;
             }
             let runner_id = record.identity.runner_id.clone();
@@ -940,6 +941,18 @@ impl SessionManager {
                     continue;
                 }
             };
+            // The ingress may immediately consume the terminal event and
+            // transition the runner to Active. Persist recovery status first.
+            self.store
+                .update_runner_status(
+                    &runner_id,
+                    if active.is_some() {
+                        RunnerStatus::Recovering
+                    } else {
+                        RunnerStatus::Active
+                    },
+                )
+                .map_err(to_agent_error)?;
             // Publish the recovered turn ownership BEFORE starting ingress:
             // replayed terminal events must see the correct active_turn.
             {
@@ -974,16 +987,6 @@ impl SessionManager {
                     session.ingress = Some(ingress);
                 }
             }
-            self.store
-                .update_runner_status(
-                    &runner_id,
-                    if active.is_some() {
-                        RunnerStatus::Recovering
-                    } else {
-                        RunnerStatus::Active
-                    },
-                )
-                .map_err(to_agent_error)?;
             recovered.push(session_id);
         }
         Ok(recovered)

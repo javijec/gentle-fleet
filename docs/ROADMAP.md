@@ -187,3 +187,8 @@ Tras revisión de la evidencia de `c4f2abc`, **W1-C cerrada técnicamente para d
 ### W1-D — candidato consolidado (26/11/2026)
 
 W1-D permanece ABIERTA: prioridad de Shutdown, diagnóstico por fase y regresiones nativas negativas implementadas como candidato; falta validación dirigida y gate full del SHA limpio. No reabrir W1-C sin regresión confirmada. Próximo paso tras aceptar W1-D: W1-E. Ver P7_W1_D_PLAN.md y P7_W1_RESULTS.md. No se modifica main ni se declaran PASS nuevos.
+
+
+### W1-E — candidato de recuperación (26/11/2026)
+
+Por instrucción del propietario se prepara la implementación W1-E sobre W1-D con PASS reportado. La aceptación técnica de D sigue pendiente de evidencias; no se rebaja su gate. Primer candidato: recuperación autenticada, handle de espera Windows, orden durable de recovery, aprobación incierta y tres escenarios de proceso. Ver [plan W1-E](P7_W1_E_PLAN.md). UNTESTED; no W1-F/W2, main ni release.

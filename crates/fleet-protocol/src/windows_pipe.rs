@@ -42,7 +42,7 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken,
+    CreateEventW, GetCurrentProcess, GetCurrentThread, GetExitCodeProcess, OpenProcess, OpenProcessToken,
     OpenThreadToken, WaitForSingleObject, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
@@ -1251,6 +1251,47 @@ struct Shared {
     write_timeout: Mutex<Option<std::time::Duration>>,
 }
 
+/// A wait/query-only process handle captured from the connected server pipe.
+/// Retain it across authenticated Hello; never reopen a persisted numeric PID
+/// to infer process death or issue termination.
+pub struct PeerProcess {
+    handle: OwnedHandle,
+    pid: u32,
+}
+
+impl PeerProcess {
+    fn verify_live_server(&self, pipe: HANDLE) -> io::Result<()> {
+        let mut pid = 0;
+        if unsafe { GetNamedPipeServerProcessId(pipe, &mut pid) } == 0 || pid != self.pid {
+            return Err(invalid("named-pipe server PID changed"));
+        }
+        if unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+            return Err(invalid("named-pipe server process is not verified live"));
+        }
+        Ok(())
+    }
+
+    pub fn wait_success(&self, timeout: std::time::Duration) -> io::Result<()> {
+        // Clamp below INFINITE. A signaled handle, not a numeric PID or EOF,
+        // is the authority for exit, and only exit code zero confirms success.
+        let millis = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), millis) } {
+            WAIT_OBJECT_0 => {
+                let mut code = 0;
+                if unsafe { GetExitCodeProcess(self.handle.as_raw_handle(), &mut code) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if code != 0 {
+                    return Err(io::Error::other("reattached runner exited unsuccessfully"));
+                }
+                Ok(())
+            }
+            WAIT_TIMEOUT => Err(io::Error::new(io::ErrorKind::TimedOut, "reattached runner exit not observed")),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
 pub struct Stream(Arc<Shared>);
 
 impl Stream {
@@ -1271,6 +1312,35 @@ impl Stream {
 
     pub fn try_clone(&self) -> io::Result<Self> {
         Ok(Self(self.0.clone()))
+    }
+
+    pub fn capture_server_process(&self, expected_pid: u32) -> io::Result<PeerProcess> {
+        // This is a client-side operation on an already owner/SID-checked
+        // pipe. Query the kernel server PID, not merely the persisted value.
+        let file = self.file()?;
+        let raw = file.as_raw_handle();
+        let mut pid = 0;
+        if unsafe { GetNamedPipeServerProcessId(raw, &mut pid) } == 0 || pid == 0 || pid != expected_pid {
+            return Err(invalid("named-pipe server PID does not match runner identity"));
+        }
+        const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_ACCESS, 0, pid) };
+        if process.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(process) };
+        let sid = current_sid()?;
+        let peer = sid_of_process(handle.as_raw_handle())?;
+        if unsafe { EqualSid(sid.as_ptr().cast_mut().cast(), peer.as_ptr().cast_mut().cast()) } == 0 {
+            return Err(invalid("named-pipe server process has a different user SID"));
+        }
+        let process = PeerProcess { handle, pid };
+        process.verify_live_server(raw)?;
+        Ok(process)
+    }
+
+    pub fn verify_server_process(&self, process: &PeerProcess) -> io::Result<()> {
+        process.verify_live_server(self.file()?.as_raw_handle())
     }
 
     pub fn set_read_timeout(&self, timeout: Option<std::time::Duration>) -> io::Result<()> {

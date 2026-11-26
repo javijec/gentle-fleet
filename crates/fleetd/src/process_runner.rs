@@ -30,6 +30,8 @@ struct ProcessHandle {
     buffered: Mutex<VecDeque<RunnerEvent>>,
     next_request: AtomicU64,
     child: Mutex<Option<std::process::Child>>,
+    #[cfg(windows)]
+    peer_process: Option<fleet_protocol::transport::PeerProcess>,
     last_seq: AtomicU64,
     shutdown_requested: AtomicBool,
 }
@@ -157,6 +159,8 @@ impl ProcessHandle {
     fn connect(identity: RunnerIdentity) -> Result<Self, AgentError> {
         let name = format!("fleet-runner-{}", identity.runner_id);
         let stream = connect_named(&name).map_err(io_error)?;
+        #[cfg(windows)]
+        let peer_process = Some(stream.capture_server_process(identity.pid).map_err(io_error)?);
         let reader = BufReader::new(stream.try_clone().map_err(io_error)?);
         let cancellation = stream.try_clone().map_err(io_error)?;
         let handle = Self {
@@ -169,6 +173,8 @@ impl ProcessHandle {
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(None),
+            #[cfg(windows)]
+            peer_process,
             last_seq: AtomicU64::new(0),
             shutdown_requested: AtomicBool::new(false),
         };
@@ -195,6 +201,12 @@ impl ProcessHandle {
                     message: "unexpected runner hello response or identity mismatch".into(),
                 })
             }
+        }
+        // The fresh authenticated response binds the saved boot identity to
+        // the live endpoint. Recheck the same retained process after Hello.
+        #[cfg(windows)]
+        if let Some(process) = &handle.peer_process {
+            handle.cancellation.verify_server_process(process).map_err(io_error)?;
         }
         Ok(handle)
     }
@@ -477,16 +489,20 @@ impl RunnerHandle for ProcessHandle {
             .map_err(|error| stop_unconfirmed(&error.to_string()))?;
         confirm_shutdown_response(response)?;
         let mut owned = self.child.lock().expect("child poisoned");
-        let child = owned.as_mut().ok_or_else(|| {
-            stop_unconfirmed(
-                "driver close acknowledged but runner exit cannot be verified after reattach",
-            )
-        })?;
-        // Do not force-kill a runner and convert that into a successful
-        // graceful close. Retain the owned handle on uncertainty.
-        confirm_child_exit(child, EXIT_TIMEOUT)?;
-        *owned = None;
-        Ok(())
+        if let Some(child) = owned.as_mut() {
+            // Never force-kill a runner to convert uncertainty into success.
+            confirm_child_exit(child, EXIT_TIMEOUT)?;
+            *owned = None;
+            return Ok(());
+        }
+        #[cfg(windows)]
+        if let Some(process) = &self.peer_process {
+            return process.wait_success(EXIT_TIMEOUT)
+                .map_err(|error| stop_unconfirmed(&error.to_string()));
+        }
+        Err(stop_unconfirmed(
+            "driver close acknowledged but runner exit cannot be verified after reattach",
+        ))
     }
 }
 
@@ -743,6 +759,8 @@ mod tests {
                     buffered: Mutex::new(VecDeque::new()),
                     next_request: AtomicU64::new(1),
                     child: Mutex::new(None),
+                    #[cfg(windows)]
+                    peer_process: None,
                     last_seq: AtomicU64::new(0),
                     shutdown_requested: AtomicBool::new(false),
                 },
@@ -844,6 +862,8 @@ mod tests {
             buffered: Mutex::new(VecDeque::new()),
             next_request: AtomicU64::new(1),
             child: Mutex::new(None),
+            #[cfg(windows)]
+            peer_process: None,
             last_seq: AtomicU64::new(0),
             shutdown_requested: AtomicBool::new(false),
         };

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 mod windows_pipe;
 
 #[cfg(windows)]
-pub use windows_pipe::{local_app_data, DataDirectory, DataLease};
+pub use windows_pipe::{local_app_data, DataDirectory, DataLease, PeerProcess};
 
 /// Windows uses one daemon per private durable root (runner spool filenames
 /// are also scoped to that root). Reserve the lease namespace from SQLite.
@@ -93,6 +93,20 @@ pub enum LocalStream {
 }
 
 impl LocalStream {
+    #[cfg(windows)]
+    pub fn capture_server_process(&self, expected_pid: u32) -> io::Result<PeerProcess> {
+        match self {
+            Self::NamedPipe(stream) => stream.capture_server_process(expected_pid),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn verify_server_process(&self, process: &PeerProcess) -> io::Result<()> {
+        match self {
+            Self::NamedPipe(stream) => stream.verify_server_process(process),
+        }
+    }
+
     /// Cierre de medio canal para soportar half-close en el bridge SSH.
     pub fn shutdown(&self, how: std::net::Shutdown) -> io::Result<()> {
         match self {

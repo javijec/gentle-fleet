@@ -12,8 +12,12 @@ fn main() {
         let mut stdout = io::stdout().lock();
         let mut stderr = io::stderr().lock();
         for _ in 0..1024 {
-            writeln!(stdout, "{{\"type\":\"message_update\",\"data\":\"{}\"}}", "x".repeat(256))
-                .unwrap();
+            writeln!(
+                stdout,
+                "{{\"type\":\"message_update\",\"data\":\"{}\"}}",
+                "x".repeat(256)
+            )
+            .unwrap();
             writeln!(stderr, "{}", "x".repeat(256)).unwrap();
         }
         stdout.flush().unwrap();
@@ -26,11 +30,11 @@ fn main() {
     let exe = std::env::current_exe().unwrap();
     let dir = std::env::current_dir().unwrap();
     for mode in ["ok", "fail"] {
-        let mut rpc = JsonlRpc::spawn_command(
-            &dir, Command::new(&exe), &[mode.into()], &[], false,
-        ).unwrap();
+        let mut rpc =
+            JsonlRpc::spawn_command(&dir, Command::new(&exe), &[mode.into()], &[], false).unwrap();
         if mode == "ok" {
-            rpc.close().expect("EOF must permit output flush and exit zero");
+            rpc.close()
+                .expect("EOF must permit output flush and exit zero");
         } else {
             let error = rpc.close().unwrap_err();
             assert_eq!(error.code, "StopUnconfirmed");

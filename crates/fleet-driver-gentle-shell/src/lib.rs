@@ -59,9 +59,8 @@ fn detect_version(
     // Node startup can be slower on native Windows (cold cache, scanning).
     // Only the read-only version probe gets this bounded budget.
     #[cfg(windows)]
-    let output = fleet_agent::process::version_stdout_with_timeout(
-        command, Duration::from_secs(10),
-    )?;
+    let output =
+        fleet_agent::process::version_stdout_with_timeout(command, Duration::from_secs(10))?;
     #[cfg(not(windows))]
     let output = fleet_agent::process::version_stdout(command)?;
     let stdout = String::from_utf8_lossy(&output);
@@ -322,7 +321,9 @@ impl GentleShellDriver {
                         "cannot start contained provider version probe" => "contained_spawn_failed",
                         "Gentle Shell version probe returned no version" => "no_version",
                         "provider JS must be an existing absolute .js/.mjs/.cjs" => "invalid_js",
-                        "native provider .exe not found in absolute PATH entries" => "exe_not_found",
+                        "native provider .exe not found in absolute PATH entries" => {
+                            "exe_not_found"
+                        }
                         "provider override must be an existing absolute .exe" => "invalid_exe",
                         "configure either provider EXE or JS, not both" => "ambiguous_launcher",
                         _ => "other_probe_failure",

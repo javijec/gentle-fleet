@@ -512,11 +512,16 @@ impl JsonlRpc {
                 Ok(Some(status)) => {
                     let diagnostic = {
                         let lines = self.stderr_tail.lock().expect("stderr log poisoned");
-                        ["EPIPE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END",
-                            "ERR_USE_AFTER_CLOSE", "EBADF"]
-                            .into_iter()
-                            .find(|label| lines.iter().any(|line| line.contains(label)))
-                            .unwrap_or("unknown")
+                        [
+                            "EPIPE",
+                            "ERR_STREAM_DESTROYED",
+                            "ERR_STREAM_WRITE_AFTER_END",
+                            "ERR_USE_AFTER_CLOSE",
+                            "EBADF",
+                        ]
+                        .into_iter()
+                        .find(|label| lines.iter().any(|line| line.contains(label)))
+                        .unwrap_or("unknown")
                     };
                     return Err(RpcError::new(
                         "StopUnconfirmed",

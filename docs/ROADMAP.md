@@ -225,3 +225,8 @@ W2-A: candidato de Job Objects publicado, UNTESTED. El gate anterior 0203b5c
 queda como evidencia histórica. Ver P7_W2_RESULTS.md; no iniciar W2-B hasta
 validar y revisar contención. La revisión parcial de W1 ya figura al comienzo
 de P7_W1_RESULTS.md; no equivale a aceptación formal ni release.
+
+Por instrucción del propietario, comenzar implementación/pruebas de B–E en
+paralelo con el smoke común nativo W2. NO-GO anterior se mantiene como gate
+de aceptación, no como bloqueo administrativo de desarrollo. W1/W2-A
+formal, F/G y release no se declaran cerrados; no merge a main.

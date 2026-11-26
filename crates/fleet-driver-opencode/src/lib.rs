@@ -177,6 +177,21 @@ impl OpenCodeDriver {
         Ok(true)
     }
 
+    fn installed_version() -> Result<ProviderVersion, AgentError> {
+        let command =
+            fleet_agent::process::provider_command("opencode", "FLEET_OPENCODE_BIN", None)?;
+        let stdout = fleet_agent::process::version_stdout(&command)?;
+        let text = String::from_utf8_lossy(&stdout);
+        let version = text
+            .split_whitespace()
+            .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .ok_or_else(|| AgentError {
+                code: "provider_unavailable".into(),
+                message: "OpenCode version probe returned no version".into(),
+            })?;
+        Ok(ProviderVersion::parse(version.to_owned()))
+    }
+
     fn spawn_owned_server(&mut self) -> Result<(), AgentError> {
         let workspace = self.workspace.clone().ok_or_else(|| AgentError {
             code: "invalid_workspace".into(),
@@ -553,6 +568,15 @@ impl OpenCodeDriver {
     /// Comprobación barata para `ListAgents`: no crea sesión ni levanta un
     /// servidor. Detecta versión real cuando el servicio de usuario responde.
     pub fn probe(&mut self) -> ProviderDescriptor {
+        // Explicit owned mode does not inspect or attach to the user's service.
+        if std::env::var_os("FLEET_OPENCODE_MODE").as_deref() == Some(std::ffi::OsStr::new("owned")) {
+            self.descriptor.mode = RunnerMode::Owned;
+            self.descriptor.availability = ProviderAvailability::Unavailable;
+            if let Ok(version) = Self::installed_version() {
+                self.descriptor.version = version;
+            }
+            return self.descriptor.clone();
+        }
         match self.attach_to_service() {
             Ok(true) => {
                 if self.check_version().is_err() {
@@ -564,17 +588,8 @@ impl OpenCodeDriver {
                 self.descriptor.availability = ProviderAvailability::Unavailable;
                 // Installation evidence is not proof of a compatible service.
                 #[cfg(windows)]
-                if let Ok(stdout) =
-                    fleet_agent::process::provider_command("opencode", "FLEET_OPENCODE_BIN", None)
-                        .and_then(|command| fleet_agent::process::version_stdout(&command))
-                {
-                    let version = String::from_utf8_lossy(&stdout);
-                    if let Some(part) = version
-                        .split_whitespace()
-                        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
-                    {
-                        self.descriptor.version = ProviderVersion::parse(part.to_owned());
-                    }
+                if let Ok(version) = Self::installed_version() {
+                    self.descriptor.version = version;
                 }
             }
             Err(_) => {
@@ -592,13 +607,34 @@ impl AgentDriver for OpenCodeDriver {
 
     fn open(&mut self, ctx: LaunchContext) -> Result<String, AgentError> {
         self.workspace = Some(ctx.workspace.clone());
-        self.mode = ctx.mode;
-        let attached = match ctx.mode {
+        self.mode = if ctx.mode == RunnerMode::Auto {
+            match std::env::var("FLEET_OPENCODE_MODE") {
+                Ok(value) if value == "owned" => RunnerMode::Owned,
+                Ok(value) if value == "attached" => RunnerMode::Attached,
+                Ok(value) if value == "auto" => RunnerMode::Auto,
+                Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(AgentError {
+                        code: "InvalidArgument".into(),
+                        message: "FLEET_OPENCODE_MODE must be auto, owned or attached".into(),
+                    });
+                }
+                Err(std::env::VarError::NotPresent) => RunnerMode::Auto,
+            }
+        } else {
+            ctx.mode
+        };
+        let attached = match self.mode {
             RunnerMode::Attached => self.attach_to_service()?,
             RunnerMode::Owned => false,
             RunnerMode::Auto => self.attach_to_service()?,
         };
         if !attached {
+            if self.mode == RunnerMode::Attached {
+                return Err(AgentError {
+                    code: "provider_unavailable".into(),
+                    message: "no existing OpenCode service to attach".into(),
+                });
+            }
             self.spawn_owned_server()?;
         }
         let result = (|| {

@@ -114,3 +114,16 @@ modifican plazos ni producción. La causa del error real de stop sigue sin
 confirmar; si stderr no cierra o no coincide, el fixture sigue fallando.
 UNTESTED: repetir CloseBlocked dirigido varias veces y después gate w1f
 sobre mismo SHA limpio. No declarar W2-A aceptada con este fallo.
+
+## Validación y avance paralelo solicitado por propietario
+
+PASS del gate w1f y repeticiones CloseBlocked reportado tras el candidato
+4a7d44c; no se adjuntó nuevo informe original ni SHA ejecutado. Se autoriza
+por el propietario comenzar verticales reales B–E en paralelo sin cerrar
+formalmente W1/W2-A ni reducir gates. Candidato común: smoke Windows con
+un daemon y workspace por proveedor, chat real, streaming, operación y
+replay tipado JSONL, lectura de controles, stop; opcionales herramienta de
+lectura y recovery tras restart de daemon. Modo OpenCode explícito; attached
+sin fallback owned. UNTESTED; no se ejecutaron prompts ni CI aquí. Pi sigue
+bloqueado si su versión instalada es 1.0.4. Aprobaciones, interrupt,
+aislamiento simultáneo y controles efectivos requieren pruebas adicionales.

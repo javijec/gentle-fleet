@@ -262,3 +262,9 @@ Sin evidencia nativa nueva. Mantener full Windows/Linux y regresiones W1 sobre e
 W2-A contención candidata: no inferir PASS del gate 0203b5c para el nuevo
 código. Requiere prueba nativa de job privado y EOF, centinela independiente,
 regresión Linux y revisión de startup/crash; mantener W1 y release sin cambios.
+
+W2-B–E: smoke real opt-in común Windows `tests/windows/w2-providers.py`.
+El estado PASS de un proveedor acredita únicamente los checks ejecutados,
+no los omitidos (aprobaciones, interrupción, controles mutables, aislamiento
+entre proveedores y recovery durante turno). El gate fake/determinista no
+sustituye smoke real. Sin cambios a requisitos de release.

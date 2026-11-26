@@ -122,6 +122,10 @@ fn run() -> Result<(), String> {
             let mut client = Client::connect(selected_host.as_deref())?;
             match client.call(Request::ListAgents)? {
                 Response::Agents { agents } => {
+                    if args.iter().any(|a| a == "--json") {
+                        println!("{}", serde_json::to_string(&agents).map_err(|e| e.to_string())?);
+                        return Ok(());
+                    }
                     for agent in agents {
                         println!(
                             "{}\t{}\t{}\t{}\t{}",
@@ -234,7 +238,7 @@ fn host_command(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id>\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents\n  fleetctl [--host alias] pending [--inspect-torn]  # list durable remote operation keys"
+    "usage:\n  fleetctl workspace add <path>\n  fleetctl workspace list\n  fleetctl session create --workspace <id> --provider <id>\n  fleetctl session list\n  fleetctl prompt <session_id> <text>\n  fleetctl interrupt <session_id> <turn_id>\n  fleetctl controls <session_id> [--json]\n  fleetctl set-control <session_id> <name> <value> [turn|session]\n  fleetctl native-sessions <provider_id>\n  fleetctl import-history <session_id> <provider_id> <native_ref> [operation_key]\n  fleetctl watch <session_id> [--since N] [--until-turn-end] [--count N] [--json]\n  fleetctl stop <session_id>\n  fleetctl timeline <session_id> [--since N] [--limit N] [--json]\n  fleetctl operation <operation_key>\n  fleetctl approvals [--session <id>]\n  fleetctl approval <approval_id>\n  fleetctl answer <approval_id> <decision> [name=value[,value] ...]\n  fleetctl agents [--json]\n  fleetctl [--host alias] pending [--inspect-torn]  # list durable remote operation keys"
         .into()
 }
 
@@ -354,6 +358,10 @@ fn controls(args: &[String], selected_host: Option<&str>) -> Result<(), String> 
     let mut client = Client::connect(selected_host)?;
     match client.call(Request::ListControls { session_id })? {
         Response::Controls { controls } => {
+            if args.iter().any(|a| a == "--json") {
+                println!("{}", serde_json::to_string(&controls).map_err(|e| e.to_string())?);
+                return Ok(());
+            }
             for control in controls {
                 println!(
                     "{}\t{}\t{}\t{}",
@@ -461,6 +469,7 @@ fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
         .map_err(|e| format!("invalid --since: {e}"))?
         .unwrap_or(0);
     let until_turn_end = args.iter().any(|a| a == "--until-turn-end");
+    let json = args.iter().any(|a| a == "--json");
     let count = flag(args, "--count")
         .map(|value| value.parse::<usize>())
         .transpose()
@@ -482,7 +491,11 @@ fn watch(args: &[String], selected_host: Option<&str>) -> Result<(), String> {
             }
             Err(error) => return Err(error.to_string()),
         };
-        println!("{}\t{}", event.seq, describe(&event.kind));
+        if json {
+            println!("{}", serde_json::to_string(&event).map_err(|e| e.to_string())?);
+        } else {
+            println!("{}\t{}", event.seq, describe(&event.kind));
+        }
         printed += 1;
         if count.is_some_and(|limit| printed >= limit) {
             return Ok(());
@@ -557,13 +570,18 @@ fn timeline(args: &[String], selected_host: Option<&str>) -> Result<(), String> 
         limit,
     })? {
         Response::Timeline { events, .. } => {
+            let json = args.iter().any(|a| a == "--json");
             for event in events {
-                println!(
-                    "{}\t{}\t{}",
-                    event.seq,
-                    event.event_id,
-                    describe(&event.kind)
-                );
+                if json {
+                    println!("{}", serde_json::to_string(&event).map_err(|e| e.to_string())?);
+                } else {
+                    println!(
+                        "{}\t{}\t{}",
+                        event.seq,
+                        event.event_id,
+                        describe(&event.kind)
+                    );
+                }
             }
             Ok(())
         }

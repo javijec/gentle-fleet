@@ -29,3 +29,10 @@ Fleet. Las cuatro comprobaciones de catálogo Fleet y sesiones reales están
 | Codex | `C:\Users\javij\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe` | 0.170.0 | Inferior al mínimo 0.171 del driver |
 | Pi | `C:\Users\javij\.pi\agent\bin\pi.cmd` | 1.0.4 | Shim CMD; inferior al mínimo 1.6 del driver |
 | Gentle Shell | `C:\Users\javij\AppData\Roaming\npm\gentle-shell.cmd` | 4.8.0-main.a9d3f5661621 | Shim CMD; reporta Pi 1.6.0 integrado |
+
+## Ejecución conjunta candidata B–E
+
+Harness real opt-in por proveedor, con reporte JSON bajo reports/w2.
+Todos los smokes nuevos UNTESTED. Las opciones --tools y --recovery son
+adicionales y no se marcan PASS si no se ejecutan. Pi 1.0.4 permanece
+incompatible; actualizar/seleccionar una instalación >=1.6,<2 explícitamente.

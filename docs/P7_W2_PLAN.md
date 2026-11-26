@@ -113,3 +113,17 @@ w1f si cambia infraestructura compartida; revisar resultados y logs originales.
 Además, fixture de root bloqueado y descendiente activo, y prueba de muerte
 del propietario tras asignación que espera el handle del hijo. No equiparar
 esta última con una prueba de crash durante creación del proceso suspendido.
+
+## Ejecución paralela B–E (autorizada por propietario)
+
+Los cuatro drivers ya implementan el contrato de sesiones; no reescribirlos
+ni declarar funcionalidades nativas sin evidencia. Acelerar con una vertical
+común chat/streaming/operación/replay/stop y pruebas dirigidas independientes.
+Usar `python tests/windows/w2-providers.py --real` desde build limpio, o
+`--provider opencode|codex|pi|gentle-shell`; `--tools` y `--recovery` agregan
+turnos reales explícitos. Reportes por proveedor, ningún prompt reintentado,
+ninguna aprobación automática. `--opencode-mode owned` permite prueba de
+servidor propio, `attached` (default del harness) exige servicio existente.
+JSONL público opt-in para timeline/watch evita romper texto multilinea.
+No se amplían rangos ni se cambia el default de OpenCode en producción.
+La aceptación individual, conformidad F y aceptación G siguen pendientes.

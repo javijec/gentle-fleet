@@ -18,3 +18,16 @@ proveedores; ver [matriz](P7_W2_PROVIDER_MATRIX.md). No se ejecutó una sesión,
 descubrimiento mediante API Fleet, ni conformidad real. El gate W2-A Windows y
 Linux sobre el mismo SHA limpio está pendiente. No se han verificado todos
 los componentes ni corregido los defectos P0/P1 de este alcance.
+
+## W2-A — candidato de infraestructura
+
+Se agrega módulo común de lanzamiento y sondeo acotado en fleet-agent,
+composición Command en transporte JSONL, ruta de usuario portable, soporte
+explícito Node+JS sin shell y limpieza de arranque OpenCode. Las pruebas
+unitarias del sondeo ejecutan el propio binario de tests como fixture; incluyen
+exit no cero, exceso de salida, timeout y resolución EXE en Windows.
+No hay ejecución de Cargo ni de CI nativo acreditada. Estado UNTESTED / NO-GO.
+Quedan por validar entrypoints de las instalaciones reales, descubrimiento
+Fleet, argumentos de proceso adversos, descendientes y recuperación; W1-F
+formal permanece pendiente de evidencia original. No cambios de versiones,
+main, workflows, ni gates de release.

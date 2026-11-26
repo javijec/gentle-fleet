@@ -21,7 +21,7 @@ Inicio de implementación por instrucción del propietario tras PASS integral
 W1-F reportado. La revisión formal de los JSON/logs W1 sigue pendiente;
 no se reduce su gate ni se declara release. Rama feature/p7-windows-native.
 
-## Cortes (orden de trabajo elegido)
+## Cortes históricos (reemplazados por el alcance vigente)
 
 - W2-A Codex: ejecutable nativo, descubrimiento/versionado, chat y streaming,
   replay, cierre. Después herramientas, controles, aprobación interactiva,
@@ -37,7 +37,7 @@ no se reduce su gate ni se declara release. Rama feature/p7-windows-native.
   un OpenCode de otra API/version es compatible.
 - W2-E conformidad cruzada, aislamiento y gate full Windows/Linux.
 
-## W2-A primer corte: Codex chat
+## W2-C — candidato histórico: Codex chat
 
 Rango actual del driver >=0.171,<1. La versión concreta instalada aún no
 se conoce. En Windows se resuelve un codex.exe absoluto desde PATH o desde
@@ -70,3 +70,24 @@ modelo; ejecutar full Windows/Linux mismo SHA (modo w1f conserva estabilidad
 de W1). El smoke real no se añade a CI por credenciales y costo. Registrar
 versión, SHA, evidencia por proveedor, resultados FAIL/BLOCKED/UNTESTED.
 No declarar W2-A cerrada con este único smoke. Estado UNTESTED; no main/W4.
+
+## W2-A — política común candidata
+
+Windows resuelve únicamente ejecutables EXE absolutos desde PATH absoluto o
+por configuración explícita FLEET_CODEX_BIN, FLEET_OPENCODE_BIN,
+FLEET_PI_BIN y FLEET_GENTLE_SHELL_BIN. Pi y Gentle Shell admiten
+FLEET_PI_JS / FLEET_GENTLE_SHELL_JS con la ruta absoluta al entrypoint JS real
+(.js/.mjs/.cjs) de una instalación confiable y FLEET_NODE_BIN opcional con
+node.exe absoluto. No ejecutar ni interpretar CMD/PS1, ni adivinar el contenido
+de shims, ni usar un shell. No configurar BIN y JS simultáneamente.
+Linux conserva resolución PATH. Los sondeos --version de Codex, Pi y Gentle
+Shell tienen plazo de 5s, máximo 64 KiB stdout, stdin/stderr nulos, exit 0.
+No consultar controles de un proveedor incompatible. USERPROFILE en Windows,
+HOME en Unix; no usar TEMP como raíz de estado de usuario. La ruta efectiva
+OpenCode Windows sigue por comprobar en W2-B. El timeout mata/recolecta solo
+el hijo directo; la herencia de stdout por descendientes puede dejar lector
+pendiente y requiere validación/contención nativa antes de aceptación.
+
+Gate pendiente: cargo fmt, clippy, tests y full nativo en ambos hosts con
+mismo SHA limpio. Pruebas de proceso reales de argumentos, Unicode y árbol
+de procesos aún pendientes. No ampliar compatibilidad ni marcar PASS sin logs.

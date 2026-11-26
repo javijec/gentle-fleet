@@ -10,7 +10,6 @@ use fleet_rpc_jsonl as rpc;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use fleet_agent::{
@@ -47,15 +46,13 @@ fn map_rpc(error: RpcError) -> AgentError {
     }
 }
 
+fn pi_command() -> Result<std::process::Command, AgentError> {
+    fleet_agent::process::provider_command("pi", "FLEET_PI_BIN", Some("FLEET_PI_JS"))
+}
+
 fn detect_version() -> Result<ProviderVersion, AgentError> {
-    let output = Command::new("pi")
-        .arg("--version")
-        .output()
-        .map_err(|error| AgentError {
-            code: "provider_unavailable".into(),
-            message: format!("cannot execute pi: {error}"),
-        })?;
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let output = fleet_agent::process::version_stdout(pi_command()?)?;
+    let text = String::from_utf8_lossy(&output).trim().to_string();
     if text.is_empty() {
         return Err(AgentError {
             code: "provider_unavailable".into(),
@@ -100,13 +97,14 @@ fn session_refs() -> &'static std::sync::Mutex<HashMap<String, PathBuf>> {
     REFS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-fn native_sessions_dir() -> PathBuf {
-    std::env::var("PI_SESSION_DIR")
+fn native_sessions_dir() -> Result<PathBuf, AgentError> {
+    let path = std::env::var_os("PI_SESSION_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-                .join(".pi/agent/sessions")
-        })
+        .or_else(|| fleet_agent::process::user_home().map(|home| home.join(".pi/agent/sessions")));
+    path.filter(|path| path.is_absolute()).ok_or_else(|| AgentError {
+        code: "session_dir_unavailable".into(),
+        message: "Pi session directory requires an absolute path or a user home".into(),
+    })
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -197,7 +195,8 @@ fn discover_controls() -> Vec<ControlState> {
             "--session-dir".to_string(),
             dir.to_string_lossy().into_owned(),
         ];
-        let mut rpc = PiRpc::spawn(Path::new(&dir), "pi", &args, &[]).map_err(map_rpc)?;
+        let mut rpc = PiRpc::spawn_command(Path::new(&dir), pi_command()?, &args, &[], false)
+            .map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), Duration::from_secs(5))
             .map_err(map_rpc)?;
@@ -398,7 +397,8 @@ impl AgentDriver for PiDriver {
             "--session-dir".to_string(),
             session_dir.to_string_lossy().into_owned(),
         ];
-        let mut rpc = PiRpc::spawn(&ctx.workspace, "pi", &args, &[]).map_err(map_rpc)?;
+        let mut rpc = PiRpc::spawn_command(&ctx.workspace, pi_command()?, &args, &[], false)
+            .map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
@@ -676,7 +676,8 @@ impl DriverFactory for PiFactory {
 
     fn probe(&self) -> ProviderDescriptor {
         let mut descriptor = PiDriver::new().probe();
-        if descriptor.controls.is_empty() {
+        if descriptor.availability == ProviderAvailability::Available && descriptor.controls.is_empty()
+        {
             descriptor.controls = discover_controls();
         }
         descriptor
@@ -685,7 +686,7 @@ impl DriverFactory for PiFactory {
     /// Descubrimiento no intrusivo de archivos de sesión nativos. Nunca crea
     /// runner ni adopta procesos; la adopción con escritura sigue bloqueada.
     fn list_native_sessions(&self) -> Result<Vec<NativeSessionInfo>, AgentError> {
-        let root = native_sessions_dir();
+        let root = native_sessions_dir()?;
         let mut result = Vec::new();
         collect_session_files(&root, &root, &mut result, 0)?;
         Ok(result)

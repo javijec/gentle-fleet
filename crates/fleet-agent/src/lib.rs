@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub mod fake;
+pub mod process;
 
 use fleet_domain::{
     ProviderDescriptor, ProviderId, ProviderVersion, RunnerMode, SessionState, TurnId, VersionRange,

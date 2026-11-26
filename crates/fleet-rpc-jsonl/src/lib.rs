@@ -182,7 +182,23 @@ impl JsonlRpc {
         environment: &[(&str, &str)],
         capture_widgets: bool,
     ) -> Result<Self, RpcError> {
-        let mut command = Command::new(program);
+        Self::spawn_command(
+            workspace,
+            Command::new(program),
+            args,
+            environment,
+            capture_widgets,
+        )
+    }
+
+    /// Spawn a pre-resolved executable with its fixed prefix arguments.
+    pub fn spawn_command(
+        workspace: &Path,
+        mut command: Command,
+        args: &[String],
+        environment: &[(&str, &str)],
+        capture_widgets: bool,
+    ) -> Result<Self, RpcError> {
         command.args(args).current_dir(workspace);
         for (key, value) in environment {
             command.env(key, value);
@@ -477,7 +493,13 @@ impl JsonlRpc {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
             match self.child.try_wait() {
-                Ok(Some(_)) => return Ok(()),
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(_)) => {
+                    return Err(RpcError::new(
+                        "StopUnconfirmed",
+                        "provider exited unsuccessfully after close",
+                    ));
+                }
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(error) => return Err(RpcError::new("StopUnconfirmed", error.to_string())),
             }
@@ -486,8 +508,19 @@ impl JsonlRpc {
         let _ = self.child.wait();
         Err(RpcError::new(
             "StopUnconfirmed",
-            "provider required SIGKILL after close",
+            "provider required forced termination after close",
         ))
+    }
+}
+
+impl Drop for JsonlRpc {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
+        drop(self.stdin.take());
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 

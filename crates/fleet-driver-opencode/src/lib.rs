@@ -8,7 +8,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -119,14 +119,13 @@ impl OpenCodeDriver {
         driver
     }
 
-    fn service_state_path() -> PathBuf {
+    fn service_state_path() -> Option<PathBuf> {
         let state = std::env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
-            })
-            .unwrap_or_else(std::env::temp_dir);
-        state.join("opencode").join("service.json")
+            .or_else(|| fleet_agent::process::user_home().map(|home| home.join(".local/state")))?;
+        state
+            .is_absolute()
+            .then(|| state.join("opencode").join("service.json"))
     }
 
     fn auth(&self) -> Result<String, AgentError> {
@@ -140,7 +139,9 @@ impl OpenCodeDriver {
     }
 
     fn attach_to_service(&mut self) -> Result<bool, AgentError> {
-        let path = Self::service_state_path();
+        let Some(path) = Self::service_state_path() else {
+            return Ok(false);
+        };
         if !path.is_file() {
             return Ok(false);
         }
@@ -192,7 +193,11 @@ impl OpenCodeDriver {
             .port();
         drop(listener);
 
-        let mut child = Command::new("opencode")
+        let mut child = fleet_agent::process::provider_command(
+            "opencode",
+            "FLEET_OPENCODE_BIN",
+            None,
+        )?
             .args([
                 "serve",
                 "--hostname",
@@ -201,6 +206,7 @@ impl OpenCodeDriver {
                 &port.to_string(),
             ])
             .current_dir(&workspace)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -212,7 +218,7 @@ impl OpenCodeDriver {
             code: "provider_unavailable".into(),
             message: "opencode serve stdout is missing".into(),
         })?;
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(32);
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if tx.send(line).is_err() {
@@ -237,10 +243,15 @@ impl OpenCodeDriver {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let password = password.ok_or_else(|| AgentError {
-            code: "provider_unavailable".into(),
-            message: "opencode serve did not print a password".into(),
-        })?;
+        let Some(password) = password.filter(|value| !value.is_empty() && listening) else {
+            drop(rx);
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AgentError {
+                code: "provider_unavailable".into(),
+                message: "opencode serve did not announce readiness and password".into(),
+            });
+        };
         self.base_url = Some(format!("http://127.0.0.1:{port}"));
         self.password = Some(password);
         self.child = Some(child);

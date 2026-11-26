@@ -12,7 +12,6 @@ use fleet_rpc_jsonl as rpc;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use fleet_agent::{
@@ -46,15 +45,17 @@ fn map_rpc(error: fleet_rpc_jsonl::RpcError) -> AgentError {
     }
 }
 
+fn shell_command() -> Result<std::process::Command, AgentError> {
+    fleet_agent::process::provider_command(
+        PROGRAM,
+        "FLEET_GENTLE_SHELL_BIN",
+        Some("FLEET_GENTLE_SHELL_JS"),
+    )
+}
+
 fn detect_version() -> Result<(ProviderVersion, String), AgentError> {
-    let output = Command::new(PROGRAM)
-        .arg("--version")
-        .output()
-        .map_err(|error| AgentError {
-            code: "provider_unavailable".into(),
-            message: format!("cannot execute gentle-shell: {error}"),
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let output = fleet_agent::process::version_stdout(shell_command()?)?;
+    let stdout = String::from_utf8_lossy(&output);
     let shell_version = stdout
         .lines()
         .find_map(|line| {
@@ -205,7 +206,7 @@ fn discover_controls() -> Vec<ControlState> {
     let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
     let dir = std::env::temp_dir();
     let result = (|| -> Result<Vec<ControlState>, AgentError> {
-        let mut rpc = JsonlRpc::spawn_with_widgets(&dir, PROGRAM, &args, &environment, true)
+        let mut rpc = JsonlRpc::spawn_command(&dir, shell_command()?, &args, &environment, true)
             .map_err(map_rpc)?;
         let mut desktop = DesktopClient::new();
         desktop.negotiate(&mut rpc).map_err(AgentError::from)?;
@@ -448,7 +449,7 @@ impl AgentDriver for GentleShellDriver {
         ];
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
         let mut rpc =
-            JsonlRpc::spawn_with_widgets(&ctx.workspace, PROGRAM, &args, &environment, true)
+            JsonlRpc::spawn_command(&ctx.workspace, shell_command()?, &args, &environment, true)
                 .map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), CALL_TIMEOUT)
@@ -824,6 +825,9 @@ impl DriverFactory for GentleShellFactory {
 
     fn probe(&self) -> ProviderDescriptor {
         let mut descriptor = GentleShellDriver::new().probe();
+        if descriptor.availability != ProviderAvailability::Available {
+            return descriptor;
+        }
         let mut controls = discover_controls();
         for control in descriptor.controls.drain(..) {
             if control.name == "embedded_pi"
@@ -842,7 +846,13 @@ impl DriverFactory for GentleShellFactory {
         let args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
         let mut rpc =
-            JsonlRpc::spawn_with_widgets(&std::env::temp_dir(), PROGRAM, &args, &environment, true)
+            JsonlRpc::spawn_command(
+                &std::env::temp_dir(),
+                shell_command()?,
+                &args,
+                &environment,
+                true,
+            )
                 .map_err(map_rpc)?;
         let mut desktop = DesktopClient::new();
         let result = (|| -> Result<Vec<NativeSessionInfo>, AgentError> {

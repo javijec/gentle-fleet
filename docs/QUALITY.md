@@ -249,3 +249,7 @@ sus requisitos `cross-user-ipc-acl`, `runtime-acl-delete-child` e
 ## P7-H — criterio headless (25/11/2026)
 
 El motor no incluye una interfaz gráfica. El gate del workspace incorpora `scripts/ci/check_headless.py` con metadata Cargo locked. Solo se retiran el fixture gráfico y el smoke visual; el release exige `external-sdk-smoke` con evidencia de consumidor headless. Se mantienen todos los checks de seguridad, backend, procesos, persistencia, proveedores, SSH físico, IPC/ACL entre cuentas, integridad runtime, identidad y cancelación. La aceptación W1-B/W1-C y el diferimiento explícito de dos SID no cambian. El perfil full requiere resultados nativos Windows/Linux del mismo SHA limpio. Un lockfile editado o un informe de compilación histórica no demuestran aceptación.
+
+### P7-W2-A — candidato común
+
+Sin evidencia nativa nueva. Mantener full Windows/Linux y regresiones W1 sobre el mismo SHA limpio; no contar los fixtures como proveedores reales. El sondeo acotado y la resolución sin shell requieren validación nativa; la contención de descendientes y los entrypoints reales siguen pendientes. Ver P7_W2_PLAN.md.

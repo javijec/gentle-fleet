@@ -58,3 +58,10 @@ casos adversos de identidad/cancelación no reproducidos, proveedores reales
 y SSH físico faltante siguen pendientes según QUALITY.md y LOCAL_CI.md.
 No crear cuentas, no requerir otra PC Windows, no GPUI, no merge a main.
 W2 se inicia después de aceptación W1; no se implementa en este corte.
+
+
+### W1-F — regresión intermitente SQLite SHM (26/11/2026)
+
+El operador aportó `reports/both/96d9576a21f94221a28348d7137f68b0/lifecycle-19.log`: tras completar ambos turnos, timeline falló con `insecure_store_file: SQLite -shm validation: Fleet data file must be a regular, unlinked file`. El gate W1-F no se acepta: se alcanzó la repetición 19, no 20/20. HEAD observado `322a328`, SHA ejecutado pendiente de informe. La condición anterior mezclaba directorio/reparse y todo número de enlaces distinto de uno. Hipótesis principal: una conexión SQLite cerró y eliminó su sidecar mientras el handle de metadata seguía vivo. No se dispone del contador de enlaces original ni reproducción sincronizada del fallo exacto.
+
+Corrección candidata: separar atributos inseguros y contador; cero enlaces únicamente en WAL/SHM/journal provoca ERROR_DELETE_PENDING para reutilizar el retry acotado existente (10 reintentos de 10 ms). Se vuelve a abrir y validar por nombre, incluidos propietario, DACL y exactamente un enlace; la desaparición real del sidecar sigue siendo normal. Cero enlaces persistente falla; base principal, journals SDK y demás archivos no admiten este retry nuevo. Directorios, reparse points y múltiples enlaces se rechazan inmediatamente. Se conservan checks ACL y límites, sin tocar SQLite ni datos del usuario. Regresión determinista de clasificación/retry y reemplazo por hardlink; se conserva churn concurrente existente. Estado UNTESTED: ejecutar tests de protocolo/store Windows y gate W1-F completo sobre nuevo SHA limpio. No se declara resuelto el fallo original hasta evidencia; W1-C mantiene su aceptación histórica pero la regresión bloquea W1-F. No se modifica main ni se inicia W2.

@@ -1050,6 +1050,94 @@ fn sidecar_validation_retries_transient_os_denial_but_never_accepts_persistent_d
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 }
 
+// A metadata handle can outlive the last directory entry for a SQLite
+// sidecar. Zero links is never valid evidence of a private live file.
+// For sidecars only, request a fresh bounded validation by name; never
+// accept the old handle, skip ACL checks on a replacement, or retry a
+// positive hardlink count, directory, or reparse point as deletion.
+fn validate_data_file_shape(attributes: u32, links: u32, sqlite_sidecar: bool) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    if attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        return Err(invalid(
+            "Fleet data file must be a regular file, not a directory or reparse point",
+        ));
+    }
+    match links {
+        1 => Ok(()),
+        0 if sqlite_sidecar => Err(io::Error::from_raw_os_error(
+            windows_sys::Win32::Foundation::ERROR_DELETE_PENDING as i32,
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("Fleet data file must have exactly one link (observed {links})"),
+        )),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn zero_link_sidecar_reopens_by_name_without_weakening_file_shape() {
+    use windows_sys::Win32::Foundation::ERROR_DELETE_PENDING;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    // The same metadata is invalid for the persistent DB and other data.
+    assert!(validate_data_file_shape(FILE_ATTRIBUTE_NORMAL, 0, false).is_err());
+    let mut calls = 0;
+    retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        // First observation is an unlinked old handle. The next validation
+        // must run from scratch on the current pathname.
+        validate_data_file_shape(FILE_ATTRIBUTE_NORMAL, if calls == 1 { 0 } else { 1 }, true)
+    })
+    .unwrap();
+    assert_eq!(calls, 2);
+
+    calls = 0;
+    let error = retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        validate_data_file_shape(FILE_ATTRIBUTE_NORMAL, 0, true)
+    })
+    .unwrap_err();
+    assert_eq!(calls, 11);
+    assert_eq!(error.raw_os_error(), Some(ERROR_DELETE_PENDING as i32));
+
+    // An unsafe replacement on the fresh validation must fail immediately.
+    calls = 0;
+    let error = retry_sqlite_sidecar_validation(|| {
+        calls += 1;
+        validate_data_file_shape(
+            FILE_ATTRIBUTE_NORMAL,
+            if calls == 1 { 0 } else { 2 },
+            true,
+        )
+    })
+    .unwrap_err();
+    assert_eq!(calls, 2);
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("observed 2"));
+
+    for (attributes, links) in [
+        (FILE_ATTRIBUTE_NORMAL, 2),
+        (FILE_ATTRIBUTE_DIRECTORY, 0),
+        (FILE_ATTRIBUTE_REPARSE_POINT, 0),
+        (FILE_ATTRIBUTE_REPARSE_POINT, 1),
+    ] {
+        calls = 0;
+        let error = retry_sqlite_sidecar_validation(|| {
+            calls += 1;
+            validate_data_file_shape(attributes, links, true)
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+}
+
 impl DataDirectory {
     pub fn open(path: &Path) -> io::Result<Self> {
         validate_data_path(path)?;
@@ -1077,9 +1165,9 @@ impl DataDirectory {
             name.push(suffix);
             let path = Path::new(&name);
             let result = if suffix.is_empty() {
-                self.validate_file(path)
+                self.validate_file(path, false)
             } else {
-                retry_sqlite_sidecar_validation(|| self.validate_file(path))
+                retry_sqlite_sidecar_validation(|| self.validate_file(path, true))
             };
             result.map_err(|error| {
                 let file = if suffix.is_empty() {
@@ -1099,14 +1187,13 @@ impl DataDirectory {
         if path.parent() != Some(self.path.as_path()) || path.file_name().is_none() {
             return Err(invalid("file must be inside its guarded data directory"));
         }
-        self.validate_file(path)
+        self.validate_file(path, false)
     }
 
-    fn validate_file(&self, path: &Path) -> io::Result<()> {
+    fn validate_file(&self, path: &Path, sqlite_sidecar: bool) -> io::Result<()> {
         use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
-            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-            FILE_SHARE_DELETE, FILE_SHARE_WRITE,
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_WRITE,
         };
 
         let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -1133,11 +1220,7 @@ impl DataDirectory {
         if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut info) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        if info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
-            || info.nNumberOfLinks != 1
-        {
-            return Err(invalid("Fleet data file must be a regular, unlinked file"));
-        }
+        validate_data_file_shape(info.dwFileAttributes, info.nNumberOfLinks, sqlite_sidecar)?;
         let actual = owner_dacl_string(handle.as_raw_handle())?;
         let sid = &self.sid;
         // Accept a single inherited full-control ACE, or the equivalent

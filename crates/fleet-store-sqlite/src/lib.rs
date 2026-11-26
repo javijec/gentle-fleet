@@ -1615,6 +1615,38 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_sidecar_replacement_is_validated_after_last_connection_closes() {
+        let (store, path) = temp_store();
+        let connection = store.connection().unwrap();
+        connection
+            .execute_batch("CREATE TABLE replacement_probe (id INTEGER PRIMARY KEY);")
+            .unwrap();
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push("-shm");
+        let sidecar = PathBuf::from(sidecar);
+        assert!(sidecar.is_file());
+        store.data_directory.validate_sqlite_files(&path).unwrap();
+        drop(connection);
+        // No current SQLite connection owns the old shared-memory file.
+        assert!(!sidecar.exists(), "last connection did not remove SHM");
+        store.data_directory.validate_sqlite_files(&path).unwrap();
+
+        let target = path.with_file_name("replacement-sentinel");
+        std::fs::write(&target, b"fixture sentinel").unwrap();
+        std::fs::hard_link(&target, &sidecar).unwrap();
+        let error = store.connection().unwrap_err();
+        assert_eq!(error.code, "insecure_store_file");
+        assert!(error.message.contains("observed 2"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"fixture sentinel");
+        std::fs::remove_file(&sidecar).unwrap();
+        std::fs::remove_file(target).unwrap();
+        assert!(store.connection().is_ok());
+        drop(store);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_rejects_preexisting_unprotected_data_without_mutation() {
         let parent = std::env::temp_dir().join(format!(
             "gf-p2-unsafe-{}-{}",

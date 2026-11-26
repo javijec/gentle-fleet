@@ -1,5 +1,11 @@
 # Roadmap — Gentle Fleet Headless Agent Session Engine
 
+**Actualización W2-A (26/11/2026):** infraestructura candidata validada por
+gate automatizado `0203b5c`; aceptación técnica pendiente de auditoría y
+regresiones de descendientes y handles. **NO-GO W2-B** hasta resolver los
+P0/P1 del alcance y cumplir el gate. Ver [resultados](P7_W2_RESULTS.md) y
+[matriz](P7_W2_PROVIDER_MATRIX.md).
+
 **Decisión de alcance (25/11/2026):** Gentle Fleet es un motor de sesiones persistentes y remotas para agentes de programación, sin interfaz gráfica propia como objetivo de producto. Los entregables son daemon, runner, CLI, SDK Rust y protocolo público. Gentle Shell GPUI y otros clientes son integraciones externas opcionales; no gestionan directamente los procesos internos de Fleet.
 
 El motor y sus clientes headless son el único alcance activo. La evidencia histórica y las restricciones de calidad se conservan. No se declara ningún PASS nuevo por este cambio documental. P7-H integra main y retira GPUI; su aceptación requiere validación nativa del candidato. Los criterios de seguridad, IPC y recuperación no se reducen.

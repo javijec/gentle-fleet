@@ -1,5 +1,33 @@
 # P7-W2-A — resultados preliminares
 
+## Revisión de `0203b5c` (26/11/2026)
+
+**W2-A sigue ABIERTO; NO-GO W2-B.** El informe original
+`reports/combined/73cebebcd20d4225b500695d49ca0674/` y los informes
+Windows/Linux registran `0203b5c40eb2cd39e0c393c2aaabdcf6961d345c`:
+AUTOMATED_PASS, 49 checks Windows y 77 Linux, sin FAIL/BLOCKED/SKIP a
+nivel de check. Los diez logs Windows de protocolo muestran 25 tests PASS cada
+uno; las veinte repeticiones Lifecycle incluyen sus dos aserciones PASS.
+Los logs de Cargo muestran fleet-agent 13 tests Windows y 12 Linux PASS, y
+el fixture de argumentos nativos PASS en ambos. La prueba real opt-in
+Gentle Shell está ignored; no se convierte en PASS. La revisión del gate
+histórico `8662aea` está en P7_W1_RESULTS.md.
+
+Un daemon Windows aislado ejecutó `fleetctl agents`, usando Node directamente
+con entrypoints JS explícitos de Pi y Gentle Shell: ver la matriz. No se
+enviaron prompts, instalaron proveedores ni cambiaron rangos de compatibilidad.
+
+Auditoría parcial de contención: el sondeo común mata y espera al hijo directo
+ante timeout, pero no contiene descendientes. Un descendiente que hereda
+stdout puede mantener vivo el lector tras el plazo; el propio código reconoce
+este límite. JSONL y OpenCode también terminan al hijo directo, no demuestran
+terminación de árbol. Es un **riesgo P1 candidato**, no una reproducción
+determinista completa: faltan fixture de descendiente/handles, análisis de
+startup y solución verificada sin carreras ni daños a procesos ajenos.
+No se modificó código de producción ni se afirma que la limpieza esté resuelta.
+Se requiere corregir los defectos confirmados, pruebas de proceso Windows y
+regresión Linux y un nuevo gate del mismo SHA limpio antes de cerrar W2-A.
+
 **Estado: ABIERTO / NO-GO.** Base actualizada `8354b19`; no hay cambios de
 infraestructura común ni pruebas nuevas acreditadas en este registro.
 

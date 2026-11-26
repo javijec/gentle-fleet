@@ -1,5 +1,10 @@
 # Pruebas, CI, aceptación y política de errores
 
+W2-A: el gate automatizado `0203b5c` pasó Windows/Linux, protocolo 10/10 y
+Lifecycle 20/20; no acredita contención de descendientes ni conformidad de
+proveedores. El cierre requiere las pruebas y correcciones pendientes de
+[P7_W2_RESULTS.md](P7_W2_RESULTS.md). Dos SID sigue diferido a release.
+
 ## Jerarquía de validación
 
 1. **Contract tests**: codificación/decodificación de requests/events; schema version negotiation; fixtures positivos y negativos; pruebas de compatibilidad entre CLI y daemon.

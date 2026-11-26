@@ -86,12 +86,23 @@ impl Client {
         let mut events = Vec::new();
         loop {
             match self.recv() {
-                Frame::Event { session_id, seq, event } => {
+                Frame::Event {
+                    session_id,
+                    seq,
+                    event,
+                } => {
                     assert_eq!(session_id, session);
                     assert_eq!(seq, event.seq);
                     events.push(event);
                 }
-                Frame::Response { request_id, result: Ok(Response::Subscribed { session_id, latest_seq }) } => {
+                Frame::Response {
+                    request_id,
+                    result:
+                        Ok(Response::Subscribed {
+                            session_id,
+                            latest_seq,
+                        }),
+                } => {
                     assert_eq!(request_id, "fixture-request");
                     assert_eq!(session_id, session);
                     return (latest_seq, events);
@@ -135,7 +146,10 @@ fn race(requests: Vec<Request>) -> Vec<Result<Response, ApiError>> {
         })
         .collect();
     barrier.wait();
-    workers.into_iter().map(|worker| worker.join().unwrap()).collect()
+    workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect()
 }
 
 fn expect_error(result: Result<Response, ApiError>, code: &str) {
@@ -143,7 +157,12 @@ fn expect_error(result: Result<Response, ApiError>, code: &str) {
 }
 
 fn operation(client: &mut Client, key: &str, status: OperationStatus) {
-    match client.call(Request::GetOperation { operation_key: key.into() }).unwrap() {
+    match client
+        .call(Request::GetOperation {
+            operation_key: key.into(),
+        })
+        .unwrap()
+    {
         Response::Operation { operation } => {
             assert_eq!(operation.operation_key, key);
             assert_eq!(operation.status, status);
@@ -153,13 +172,23 @@ fn operation(client: &mut Client, key: &str, status: OperationStatus) {
 }
 
 fn missing_operation(client: &mut Client, key: &str) {
-    expect_error(client.call(Request::GetOperation { operation_key: key.into() }), "not_found");
+    expect_error(
+        client.call(Request::GetOperation {
+            operation_key: key.into(),
+        }),
+        "not_found",
+    );
 }
 
 fn pending(client: &mut Client, session: &str, turn: &str) -> ApprovalRequest {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        match client.call(Request::ListApprovals { session_id: Some(session.into()) }).unwrap() {
+        match client
+            .call(Request::ListApprovals {
+                session_id: Some(session.into()),
+            })
+            .unwrap()
+        {
             Response::Approvals { approvals } if !approvals.is_empty() => {
                 assert_eq!(approvals.len(), 1);
                 let approval = approvals.into_iter().next().unwrap();
@@ -169,7 +198,9 @@ fn pending(client: &mut Client, session: &str, turn: &str) -> ApprovalRequest {
                 assert!(approval.decision.is_none());
                 assert!(client.timeline(session).iter().all(|event| !matches!(
                     event.kind,
-                    EventKind::ToolStarted { .. } | EventKind::TurnCompleted { .. } | EventKind::ApprovalResolved { .. }
+                    EventKind::ToolStarted { .. }
+                        | EventKind::TurnCompleted { .. }
+                        | EventKind::ApprovalResolved { .. }
                 )));
                 return approval;
             }
@@ -183,7 +214,11 @@ fn pending(client: &mut Client, session: &str, turn: &str) -> ApprovalRequest {
 
 fn receipt(response: &Response, session: &str) -> String {
     match response {
-        Response::PromptAccepted { session_id, turn_id, .. } => {
+        Response::PromptAccepted {
+            session_id,
+            turn_id,
+            ..
+        } => {
             assert_eq!(session_id, session);
             turn_id.clone()
         }
@@ -200,43 +235,89 @@ fn settled(
     answer_key: &str,
 ) -> Vec<Event> {
     let allowed = decision == "once";
-    let status = if allowed { TurnStatus::Completed } else { TurnStatus::Interrupted };
-    let approval_status = if allowed { ApprovalStatus::Accepted } else { ApprovalStatus::Rejected };
+    let status = if allowed {
+        TurnStatus::Completed
+    } else {
+        TurnStatus::Interrupted
+    };
+    let approval_status = if allowed {
+        ApprovalStatus::Accepted
+    } else {
+        ApprovalStatus::Rejected
+    };
     let deadline = Instant::now() + Duration::from_secs(15);
     let events = loop {
         let events = client.timeline(&approval.session_id);
-        if events.iter().any(|e| matches!(e.kind, EventKind::TurnCompleted { .. })) {
+        if events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::TurnCompleted { .. }))
+        {
             break events;
         }
         assert!(Instant::now() < deadline, "turn did not reach terminal");
         std::thread::sleep(Duration::from_millis(50));
     };
-    let users: Vec<_> = events.iter().filter_map(|e| match &e.kind {
-        EventKind::UserMessage { turn_id, text } => Some((turn_id, text)),
-        _ => None,
-    }).collect();
+    let users: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::UserMessage { turn_id, text } => Some((turn_id, text)),
+            _ => None,
+        })
+        .collect();
     assert_eq!(users.len(), 1);
     assert_eq!(users[0].0, &approval.turn_id);
     assert_eq!(users[0].1.as_str(), prompt_text);
-    let terminals: Vec<_> = events.iter().filter_map(|e| match &e.kind {
-        EventKind::TurnCompleted { turn_id, status } => Some((turn_id, status)),
-        _ => None,
-    }).collect();
+    let terminals: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::TurnCompleted { turn_id, status } => Some((turn_id, status)),
+            _ => None,
+        })
+        .collect();
     assert_eq!(terminals, vec![(&approval.turn_id, &status)]);
-    let resolutions: Vec<_> = events.iter().filter_map(|e| match &e.kind {
-        EventKind::ApprovalResolved { approval_id, turn_id, decision } => Some((approval_id, turn_id, decision.as_str())),
-        _ => None,
-    }).collect();
-    assert_eq!(resolutions, vec![(&approval.approval_id, &approval.turn_id, decision)]);
-    assert_eq!(events.iter().filter(|e| matches!(e.kind, EventKind::ToolStarted { .. })).count(), if allowed { 1 } else { 0 });
-    match client.call(Request::GetApproval { approval_id: approval.approval_id.clone() }).unwrap() {
+    let resolutions: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ApprovalResolved {
+                approval_id,
+                turn_id,
+                decision,
+            } => Some((approval_id, turn_id, decision.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resolutions,
+        vec![(&approval.approval_id, &approval.turn_id, decision)]
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::ToolStarted { .. }))
+            .count(),
+        if allowed { 1 } else { 0 }
+    );
+    match client
+        .call(Request::GetApproval {
+            approval_id: approval.approval_id.clone(),
+        })
+        .unwrap()
+    {
         Response::Approval { approval } => {
             assert_eq!(approval.status, approval_status);
             assert_eq!(approval.decision.as_deref(), Some(decision));
         }
         other => panic!("unexpected approval response: {other:?}"),
     }
-    operation(client, prompt_key, if allowed { OperationStatus::Completed } else { OperationStatus::Failed });
+    operation(
+        client,
+        prompt_key,
+        if allowed {
+            OperationStatus::Completed
+        } else {
+            OperationStatus::Failed
+        },
+    );
     operation(client, answer_key, OperationStatus::Completed);
     events
 }
@@ -256,7 +337,10 @@ fn main() {
     let cutoff = initial.last().expect("session creation event").seq;
     assert_eq!(slow.subscribe(a, cutoff), (cutoff, vec![]));
 
-    let candidates = [("alpha-fixture", "prompt-alpha"), ("beta-fixture", "prompt-beta")];
+    let candidates = [
+        ("alpha-fixture", "prompt-alpha"),
+        ("beta-fixture", "prompt-beta"),
+    ];
     let results = race(vec![
         prompt(a, candidates[0].0, candidates[0].1),
         prompt(a, candidates[1].0, candidates[1].1),
@@ -275,10 +359,16 @@ fn main() {
     assert_eq!(client.call(prompt(a, text, key)).unwrap(), *won);
     expect_error(client.call(prompt(a, "changed-payload", key)), "Conflict");
     missing_operation(&mut client, candidates[1 - winner].1);
-    println!("PASS: concurrent sessions, one active turn, idempotent receipt and conflict rejection");
+    println!(
+        "PASS: concurrent sessions, one active turn, idempotent receipt and conflict rejection"
+    );
 
     match slow.recv() {
-        Frame::Notice { session_id: Some(session), code, .. } => {
+        Frame::Notice {
+            session_id: Some(session),
+            code,
+            ..
+        } => {
             assert_eq!(session, a);
             assert_eq!(code, "Backpressure");
         }
@@ -302,11 +392,27 @@ fn main() {
     let (decision, answer_key) = choices[winner];
     missing_operation(&mut client, choices[1 - winner].1);
     // A's decision cannot resolve B. B is explicitly rejected.
-    assert_eq!(pending(&mut client, b, &turn_b).approval_id, approval_b.approval_id);
-    assert!(matches!(client.call(answer(&approval_b, "reject", "answer-independent")), Ok(Response::ApprovalResolved { .. })));
+    assert_eq!(
+        pending(&mut client, b, &turn_b).approval_id,
+        approval_b.approval_id
+    );
+    assert!(matches!(
+        client.call(answer(&approval_b, "reject", "answer-independent")),
+        Ok(Response::ApprovalResolved { .. })
+    ));
     let events_a = settled(&mut client, &approval_a, decision, text, key, answer_key);
-    let events_b = settled(&mut client, &approval_b, "reject", "independent-fixture", "prompt-independent", "answer-independent");
-    assert!(matches!(client.call(answer(&approval_a, decision, answer_key)), Ok(Response::ApprovalResolved { .. })));
+    let events_b = settled(
+        &mut client,
+        &approval_b,
+        "reject",
+        "independent-fixture",
+        "prompt-independent",
+        "answer-independent",
+    );
+    assert!(matches!(
+        client.call(answer(&approval_a, decision, answer_key)),
+        Ok(Response::ApprovalResolved { .. })
+    ));
     assert_eq!(client.timeline(a), events_a);
     println!("PASS: single approval winner, independent rejection and durable decisions without autoapproval");
 
@@ -317,5 +423,7 @@ fn main() {
     assert_eq!(latest, events_a.last().unwrap().seq);
     assert_eq!(events, events_a[initial.len()..]);
     assert_eq!(client.timeline(b), events_b);
-    println!("PASS: explicit subscriber backpressure and exact durable replay; no cross-session events");
+    println!(
+        "PASS: explicit subscriber backpressure and exact durable replay; no cross-session events"
+    );
 }

@@ -51,3 +51,7 @@ UNSUPPORTED. El smoke no cambia permisos ni simula una cancelación exitosa.
 
 Descubrimiento y apertura PASS en los cuatro. Correcciones posteriores
 candidatas UNTESTED. No asumir que el PASS de Attached acredita Owned.
+
+Stop-only en 9932566: OpenCode Attached y Codex Owned PASS; Pi stop FAIL
+(exit no cero); Gentle Shell discovery BLOCKED (versión desconocida).
+Corrección de cierre JSONL y diagnóstico de discovery candidatos UNTESTED.

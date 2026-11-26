@@ -7,3 +7,8 @@ license.workspace = true
 [dependencies]
 fleet-agent = { path = "../fleet-agent" }
 serde_json.workspace = true
+
+[[test]]
+name = "shutdown_drain"
+path = "tests/shutdown_drain.rs"
+harness = false

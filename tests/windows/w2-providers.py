@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
@@ -152,8 +153,10 @@ class Fixture:
             FLEET_CURSOR_JOURNAL=str(self.root / "private client" / "cursors.jsonl"),
             FLEET_CODEX_SANDBOX="read-only",
             FLEET_OPENCODE_MODE=args.opencode_mode,
+            FLEET_W2_DIAGNOSTICS="1",
         )
         self.daemon = None
+        self.discovery_reasons = []
         self.session = None
         self.create_attempted = False
         self.stopped = False
@@ -176,6 +179,15 @@ class Fixture:
             code = next((c for c in codes if re.search(
                 r"(?<![\w])" + re.escape(c) + r"(?![\w])", result.stderr)), "unknown")
             detail = f"; reason={stop_reason(result.stderr)}" if argv[0] == "stop" else ""
+            if argv[0] == "stop":
+                exit_code = re.search(r"\bexit_code=(-?\d{1,10}|unknown)\b", result.stderr)
+                stderr_class = re.search(
+                    r"\bstderr_class=(EPIPE|ERR_STREAM_DESTROYED|ERR_STREAM_WRITE_AFTER_END|ERR_USE_AFTER_CLOSE|EBADF|unknown)\b",
+                    result.stderr)
+                if exit_code:
+                    detail += "; provider_exit=" + exit_code.group(1)
+                if stderr_class:
+                    detail += "; stderr_class=" + stderr_class.group(1)
             raise Failure(f"CLI {argv[0]} exit {result.returncode}; code={code}{detail}")
         return result.stdout.rstrip("\r\n")
 
@@ -190,7 +202,22 @@ class Fixture:
     def start_daemon(self):
         self.daemon = subprocess.Popen(
             [str(self.bin / "fleetd.exe")], cwd=self.workspace, env=self.env,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Drain daemon stderr, retaining only explicitly classified discovery
+        # labels. No raw stderr is persisted or printed.
+        pipe = self.daemon.stderr
+        reasons = self.discovery_reasons
+        def drain():
+            with pipe:
+                while True:
+                    line = pipe.readline(4096)
+                    if not line:
+                        return
+                    match = re.fullmatch(
+                        rb"fleet-w2-discovery gentle-shell ([a-z_]+)\r?\n", line)
+                    if match and len(reasons) < 32:
+                        reasons.append(match.group(1).decode("ascii"))
+        threading.Thread(target=drain, daemon=True).start()
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             require(self.daemon.poll() is None, "fixture daemon exited")
@@ -369,6 +396,11 @@ class Fixture:
             self.row["mode"] = agent["mode"]
             self.row["availability"] = agent["availability"]
             if not compatible(self.provider, version):
+                if self.provider == "gentle-shell":
+                    # Allow the stderr drain to consume the already written
+                    # diagnostic before the unavailable result is recorded.
+                    time.sleep(.1)
+                    self.row["discovery_reasons"] = list(self.discovery_reasons)
                 raise Blocked(f"installed version {version} outside validated range or undetected")
             owned_candidate = (self.provider == "opencode"
                                and self.args.opencode_mode == "owned")

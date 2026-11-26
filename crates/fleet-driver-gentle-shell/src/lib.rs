@@ -56,6 +56,13 @@ fn shell_command() -> Result<std::process::Command, AgentError> {
 fn detect_version(
     command: &std::process::Command,
 ) -> Result<(ProviderVersion, String), AgentError> {
+    // Node startup can be slower on native Windows (cold cache, scanning).
+    // Only the read-only version probe gets this bounded budget.
+    #[cfg(windows)]
+    let output = fleet_agent::process::version_stdout_with_timeout(
+        command, Duration::from_secs(10),
+    )?;
+    #[cfg(not(windows))]
     let output = fleet_agent::process::version_stdout(command)?;
     let stdout = String::from_utf8_lossy(&output);
     let shell_version = stdout
@@ -64,7 +71,10 @@ fn detect_version(
             line.split_whitespace()
                 .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
         })
-        .unwrap_or("0.0.0")
+        .ok_or_else(|| AgentError {
+            code: "provider_unavailable".into(),
+            message: "Gentle Shell version probe returned no version".into(),
+        })?
         .to_string();
     let pi_version = stdout
         .lines()
@@ -301,7 +311,25 @@ impl GentleShellDriver {
                     status: "applied".into(),
                 }];
             }
-            Err(_) => self.descriptor.availability = ProviderAvailability::Unavailable,
+            Err(error) => {
+                self.descriptor.availability = ProviderAvailability::Unavailable;
+                if std::env::var_os("FLEET_W2_DIAGNOSTICS").is_some() {
+                    // Fixed categories only: no native stdout/stderr or paths.
+                    let reason = match error.message.as_str() {
+                        "provider version probe timed out" => "timeout",
+                        "provider version probe exited unsuccessfully" => "nonzero_exit",
+                        "provider version probe left active descendants" => "active_descendants",
+                        "cannot start contained provider version probe" => "contained_spawn_failed",
+                        "Gentle Shell version probe returned no version" => "no_version",
+                        "provider JS must be an existing absolute .js/.mjs/.cjs" => "invalid_js",
+                        "native provider .exe not found in absolute PATH entries" => "exe_not_found",
+                        "provider override must be an existing absolute .exe" => "invalid_exe",
+                        "configure either provider EXE or JS, not both" => "ambiguous_launcher",
+                        _ => "other_probe_failure",
+                    };
+                    eprintln!("fleet-w2-discovery gentle-shell {reason}");
+                }
+            }
         }
         self.descriptor.clone()
     }

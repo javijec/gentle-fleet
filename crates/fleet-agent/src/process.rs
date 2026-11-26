@@ -134,11 +134,19 @@ pub fn user_home() -> Option<PathBuf> {
 /// Unix retains direct-child supervision. The probe deadline is independent
 /// of EOF from stdout.
 pub fn version_stdout(command: &Command) -> Result<Vec<u8>, AgentError> {
+    version_stdout_with_timeout(command, VERSION_TIMEOUT)
+}
+
+/// A caller may select a bounded read-only probe budget for a heavy launcher.
+pub fn version_stdout_with_timeout(
+    command: &Command,
+    timeout: Duration,
+) -> Result<Vec<u8>, AgentError> {
     // provider_command builds only a program and fixed prefix arguments.
     // Preserve the exact executable and entrypoint used for the later RPC.
     let mut probe = Command::new(command.get_program());
     probe.args(command.get_args()).arg("--version");
-    capture_stdout(probe, VERSION_TIMEOUT)
+    capture_stdout(probe, timeout)
 }
 
 fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, AgentError> {

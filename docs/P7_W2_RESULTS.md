@@ -161,3 +161,19 @@ sin arrancar daemon, enviar prompt, reintentar stop ni imprimir texto de
 proveedor. Si el daemon original no responde, informa BLOCKED. El reporte
 contiene conteos de deltas, mensajes, herramientas, terminales y razones
 clasificadas de parada. No se lee DB SQLite por fuera de Fleet.
+
+## Stop-only real — 9932566 (26/11/2026)
+
+Informe aportado por propietario: OpenCode Attached y Codex Owned PASS
+(discovery/open/stop); Pi 1.6.1 FAIL stop por provider_nonzero_exit, estados
+Running -> Stopping -> StopUnconfirmed; Gentle Shell BLOCKED discovery,
+version desconocida. No hubo turnos reales. No repetir OpenCode por ahora.
+Candidato: JSONL conserva lectores durante EOF y drena stdout/stderr,
+desconectando colas solo al cierre explícito. Se conserva exit no cero como
+StopUnconfirmed y se añade código numérico y clasificación fija de stderr
+(mejor esfuerzo). Fixture nativo emite salida abundante después de EOF y
+comprueba exit 0 frente a 7. Gentle Shell dispone de sondeo read-only de 10s
+en Windows y diagnóstico clasificado de discovery; no se modifica el rango.
+La causa de exit no cero de Pi y de versión desconocida de Gentle Shell no
+está confirmada; el candidato no acredita que sean causados por pipes o
+latencia. UNTESTED; validar stop-only de Pi/Gentle Shell y gate full.

@@ -272,11 +272,11 @@ impl JsonlRpc {
             reader_alive.store(false, Ordering::Release);
         });
 
-        let stderr_alive = alive.clone();
         let stderr_log = stderr_tail.clone();
         std::thread::spawn(move || {
             let mut reader = io::BufReader::new(stderr);
-            while stderr_alive.load(Ordering::Acquire) {
+            // stdout EOF is not stderr EOF. Keep draining shutdown output.
+            loop {
                 match read_lf_line(&mut reader) {
                     Ok((Some(bytes), _)) => {
                         let line = String::from_utf8_lossy(&bytes).into_owned();
@@ -491,7 +491,14 @@ impl JsonlRpc {
 
     /// Cierre ordenado: EOF en stdin, espera acotada y SIGKILL solo si hace falta.
     pub fn close(&mut self) -> Result<(), RpcError> {
-        self.alive.store(false, Ordering::Release);
+        // Drop only the delivery queues, not the pipe readers: during explicit
+        // close no further RPC is issued and late events cannot change the
+        // Fleet turn outcome. Disconnecting receivers unblocks senders while
+        // the child flushes output, without causing a broken pipe.
+        let (_, events) = mpsc::sync_channel(1);
+        let (_, ui) = mpsc::sync_channel(1);
+        self.events = events;
+        self.ui = ui;
         drop(self.stdin.take());
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
@@ -502,10 +509,21 @@ impl JsonlRpc {
                         .ensure_tree_empty()
                         .map_err(|error| RpcError::new("StopUnconfirmed", error.to_string()));
                 }
-                Ok(Some(_)) => {
+                Ok(Some(status)) => {
+                    let diagnostic = {
+                        let lines = self.stderr_tail.lock().expect("stderr log poisoned");
+                        ["EPIPE", "ERR_STREAM_DESTROYED", "ERR_STREAM_WRITE_AFTER_END",
+                            "ERR_USE_AFTER_CLOSE", "EBADF"]
+                            .into_iter()
+                            .find(|label| lines.iter().any(|line| line.contains(label)))
+                            .unwrap_or("unknown")
+                    };
                     return Err(RpcError::new(
                         "StopUnconfirmed",
-                        "provider exited unsuccessfully after close",
+                        format!(
+                            "provider exited unsuccessfully after close; exit_code={}; stderr_class={diagnostic}",
+                            status.code().map_or_else(|| "unknown".into(), |code| code.to_string())
+                        ),
                     ));
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),

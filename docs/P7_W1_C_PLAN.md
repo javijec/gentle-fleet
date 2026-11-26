@@ -126,3 +126,7 @@ Gate completo y W1-B 10/10 reportados tras 2d38d1a. Se separa el consentimiento 
 ## Gate automatizado final
 
 **AUTOMATED_PASS** sobre `846a4b227d8f005125678bab7851c00b1c945da8` (26 Windows + 77 Linux, cero FAIL/BLOCKED/SKIP), informe conjunto del operador con SHA comprobado en origin. Ver P7_W1_RESULTS.md. Las diez repeticiones de protocolo son condición de aceptación automática del coordinador en ese SHA. Concluye la implementación candidata W1-C; no agregar nuevos subcortes sin defecto concreto. El cierre técnico limitado requiere revisar windows.json, linux.json y logs de esa corrida, confirmar ausencia de P0/P1 y conservar los límites ya documentados. manual_review sigue REQUIRED; no inventar revisión. La evidencia manual de otro SID y los demás gates de release no se convierten en PASS. No iniciar implementación W1-D hasta esa revisión.
+
+## Revalidación final posterior a correcciones P1
+
+Gate automatizado `c4f2abcb9438a88acc6bc42501049ef639a48133`: 104/104 PASS (27 Windows, 77 Linux), cero FAIL/BLOCKED/SKIP, SHA contrastado en origin. Incluye regresiones de StopUnconfirmed, startup, shutdown y primera vertical nativa W1-D. Implementación y gate automatizado completados; resta revisión final de windows.json, linux.json y logs originales del mismo SHA, evaluación de riesgos residuales y decisión de cierre técnico limitado. No repetir gate por un commit exclusivamente documental de registro. No se exime evidencia manual de release ni se declara ausencia de P0/P1 sin revisión. Ver P7_W1_RESULTS.md.

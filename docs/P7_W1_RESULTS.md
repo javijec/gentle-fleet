@@ -507,3 +507,8 @@ Cambios candidatos 9e5f599 y efabe3b más escenario InterruptFailure: prioridad 
 ### W1-D — corrección de sintaxis del fixture
 
 El operador reportó ParserError de PowerShell en w1d-lifecycle.ps1:300 sobre el candidato posterior a 6e1659f (HEAD observado 86f174a). La inspección confirmó que una edición del patrón de terminal Interrupted había insertado accidentalmente un bloque duplicado dentro de la cadena regex. Se elimina el bloque duplicado y se restaura la aserción exacta de un único terminal Interrupted. No se modifica producción ni se omite ningún escenario. El fallo ocurrió antes de ejecutar el fixture y no prueba un fallo nuevo del motor. Parser y ejecución nativa pendientes; W1-D continúa abierta.
+
+
+### W1-D — revalidación reportada tras corrección del fixture (26/11/2026)
+
+El operador confirmó «paso todo» tras las instrucciones de ejecutar w1d-lifecycle.ps1 y el gate conjunto modo w1c del candidato corregido. HEAD remoto contrastado: `79ef7465d2967a1fc5e6711862668ed4c7442795`. Se registra PASS reportado por el operador; no se recibieron el SHA ejecutado, combined.json, los informes/logs originales ni evidencia explícita de las 20 repeticiones Lifecycle. No atribuir conteo exacto ni revisión independiente a esta confirmación. Falta únicamente comprobar la evidencia y completar las repeticiones si no se hicieron, antes de aceptar W1-D con alcance limitado. La causa exacta del fallo anterior no fue reproducida; la mitigación de contención requiere evidencia de estabilidad. No se alteran criterios de release, no se abre W1-E ni se modifica main. Este registro es solo documental.

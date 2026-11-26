@@ -106,9 +106,13 @@ function Invoke-FixtureCli([string[]]$Arguments, [string]$ExpectedError = '') {
             $Arguments[1] -eq 'create') { 90000 } else { 20000 }
         if (-not $process.WaitForExit($timeout)) { throw "CLI timed out: $($Arguments[0])" }
         if ($process.ExitCode -ne 0) {
-            $err = if ($process.FixtureStderr.IsCompletedSuccessfully) {
-                $process.FixtureStderr.GetAwaiter().GetResult()
-            } else { '<stderr unavailable>' }
+            # Process exit and async pipe EOF are independent observations.
+            # Wait for the actual diagnostic, with the same bounded drain
+            # used for stdout. Never accept an absent or unexpected error.
+            if (-not $process.FixtureStderr.Wait(5000)) {
+                throw "CLI $($Arguments[0]) exit $($process.ExitCode): stderr did not close within 5s"
+            }
+            $err = $process.FixtureStderr.GetAwaiter().GetResult()
             if ($ExpectedError -and $err -match $ExpectedError) { return $err }
             throw "CLI $($Arguments[0]) exit $($process.ExitCode): $err"
         }

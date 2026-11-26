@@ -97,3 +97,20 @@ Regresiones adicionales candidatas: terminación del root bloqueado con hijo
 activo y prueba de kill-on-close cuando el propietario del job muere sin
 Drop. Se da un margen acotado de 200 ms al contador del job tras el exit
 normal del root. Sigue UNTESTED; no acredita atomicidad durante spawn/assign.
+
+## Gate del candidato de contención: fallo del fixture CloseBlocked
+
+El operador aportó captura de w1d-lifecycle.log (Windows, ejecución
+20261126T180500100518Z). Lifecycle, MissingRunner, InvalidRunner, SilentRunner,
+Interrupt, InterruptFailure, ActiveStop y CloseFailure PASS; CloseBlocked
+FAIL en Invoke-FixtureCli línea 113: CLI stop exit 1, stderr unavailable.
+HEAD remoto observado c74e856; SHA ejecutado no verificado por la captura.
+La inspección confirma una carrera de diagnóstico: el exit del proceso no
+implica que ReadToEndAsync de stderr haya terminado. El fixture descartaba
+stderr si la tarea aún no estaba completada. Se sustituye esa comprobación
+instantánea por espera acotada de 5s (igual que stdout), conservando el regex
+StopUnconfirmed, estado durable, runner vivo y ausencia de Stopped. No se
+modifican plazos ni producción. La causa del error real de stop sigue sin
+confirmar; si stderr no cierra o no coincide, el fixture sigue fallando.
+UNTESTED: repetir CloseBlocked dirigido varias veces y después gate w1f
+sobre mismo SHA limpio. No declarar W2-A aceptada con este fallo.

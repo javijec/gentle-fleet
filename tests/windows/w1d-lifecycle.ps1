@@ -46,6 +46,8 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
     }
     $info.Environment['FLEET_RUNTIME_DIR'] = $runtime
     $info.Environment['FLEET_DB_PATH'] = Join-Path $root 'private data/fleet.sqlite'
+    $info.Environment['FLEET_CURSOR_JOURNAL'] = Join-Path $root 'private client/cursors.jsonl'
+    $info.Environment['FLEET_OPERATION_JOURNAL'] = Join-Path $root 'private client/operations.jsonl'
     if ($null -ne $script:fixtureOperationKey) {
         $info.Environment['FLEET_OPERATION_KEY'] = $script:fixtureOperationKey
     }
@@ -252,8 +254,25 @@ function Assert-RecoveredTurn($Fixture, [string]$Key, [string]$Message) {
     if ($Fixture.Process.HasExited) { throw 'original runner exited during recovery' }
     Track-RunnerChildren
     if ($runners.Count -ne 1) { throw 'recovery launched a substitute runner' }
+    # timeline prints seq, event_id, description; watch prints seq,
+    # description. Compare every payload and sequence, not unequal schemas.
+    $expectedReplay = @(foreach ($line in $lines) {
+        $fields = $line -split "\t", 3
+        if ($fields.Count -ne 3 -or $fields[1] -cne "$($Fixture.Session)-e$($fields[0])") {
+            throw 'invalid durable event identity in timeline'
+        }
+        @($fields[0], $fields[2]) -join [char]9
+    })
     $replay = Invoke-FixtureCli @('watch', $Fixture.Session, '--since', '0', '--count', [string]$lines.Count)
-    if ($replay -cne $timeline) { throw 'durable replay differs from timeline' }
+    $replayLines = @($replay -split "\r?\n")
+    if ($replayLines.Count -ne $expectedReplay.Count) {
+        throw "durable replay count differs: expected $($expectedReplay.Count), got $($replayLines.Count)"
+    }
+    for ($i = 0; $i -lt $expectedReplay.Count; $i++) {
+        if ($replayLines[$i] -cne $expectedReplay[$i]) {
+            throw "durable replay differs from timeline at sequence $($i + 1)"
+        }
+    }
 }
 
 function Start-DeferredTurn([string]$Session) {

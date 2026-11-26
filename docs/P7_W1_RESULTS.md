@@ -512,3 +512,8 @@ El operador reportó ParserError de PowerShell en w1d-lifecycle.ps1:300 sobre el
 ### W1-D — revalidación reportada tras corrección del fixture (26/11/2026)
 
 El operador confirmó «paso todo» tras las instrucciones de ejecutar w1d-lifecycle.ps1 y el gate conjunto modo w1c del candidato corregido. HEAD remoto contrastado: `79ef7465d2967a1fc5e6711862668ed4c7442795`. Se registra PASS reportado por el operador; no se recibieron el SHA ejecutado, combined.json, los informes/logs originales ni evidencia explícita de las 20 repeticiones Lifecycle. No atribuir conteo exacto ni revisión independiente a esta confirmación. Falta únicamente comprobar la evidencia y completar las repeticiones si no se hicieron, antes de aceptar W1-D con alcance limitado. La causa exacta del fallo anterior no fue reproducida; la mitigación de contención requiere evidencia de estabilidad. No se alteran criterios de release, no se abre W1-E ni se modifica main. Este registro es solo documental.
+
+
+### W1-E — primera ejecución de Recovery
+
+Log aportado por el operador: `reports/logs/windows-20261126T101235673164Z/w1e-recovery.log`. PASS del probe de terminal confirmado durable en el spool original mientras el daemon estaba ausente; FAIL posterior de comparación replay/timeline en línea 256 del fixture. Inspección estática: formatos CLI distintos (timeline incluye event_id, watch no). Se corrige exclusivamente el fixture y se aíslan journals SDK de pruebas. No se acredita aún replay ni cierre/restart ni los escenarios posteriores. W1-E sigue abierta; HEAD observado antes de corrección `b81ad05`, SHA ejecutado no confirmado por el log. No se alteran los gates D/F ni release.

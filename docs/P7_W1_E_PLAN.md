@@ -50,3 +50,8 @@ compartida marca y refresca aprobaciones antes de persistir runner Uncertain;
 si falla almacenamiento mantiene el bloqueo de efectos y no recaptura su
 propio mutex. El startup también reconcilia aprobaciones de registros Lost o
 Uncertain históricos. El caso sigue UNTESTED. No se declara PASS de W1-D/E.
+
+
+### Corrección del comparador de replay
+
+El operador reportó PASS de terminal durable no ACKeado durante caída de fleetd y fallo posterior en la comparación de replay (w1e-recovery.log, escenario Recovery). El CLI imprime tres columnas iniciales en timeline (seq, event_id, descripción) frente a dos en watch (seq, descripción); la comparación directa de strings era inválida. El fixture valida event_id canónico de cada evento, proyecta únicamente la columna adicional y compara cantidad, orden, secuencia y descripción exacta (sin eliminar contenido). Los journals del SDK se aíslan dentro del fixture para no escribir cursores de prueba en datos de usuario. Sin cambio de producción, sin relajar deduplicación ni declarar PASS del replay. Pendiente ejecución nativa del candidato corregido.

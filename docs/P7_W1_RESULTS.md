@@ -502,3 +502,8 @@ Una ejecución dirigida posterior de `pwsh -NoProfile -File tests/windows/w1d-li
 ### W1-D — candidato consolidado (26/11/2026)
 
 Cambios candidatos 9e5f599 y efabe3b más escenario InterruptFailure: prioridad de Shutdown sobre RPC normales, rechazo explícito de cola de cierre, nueve escenarios nativos de proceso, Hello incorrecto sobre IPC nativo y prueba acotada de herencia de archivo exclusivo. Diagnóstico de timeout por fase de 23985cc conservado. Estado UNTESTED: no hay ejecución nativa de este candidato ni reproducción que confirme la causa exacta de cef2689. W1-C conserva cierre limitado. W1-D requiere ejecución dirigida, repeticiones del lifecycle positivo (20/20), full Windows/Linux y protocolo 10/10 sobre mismo SHA limpio, revisión de logs y ausencia de P0/P1 confirmados. Las pruebas reales de proveedores, reattach y seguridad de release siguen fuera de esta aceptación. No merge ni W1-E todavía.
+
+
+### W1-D — corrección de sintaxis del fixture
+
+El operador reportó ParserError de PowerShell en w1d-lifecycle.ps1:300 sobre el candidato posterior a 6e1659f (HEAD observado 86f174a). La inspección confirmó que una edición del patrón de terminal Interrupted había insertado accidentalmente un bloque duplicado dentro de la cadena regex. Se elimina el bloque duplicado y se restaura la aserción exacta de un único terminal Interrupted. No se modifica producción ni se omite ningún escenario. El fallo ocurrió antes de ejecutar el fixture y no prueba un fallo nuevo del motor. Parser y ejecución nativa pendientes; W1-D continúa abierta.

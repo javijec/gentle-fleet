@@ -295,38 +295,7 @@ try {
                 if ($terminals.Count -gt 0) { break }
                 Start-Sleep -Milliseconds 100
             } while ($deadline.Elapsed.TotalSeconds -lt 20)
-            if ($terminals.Count -ne 1 -or $terminals[0] -notmatch '\tturn_completed\tInterrupted
-    if ($first.Session -eq $second.Session -or $first.Process.Id -eq $second.Process.Id) {
-        throw 'runner/session identity was reused'
-    }
-    Assert-CompletedTurn $first.Session 'W1-D first fixture prompt'
-    Assert-CompletedTurn $second.Session 'W1-D second fixture prompt'
-    Write-Output 'PASS: native daemon launches sibling runners in paths with spaces; both stream and complete'
-    Assert-Stopped $first
-    if ($second.Process.HasExited -or $sentinel.HasExited -or $daemon.HasExited) {
-        throw 'stopping first runner affected another process'
-    }
-    Assert-CompletedTurn $second.Session 'W1-D second runner continues after stop'
-    Assert-Stopped $second
-    if ($sentinel.HasExited -or $daemon.HasExited) { throw 'session stop affected unrelated process' }
-    Write-Output 'PASS: confirmed stop observes owned runner exit and leaves independent runner, daemon and sentinel alive'
-} finally {
-    try {
-        Track-RunnerChildren
-    } finally {
-        # Stop only recorded handles, never use taskkill /IM or a persisted PID.
-        try {
-            foreach ($process in $runners.Values) { Stop-OwnedProcess $process }
-        } finally {
-            try { Stop-OwnedProcess $daemon } finally {
-                try { Stop-OwnedProcess $sentinel } finally {
-                    Remove-Item -LiteralPath $root -Recurse -Force
-                }
-            }
-        }
-    }
-}
-) {
+            if ($terminals.Count -ne 1 -or $terminals[0] -notmatch '\tturn_completed\tInterrupted$') {
                 throw 'expected exactly one Interrupted terminal event'
             }
         }

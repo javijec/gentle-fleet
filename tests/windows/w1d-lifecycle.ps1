@@ -1,6 +1,6 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery', 'Acceptance')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
@@ -27,7 +27,8 @@ $script:fixtureOperationKey = $null
 # Inherit no fake fault flags or prior storage/catalog overrides.
 $names = @('FLEET_RUNTIME_DIR', 'FLEET_DB_PATH', 'FLEET_RUNNER_BIN',
     'FLEET_ADOPT_LEGACY_DB', 'FLEET_OPERATION_KEY', 'FLEET_OPERATION_JOURNAL',
-    'FLEET_CURSOR_JOURNAL', 'FLEET_SSH_CONFIG', 'FLEET_HOST_ID')
+    'FLEET_CURSOR_JOURNAL', 'FLEET_SSH_CONFIG', 'FLEET_HOST_ID',
+    'FLEET_SUBSCRIBER_LIMIT', 'FLEET_TEST_FORWARD_DELAY_MS', 'FLEET_INPROCESS_RUNNER')
 $names += @(Get-ChildItem Env: | Where-Object { $_.Name -like 'FLEET_FAKE_*' } |
     ForEach-Object { $_.Name })
 
@@ -55,6 +56,11 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
         throw 'fixture must not pass a runner binary override'
     }
     if ($Executable -eq (Join-Path $bin 'fleetd.exe')) {
+        if ($Scenario -eq 'Acceptance') {
+            $info.Environment['FLEET_FAKE_APPROVAL'] = '1'
+            $info.Environment['FLEET_SUBSCRIBER_LIMIT'] = '1'
+            $info.Environment['FLEET_TEST_FORWARD_DELAY_MS'] = '5000'
+        }
         if ($Scenario -eq 'Recovery') {
             $info.Environment['FLEET_FAKE_SLOW_TURN_MS'] = '8000'
         }
@@ -364,6 +370,41 @@ try {
         return
     }
     $first = New-FixtureSession $workspaceId
+    if ($Scenario -eq 'Acceptance') {
+        $second = New-FixtureSession $workspaceId
+        if ($first.Session -eq $second.Session -or $first.Process.Id -eq $second.Process.Id) {
+            throw 'acceptance requires two distinct owned runners'
+        }
+        $probeExe = Join-Path $repo 'target/debug/examples/w1f_acceptance.exe'
+        $probe = Start-OwnedProcess $probeExe @($first.Session, $second.Session)
+        try {
+            if (-not $probe.WaitForExit(60000)) { throw 'W1-F acceptance probe exceeded deadline' }
+            if (-not $probe.FixtureStdout.Wait(5000) -or -not $probe.FixtureStderr.Wait(5000)) {
+                throw 'W1-F probe output did not close'
+            }
+            Write-Output $probe.FixtureStdout.GetAwaiter().GetResult().Trim()
+            if ($probe.ExitCode -ne 0) {
+                throw "W1-F probe exit $($probe.ExitCode): $($probe.FixtureStderr.GetAwaiter().GetResult())"
+            }
+        } finally {
+            Stop-OwnedProcess $probe
+        }
+        Assert-Stopped $first
+        if ($second.Process.HasExited -or $daemon.HasExited -or $sentinel.HasExited) {
+            throw 'acceptance stop affected an unrelated process'
+        }
+        Assert-Stopped $second
+        Restart-FixtureDaemon
+        $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+            Where-Object { ($_ -split "\t")[0] -in @($first.Session, $second.Session) })
+        if ($rows.Count -ne 2 -or @($rows | Where-Object { ($_ -split "\t")[3] -ne 'Stopped' }).Count -ne 0) {
+            throw 'acceptance stopped sessions were not durable'
+        }
+        Track-RunnerChildren
+        if ($runners.Count -ne 2 -or $sentinel.HasExited) { throw 'unexpected runner or sentinel after restart' }
+        Write-Output 'PASS: W1-F both owned runners stopped; restart did not revive them'
+        return
+    }
     if ($Scenario -in @('Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')) {
         $key = [guid]::NewGuid().ToString('N')
         $script:fixtureOperationKey = $key

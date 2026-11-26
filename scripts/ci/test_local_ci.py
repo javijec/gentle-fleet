@@ -39,6 +39,7 @@ class LocalCITests(unittest.TestCase):
         self.assertIn("w1c-journal-recovery", expected_ids("windows", "full"))
         self.assertIn("w1d-lifecycle", expected_ids("windows", "full"))
         self.assertIn("w1e-recovery", expected_ids("windows", "full"))
+        self.assertIn("w1f-acceptance", expected_ids("windows", "full"))
         self.assertIn("e2e_p44_security", expected_ids("linux", "full"))
         self.assertIn("e2e_p61_sdk", expected_ids("linux", "full"))
         self.assertNotIn("e2e_p62b_desktop_gpui", expected_ids("linux", "full"))

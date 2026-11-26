@@ -51,6 +51,8 @@ jobs:
         run: pwsh -NoProfile -File tests/windows/w1d-lifecycle.ps1
       - name: Native Windows runner recovery
         run: pwsh -NoProfile -File tests/windows/w1e-recovery.ps1
+      - name: Native Windows integrated acceptance
+        run: pwsh -NoProfile -File tests/windows/w1f-acceptance.ps1
 
   windows-ipc:
     runs-on: windows-latest

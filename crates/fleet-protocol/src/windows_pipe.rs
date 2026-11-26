@@ -1110,11 +1110,7 @@ fn zero_link_sidecar_reopens_by_name_without_weakening_file_shape() {
     calls = 0;
     let error = retry_sqlite_sidecar_validation(|| {
         calls += 1;
-        validate_data_file_shape(
-            FILE_ATTRIBUTE_NORMAL,
-            if calls == 1 { 0 } else { 2 },
-            true,
-        )
+        validate_data_file_shape(FILE_ATTRIBUTE_NORMAL, if calls == 1 { 0 } else { 2 }, true)
     })
     .unwrap_err();
     assert_eq!(calls, 2);

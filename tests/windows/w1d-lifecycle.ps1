@@ -589,6 +589,18 @@ try {
         throw 'runner/session identity was reused'
     }
     Assert-CompletedTurn $first.Session 'W1-D first fixture prompt'
+    # Exercise the same public JSONL path used by the real W2 provider smoke.
+    # No new model call; use the already completed FakeDriver timeline.
+    $jsonTimeline = Invoke-FixtureCli @('timeline', $first.Session, '--since', '0', '--limit', '256', '--json')
+    $jsonRows = @($jsonTimeline -split "\r?\n" | ForEach-Object { $_ | ConvertFrom-Json })
+    if ($jsonRows.Count -eq 0) { throw 'JSONL timeline missing' }
+    for ($i = 0; $i -lt $jsonRows.Count; $i++) {
+        if ($jsonRows[$i].session_id -ne $first.Session -or $jsonRows[$i].seq -ne ($i + 1)) {
+            throw 'JSONL timeline identity or sequence mismatch'
+        }
+    }
+    $jsonReplay = Invoke-FixtureCli @('watch', $first.Session, '--since', '0', '--count', "$($jsonRows.Count)", '--json')
+    if ($jsonReplay -cne $jsonTimeline) { throw 'JSONL replay differs from durable timeline' }
     Assert-CompletedTurn $second.Session 'W1-D second fixture prompt'
     Write-Output 'PASS: native daemon launches sibling runners in paths with spaces; both stream and complete'
     Assert-Stopped $first

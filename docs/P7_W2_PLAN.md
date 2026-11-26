@@ -127,3 +127,10 @@ servidor propio, `attached` (default del harness) exige servicio existente.
 JSONL público opt-in para timeline/watch evita romper texto multilinea.
 No se amplían rangos ni se cambia el default de OpenCode en producción.
 La aceptación individual, conformidad F y aceptación G siguen pendientes.
+
+`--interrupt` agrega un turno de cancelación real si el proveedor anuncia
+cancel_turn. Si la generación termina antes de la cancelación, registrar
+BLOCKED, no PASS; OpenCode conserva cancel_turn=false. Las herramientas
+se solicitan en modo lectura sin cambios a los permisos nativos, no es un
+sandbox de archivos para Pi/Gentle Shell. Se prueba el nuevo JSONL con
+FakeDriver en el escenario Lifecycle (sin turnos de pago adicionales).

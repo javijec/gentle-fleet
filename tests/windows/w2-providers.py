@@ -258,6 +258,8 @@ class Fixture:
 
     def recovery(self, events):
         self.stop_daemon()
+        # Only the isolated fixture's endpoint marker, after owner exit.
+        (self.root / "runtime" / "fleetd.addr").unlink(missing_ok=True)
         self.start_daemon()
         observed = self.timeline()
         require(observed[:len(events)] == events, "timeline prefix changed after restart")
@@ -266,6 +268,48 @@ class Fixture:
         require(any(len(r) >= 4 and r[0] == self.session and r[3] == "Running" for r in rows),
                 "session not running after daemon restart")
         self.chat()
+
+    def interrupt(self):
+        # Native generation speed is nondeterministic. If the turn completes
+        # before interrupt is accepted, report BLOCKED, not fake success.
+        key, operation_id, turn = self.prompt(
+            "Write a long numbered list of 500 short fictional names. "
+            "Do not use tools or access any files.")
+        deadline = time.monotonic() + self.args.turn_timeout
+        while True:
+            events = self.timeline()
+            kinds = [e["kind"] for e in events if e["kind"].get("turn_id") == turn]
+            if any(k["type"] == "approval_requested" for k in kinds):
+                raise Blocked("native approval requested; not automatically answered")
+            require(not any(k["type"] in ("tool_started", "turn_uncertain") for k in kinds),
+                    "unexpected tool or uncertain turn during interrupt probe")
+            terminals = [k for k in kinds if k["type"] == "turn_completed"]
+            if terminals:
+                if len(terminals) == 1 and terminals[0]["status"] == "Completed":
+                    raise Blocked("turn completed before interrupt could be issued")
+                raise Failure("unexpected terminal before interrupt")
+            if any(k["type"] == "assistant_delta" for k in kinds):
+                break
+            require(time.monotonic() < deadline, "no streaming before interrupt deadline")
+            time.sleep(.2)
+        try:
+            reply = self.cli("interrupt", self.session, turn, timeout=60)
+        except Failure:
+            events = self.timeline()
+            if any(e["kind"].get("turn_id") == turn
+                   and e["kind"]["type"] == "turn_completed"
+                   and e["kind"]["status"] == "Completed" for e in events):
+                raise Blocked("turn completed while interrupt was requested") from None
+            raise
+        require(reply == f"interrupted\t{self.session}\t{turn}", "interrupt receipt mismatch")
+        events, _, status = self.wait_turn(turn, False)
+        if status == "Completed":
+            raise Blocked("completion won the race with interrupt")
+        require(status == "Interrupted", "native interrupt terminal was not observed")
+        operation = self.cli("operation", key).split("\t", 4)
+        require(len(operation) >= 4 and operation[:2] == [operation_id, key],
+                "interrupt operation identity mismatch")
+        self.replay(events)
 
     def run(self):
         stage = "startup"
@@ -313,6 +357,13 @@ class Fixture:
                 stage = "daemon recovery"
                 self.recovery(events)
                 self.mark(stage)
+            if self.args.interrupt:
+                stage = "interrupt"
+                if not agent["capabilities"]["cancel_turn"]:
+                    self.mark(stage, "UNSUPPORTED", "provider does not advertise cancellation")
+                else:
+                    self.interrupt()
+                    self.mark(stage)
             self.row["status"] = "PASS"
         except Blocked as error:
             self.mark(stage, "BLOCKED", str(error))
@@ -358,6 +409,7 @@ def main():
     parser.add_argument("--provider", choices=("all", *PROVIDERS), default="all")
     parser.add_argument("--tools", action="store_true", help="extra read-only tool turn")
     parser.add_argument("--recovery", action="store_true", help="extra chat after daemon restart")
+    parser.add_argument("--interrupt", action="store_true", help="extra streaming interruption turn")
     parser.add_argument("--turn-timeout", type=int, default=180)
     parser.add_argument("--opencode-mode", choices=("auto", "attached", "owned"), default="attached")
     for option in ("opencode-bin", "codex-bin", "pi-bin", "pi-js",
@@ -392,7 +444,7 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / (uuid.uuid4().hex + ".json")
     report = {"commit": sha, "started": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "tools": args.tools, "recovery": args.recovery,
+              "tools": args.tools, "recovery": args.recovery, "interrupt": args.interrupt,
               "opencode_mode": args.opencode_mode, "providers": []}
     for provider in PROVIDERS if args.provider == "all" else (args.provider,):
         row = {"provider": provider, "status": "BLOCKED", "checks": []}

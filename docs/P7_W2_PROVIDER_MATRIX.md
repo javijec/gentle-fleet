@@ -36,3 +36,6 @@ Harness real opt-in por proveedor, con reporte JSON bajo reports/w2.
 Todos los smokes nuevos UNTESTED. Las opciones --tools y --recovery son
 adicionales y no se marcan PASS si no se ejecutan. Pi 1.0.4 permanece
 incompatible; actualizar/seleccionar una instalación >=1.6,<2 explícitamente.
+
+`--interrupt` opt-in: Codex, Pi y Gentle Shell según capacidades; OpenCode
+UNSUPPORTED. El smoke no cambia permisos ni simula una cancelación exitosa.

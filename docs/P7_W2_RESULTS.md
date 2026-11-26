@@ -127,3 +127,9 @@ lectura y recovery tras restart de daemon. Modo OpenCode explícito; attached
 sin fallback owned. UNTESTED; no se ejecutaron prompts ni CI aquí. Pi sigue
 bloqueado si su versión instalada es 1.0.4. Aprobaciones, interrupt,
 aislamiento simultáneo y controles efectivos requieren pruebas adicionales.
+
+Se añade interrupt opt-in para proveedores que anuncian cancel_turn; una
+carrera ganada por el terminal Completed se registra BLOCKED. OpenCode
+queda UNSUPPORTED para interrupt. Se agrega regresión FakeDriver de
+replay JSONL exacto en Lifecycle. UNTESTED; no sustituye aprobación
+interactiva, aislamiento simultáneo ni la aceptación formal W2.

@@ -1,5 +1,23 @@
 # P7-W1 — resultados
 
+## Revisión parcial independiente del gate final (26/11/2026)
+
+Se localizaron `reports/combined/d6d1c8c309ec4a16bf20e0ef3388b55f/`
+y los logs originales de ambos hosts. `combined.json`, `windows.json` y
+`linux.json` identifican el SHA `8662aea23cb16744bbf2a9714494d1682dcc4f22`,
+modo w1f: 49 checks Windows y 77 Linux PASS, exit 0. Los diez logs de
+protocolo contienen cada uno 25 tests PASS; los veinte logs Lifecycle
+contienen las dos aserciones PASS. Se revisaron las salidas Windows W1-A–F:
+incluyen aislamiento, ACL, arranque, parada, recuperación, concurrencia y
+replay. Linux conserva 77 logs; su prueba de permisos indica explícitamente
+UNTESTED para otro usuario. El conteo de checks no acredita pruebas
+individuales ignoradas.
+
+Esto confirma independientemente el resultado automatizado reportado, pero no
+constituye todavía la revisión técnica completa de todos los riesgos y logs
+exigida por W1-F; **cierre técnico formal pendiente**. La evidencia de dos SID
+sigue diferida a release; no es PASS. No se ha repetido el gate histórico.
+
 **Estado: ABIERTO.** Base `7701bba`; W0 CI
 [#45234810431](https://github.com/javijec/gentle-fleet/actions/runs/45234810431)
 PASS en Windows, backend Linux y desktop Linux.

@@ -1,5 +1,22 @@
 # P7-W2 — proveedores reales Windows
 
+## Alcance vigente solicitado (26/11/2026)
+
+El orden de cortes siguiente sustituye la nomenclatura histórica de este
+documento, que se conserva debajo: **A infraestructura común**, **B OpenCode**,
+**C Codex**, **D Pi**, **E Gentle Shell**, **F conformidad conjunta** y
+**G aceptación final**. El trabajo Codex ya publicado en `8354b19` se conserva;
+no constituye aceptación de W2-A ni de W2-C.
+
+W2-A requiere pruebas negras deterministas de descubrimiento y lanzamiento,
+rutas Unicode/con espacios, argumentos adversos, errores y limpieza en Windows
+y Linux; coherencia del descubrimiento y ejecución; y gate full de ambos
+hosts sobre un mismo SHA limpio. No ejecutar `.cmd` con argumentos no
+confiables mediante una cadena de shell sin un diseño y pruebas de quoting.
+Los shims no son equivalentes a ejecutables nativos. La validación de cada
+proveedor real y su compatibilidad funcional corresponde a B–F; no modificar
+configuración ni instalar proveedores automáticamente. Estado: **ABIERTO**.
+
 Inicio de implementación por instrucción del propietario tras PASS integral
 W1-F reportado. La revisión formal de los JSON/logs W1 sigue pendiente;
 no se reduce su gate ni se declara release. Rama feature/p7-windows-native.

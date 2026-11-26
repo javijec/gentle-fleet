@@ -55,3 +55,9 @@ Uncertain históricos. El caso sigue UNTESTED. No se declara PASS de W1-D/E.
 ### Corrección del comparador de replay
 
 El operador reportó PASS de terminal durable no ACKeado durante caída de fleetd y fallo posterior en la comparación de replay (w1e-recovery.log, escenario Recovery). El CLI imprime tres columnas iniciales en timeline (seq, event_id, descripción) frente a dos en watch (seq, descripción); la comparación directa de strings era inválida. El fixture valida event_id canónico de cada evento, proyecta únicamente la columna adicional y compara cantidad, orden, secuencia y descripción exacta (sin eliminar contenido). Los journals del SDK se aíslan dentro del fixture para no escribir cursores de prueba en datos de usuario. Sin cambio de producción, sin relajar deduplicación ni declarar PASS del replay. Pendiente ejecución nativa del candidato corregido.
+
+
+
+### W1-E — revalidación reportada (26/11/2026)
+
+El operador confirmó PASS de la ejecución dirigida de w1e-recovery.ps1 tras corregir el comparador de replay y posteriormente del gate conjunto modo w1c Windows/Linux. HEAD remoto contrastado antes de este registro: `a36e9a35554e1b30d0f6d164b30a3cb396e81d3e`. Se registra PASS reportado, no verificación independiente de SHA ejecutado, combined.json, conteos, logs ni repeticiones de protocolo. La evidencia de estabilidad 20/20 de W1-D sigue pendiente de confirmación específica. Preparar W1-F como consolidación y revisión de las evidencias existentes, sin repetir gates que ya tengan evidencia válida ni añadir funcionalidades por defecto. No se declara aceptación técnica definitiva de D/E, cierre W1 ni release; las pruebas manuales diferidas conservan su estado y requisitos. No se modifica main ni se inicia W2.

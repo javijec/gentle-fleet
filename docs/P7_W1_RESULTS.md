@@ -517,3 +517,8 @@ El operador confirmó «paso todo» tras las instrucciones de ejecutar w1d-lifec
 ### W1-E — primera ejecución de Recovery
 
 Log aportado por el operador: `reports/logs/windows-20261126T101235673164Z/w1e-recovery.log`. PASS del probe de terminal confirmado durable en el spool original mientras el daemon estaba ausente; FAIL posterior de comparación replay/timeline en línea 256 del fixture. Inspección estática: formatos CLI distintos (timeline incluye event_id, watch no). Se corrige exclusivamente el fixture y se aíslan journals SDK de pruebas. No se acredita aún replay ni cierre/restart ni los escenarios posteriores. W1-E sigue abierta; HEAD observado antes de corrección `b81ad05`, SHA ejecutado no confirmado por el log. No se alteran los gates D/F ni release.
+
+
+### W1-E — revalidación reportada (26/11/2026)
+
+El operador confirmó PASS de la ejecución dirigida de w1e-recovery.ps1 tras corregir el comparador de replay y posteriormente del gate conjunto modo w1c Windows/Linux. HEAD remoto contrastado antes de este registro: `a36e9a35554e1b30d0f6d164b30a3cb396e81d3e`. Se registra PASS reportado, no verificación independiente de SHA ejecutado, combined.json, conteos, logs ni repeticiones de protocolo. La evidencia de estabilidad 20/20 de W1-D sigue pendiente de confirmación específica. Preparar W1-F como consolidación y revisión de las evidencias existentes, sin repetir gates que ya tengan evidencia válida ni añadir funcionalidades por defecto. No se declara aceptación técnica definitiva de D/E, cierre W1 ni release; las pruebas manuales diferidas conservan su estado y requisitos. No se modifica main ni se inicia W2.

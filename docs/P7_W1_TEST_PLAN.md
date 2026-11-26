@@ -132,3 +132,8 @@ perfil release conserva `cross-user-ipc-acl` y los demás gates manuales.
 ## Ejecución conjunta del gate W1-C
 
 Usar `scripts/ci/w1c_entry.py` desde Windows con el checkout Linux en el mismo SHA; ver [plan W1-C](P7_W1_C_PLAN.md). El resultado AUTOMATED_PASS requiere todavía revisión de logs y criterios de seguridad. No modifica el gate ni registra PASS manual.
+
+
+## W1-F — aceptación integral de desarrollo
+
+Ver [P7_W1_F_PLAN.md](P7_W1_F_PLAN.md). Gate modo w1f conserva full nativo de ambas plataformas, protocolo Windows 10/10 y agrega Lifecycle Windows 20/20. La prueba negra W1-F se ejecuta dentro de full Windows; no sustituye los requisitos manuales de release. Estado candidato UNTESTED.

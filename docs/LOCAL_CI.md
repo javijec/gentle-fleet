@@ -138,3 +138,8 @@ python scripts/ci/both.py --mode w1c --windows local --linux javiomarchi --linux
 ```
 
 Antes del gate, verifica que HEAD coincide con la rama origin, ejecuta cargo fmt --all y, si hay cambios exclusivamente rastreados .rs, muestra el diff y pide confirmación para commit/push. Si se rechaza, deja los cambios para revisión y no ejecuta CI. Si no hay cambios, no crea commit. Luego sincroniza el checkout SSH limpio al SHA exacto publicado mediante fetch de la rama explícita y checkout detached sin sobrescribir archivos ignorados. Rechaza HEAD remoto divergente, cambios locales, fallos SSH y push rechazado; no usa force, reset, clean ni stash. No modifica ramas locales remotas, incluida main. Mantiene cargo fmt --check obligatorio en ambos equipos y el gate mismo SHA. Sin --auto-format conserva el modo anterior sin modificar Git. Primero actualizar el coordinador local con git pull --ff-only. La sincronización no instala herramientas ni modifica host keys.
+
+
+## Gate de aceptación W1-F
+
+`both.py --mode w1f` ejecuta full Windows/Linux sobre el mismo SHA limpio y exige protocolo Windows 10/10 más Lifecycle 20/20 (`-Scenario Lifecycle`). Los registros `protocol_runs` y `lifecycle_runs` quedan en windows.json; combined.json cuenta ambos grupos además de los checks full. `w1f-acceptance` forma parte de full Windows y verifica concurrencia, aprobaciones y backpressure/replay mediante API pública. Se conserva el modo w1c y su validación anterior. AUTOMATED_PASS no certifica el gate manual ni release. Ver P7_W1_F_PLAN.md.

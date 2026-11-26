@@ -228,7 +228,7 @@ fn settled(
         _ => None,
     }).collect();
     assert_eq!(resolutions, vec![(&approval.approval_id, &approval.turn_id, decision)]);
-    assert_eq!(events.iter().filter(|e| matches!(e.kind, EventKind::ToolStarted { .. })).count(), usize::from(allowed));
+    assert_eq!(events.iter().filter(|e| matches!(e.kind, EventKind::ToolStarted { .. })).count(), if allowed { 1 } else { 0 });
     match client.call(Request::GetApproval { approval_id: approval.approval_id.clone() }).unwrap() {
         Response::Approval { approval } => {
             assert_eq!(approval.status, approval_status);

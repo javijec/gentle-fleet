@@ -70,10 +70,11 @@ def worker(args):
                          ensure_ascii=True))
         return 0
     folder.mkdir(parents=True, exist_ok=False)
-    profile = "full" if args.mode == "w1c" else args.mode
+    profile = "full" if args.mode in ("w1c", "w1f") else args.mode
     report_path = folder / "ci.json"
     record = {"platform": args.platform, "commit": args.sha, "mode": args.mode,
-              "started": timestamp(), "status": "BLOCKED", "protocol_runs": []}
+              "started": timestamp(), "status": "BLOCKED", "protocol_runs": [],
+              "lifecycle_runs": []}
     native = folder / "native.json"
     write_json(native, record)
     try:
@@ -89,13 +90,26 @@ def worker(args):
         if code != 0 or status != "PASS":
             record["status"] = "FAIL" if status == "FAIL" else "BLOCKED"
             return 1
-        if args.mode == "w1c" and args.platform == "windows":
+        if args.mode in ("w1c", "w1f") and args.platform == "windows":
             for index in range(1, 11):
                 item = {"id": f"protocol-{index:02d}",
                         "argv": ["cargo", "test", "-p", "fleet-protocol", "--locked"],
                         "depends": (), "requires": (), "env": {}}
                 row = run_step(item, {}, folder)
                 record["protocol_runs"].append(row)
+                write_json(native, record)
+                if row["status"] != "PASS":
+                    record["status"] = "FAIL" if row["status"] == "FAIL" else "BLOCKED"
+                    return 1
+                clean_head(args.sha)
+        if args.mode == "w1f" and args.platform == "windows":
+            for index in range(1, 21):
+                item = {"id": f"lifecycle-{index:02d}",
+                        "argv": ["pwsh", "-NoProfile", "-File",
+                                 "tests/windows/w1d-lifecycle.ps1", "-Scenario", "Lifecycle"],
+                        "depends": (), "requires": (), "env": {}}
+                row = run_step(item, {}, folder)
+                record["lifecycle_runs"].append(row)
                 write_json(native, record)
                 if row["status"] != "PASS":
                     record["status"] = "FAIL" if row["status"] == "FAIL" else "BLOCKED"
@@ -118,15 +132,21 @@ def validate_native(record, platform, sha, mode):
         raise ValueError("Incomplete native report")
     if record["status"] != "PASS":
         return record["status"]
-    profile = "full" if mode == "w1c" else mode
+    profile = "full" if mode in ("w1c", "w1f") else mode
     if record.get("ci_exit_code") != 0 or validate_report(record["ci"], platform, sha, profile) != "PASS":
         raise ValueError("Native CI did not pass")
     runs = record["protocol_runs"]
-    expected = [f"protocol-{i:02d}" for i in range(1, 11)] if mode == "w1c" and platform == "windows" else []
+    expected = [f"protocol-{i:02d}" for i in range(1, 11)] if mode in ("w1c", "w1f") and platform == "windows" else []
     if [r["id"] for r in runs] != expected or any(
         r.get("status") != "PASS" or r.get("exit_code") != 0 for r in runs
     ):
         raise ValueError("Missing or failed protocol repetitions")
+    runs = record.get("lifecycle_runs", [])
+    expected = [f"lifecycle-{i:02d}" for i in range(1, 21)] if mode == "w1f" and platform == "windows" else []
+    if [r["id"] for r in runs] != expected or any(
+        r.get("status") != "PASS" or r.get("exit_code") != 0 for r in runs
+    ):
+        raise ValueError("Missing or failed lifecycle repetitions")
     return "PASS"
 
 
@@ -231,9 +251,9 @@ def sync_remote(host, root, platform, branch, sha):
 def coordinator(args):
     sha = clean_head()
     local = current_platform()
-    mode = ask("Pruebas (quick/full/w1c)", args.mode, "w1c")
-    if mode not in ("quick", "full", "w1c"):
-        raise ValueError("Use quick, full or w1c")
+    mode = ask("Pruebas (quick/full/w1c/w1f)", args.mode, "w1c")
+    if mode not in ("quick", "full", "w1c", "w1f"):
+        raise ValueError("Use quick, full, w1c or w1f")
     hosts = {}
     for platform in ("windows", "linux"):
         host = ask(f"Alias SSH de {platform} (o local)", getattr(args, platform),
@@ -286,7 +306,8 @@ def coordinator(args):
                 record = json.loads(collected.stdout)
                 status = validate_native(record, platform, sha, mode)
                 write_json(summary_dir / f"{platform}.json", record)
-                checks = record.get("ci", {}).get("checks", []) + record.get("protocol_runs", [])
+                checks = (record.get("ci", {}).get("checks", []) + record.get("protocol_runs", [])
+                          + record.get("lifecycle_runs", []))
                 counts = {key: sum(check["status"] == key for check in checks)
                           for key in ("PASS", "FAIL", "BLOCKED", "SKIP")}
                 row.update(status=status, report=f"{platform}.json", exit_code=result.returncode,
@@ -300,7 +321,7 @@ def coordinator(args):
         clean_head(sha)
         states = {r["status"] for r in data["platforms"].values()}
         if len(data["platforms"]) == 2 and states == {"PASS"}:
-            data["status"] = "AUTOMATED_PASS" if mode == "w1c" else "PASS"
+            data["status"] = "AUTOMATED_PASS" if mode in ("w1c", "w1f") else "PASS"
         elif "FAIL" in states:
             data["status"] = "FAIL"
         return 0 if data["status"] in ("PASS", "AUTOMATED_PASS") else 1
@@ -321,7 +342,7 @@ def coordinator(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("quick", "full", "w1c"))
+    parser.add_argument("--mode", choices=("quick", "full", "w1c", "w1f"))
     parser.add_argument("--auto-format", action="store_true",
                         help="Format clean local branch, confirm commit/push and sync SSH checkout")
     for platform in ("windows", "linux"):

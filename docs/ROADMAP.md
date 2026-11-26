@@ -197,3 +197,8 @@ Por instrucción del propietario se prepara la implementación W1-E sobre W1-D c
 ### W1-E — PASS reportado (26/11/2026)
 
 Pruebas dirigidas y gate conjunto modo w1c reportados PASS por el operador tras corregir el comparador de replay; HEAD remoto observado `a36e9a3`. W1-F a preparar como consolidación de evidencia y aceptación integral, sin dar por cerrados D/E antes de revisar sus criterios. Ver P7_W1_RESULTS.md. Sin cambios de producción ni release.
+
+
+### W1-F — candidato de aceptación integral (26/11/2026)
+
+Se incorpora una prueba negra de proceso Windows para concurrencia de turnos, aislamiento, decisión única de aprobación, backpressure tipado, replay exacto y parada durable. Se integra en full Windows y workflow. El coordinador incorpora modo w1f con full Windows/Linux, protocolo 10/10 y Lifecycle 20/20 sobre mismo SHA limpio. Ver [plan W1-F](P7_W1_F_PLAN.md). Candidato UNTESTED; no se declaran cerrados D/E/F hasta evidencia revisada. No main, W2 ni release.

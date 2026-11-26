@@ -116,6 +116,31 @@ class BothTests(unittest.TestCase):
             validate_native(data, "windows", "a", "w1c")
 
     @patch("both.validate_report", return_value="PASS")
+    def test_w1f_requires_twenty_lifecycle_runs_and_ten_protocol_runs(self, _validate):
+        data = dict(platform="windows", commit="a", mode="w1f", status="PASS",
+                    finished="now", ci_exit_code=0, ci={},
+                    protocol_runs=[dict(id=f"protocol-{i:02d}", status="PASS", exit_code=0)
+                                   for i in range(1, 11)])
+        with self.assertRaisesRegex(ValueError, "lifecycle"):
+            validate_native(data, "windows", "a", "w1f")
+        data["lifecycle_runs"] = [dict(id=f"lifecycle-{i:02d}", status="PASS", exit_code=0)
+                                  for i in range(1, 21)]
+        self.assertEqual(validate_native(data, "windows", "a", "w1f"), "PASS")
+        data["lifecycle_runs"][-1]["exit_code"] = 1
+        with self.assertRaisesRegex(ValueError, "lifecycle"):
+            validate_native(data, "windows", "a", "w1f")
+        data["lifecycle_runs"][-1]["exit_code"] = 0
+        data["protocol_runs"].pop()
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            validate_native(data, "windows", "a", "w1f")
+        linux = dict(platform="linux", commit="a", mode="w1f", status="PASS",
+                     finished="now", ci_exit_code=0, ci={}, protocol_runs=[], lifecycle_runs=[])
+        self.assertEqual(validate_native(linux, "linux", "a", "w1f"), "PASS")
+        linux["lifecycle_runs"] = data["lifecycle_runs"]
+        with self.assertRaisesRegex(ValueError, "lifecycle"):
+            validate_native(linux, "linux", "a", "w1f")
+
+    @patch("both.validate_report", return_value="PASS")
     def test_reject_other_sha_or_platform(self, _validate):
         data = dict(platform="linux", commit="a", mode="full", status="PASS",
                     finished="now", ci_exit_code=0, ci={}, protocol_runs=[])

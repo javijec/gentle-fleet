@@ -193,11 +193,9 @@ impl OpenCodeDriver {
             .port();
         drop(listener);
 
-        let mut child = fleet_agent::process::provider_command(
-            "opencode",
-            "FLEET_OPENCODE_BIN",
-            None,
-        )?
+        let mut command =
+            fleet_agent::process::provider_command("opencode", "FLEET_OPENCODE_BIN", None)?;
+        let mut child = command
             .args([
                 "serve",
                 "--hostname",
@@ -220,9 +218,12 @@ impl OpenCodeDriver {
         })?;
         let (tx, rx) = mpsc::sync_channel(32);
         std::thread::spawn(move || {
+            // After readiness, keep draining stdout instead of closing the
+            // provider's pipe. Do not retain or publish server output.
+            let mut startup = true;
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if tx.send(line).is_err() {
-                    break;
+                if startup && tx.send(line).is_err() {
+                    startup = false;
                 }
             }
         });
@@ -553,6 +554,23 @@ impl OpenCodeDriver {
             Ok(false) => {
                 self.descriptor.mode = RunnerMode::Auto;
                 self.descriptor.availability = ProviderAvailability::Unavailable;
+                // Installation evidence is not proof of a compatible service.
+                #[cfg(windows)]
+                if let Ok(stdout) = fleet_agent::process::provider_command(
+                    "opencode",
+                    "FLEET_OPENCODE_BIN",
+                    None,
+                )
+                .and_then(|command| fleet_agent::process::version_stdout(&command))
+                {
+                    let version = String::from_utf8_lossy(&stdout);
+                    if let Some(part) = version
+                        .split_whitespace()
+                        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                    {
+                        self.descriptor.version = ProviderVersion::parse(part.to_owned());
+                    }
+                }
             }
             Err(_) => {
                 self.descriptor.availability = ProviderAvailability::Unavailable;
@@ -578,11 +596,18 @@ impl AgentDriver for OpenCodeDriver {
         if !attached {
             self.spawn_owned_server()?;
         }
-        self.check_version()?;
-        let native_id = self.create_native_session()?;
-        self.native_session_id = Some(native_id.clone());
-        self.start_event_stream()?;
-        Ok(native_id)
+        let result = (|| {
+            self.check_version()?;
+            let native_id = self.create_native_session()?;
+            self.native_session_id = Some(native_id.clone());
+            self.start_event_stream()?;
+            Ok(native_id)
+        })();
+        if result.is_err() && self.child.is_some() {
+            // No attached service is terminated by startup cleanup.
+            let _ = self.close();
+        }
+        result
     }
 
     fn send(&mut self, input: AgentInput) -> Result<SendReceipt, AgentError> {

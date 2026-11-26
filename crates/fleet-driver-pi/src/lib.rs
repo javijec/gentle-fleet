@@ -50,8 +50,8 @@ fn pi_command() -> Result<std::process::Command, AgentError> {
     fleet_agent::process::provider_command("pi", "FLEET_PI_BIN", Some("FLEET_PI_JS"))
 }
 
-fn detect_version() -> Result<ProviderVersion, AgentError> {
-    let output = fleet_agent::process::version_stdout(pi_command()?)?;
+fn detect_version(command: &std::process::Command) -> Result<ProviderVersion, AgentError> {
+    let output = fleet_agent::process::version_stdout(command)?;
     let text = String::from_utf8_lossy(&output).trim().to_string();
     if text.is_empty() {
         return Err(AgentError {
@@ -254,7 +254,7 @@ impl PiDriver {
     }
 
     pub fn probe(&mut self) -> ProviderDescriptor {
-        match detect_version() {
+        match pi_command().and_then(|command| detect_version(&command)) {
             Ok(version) => {
                 self.descriptor = metadata(
                     version.clone(),
@@ -378,7 +378,8 @@ impl AgentDriver for PiDriver {
                 message: "Pi workspace is not a directory".into(),
             });
         }
-        let version = detect_version()?;
+        let command = pi_command()?;
+        let version = detect_version(&command)?;
         if !COMPATIBILITY.compatible(&version) {
             return Err(AgentError {
                 code: "incompatible_version".into(),
@@ -397,11 +398,23 @@ impl AgentDriver for PiDriver {
             "--session-dir".to_string(),
             session_dir.to_string_lossy().into_owned(),
         ];
-        let mut rpc = PiRpc::spawn_command(&ctx.workspace, pi_command()?, &args, &[], false)
-            .map_err(map_rpc)?;
-        let state = rpc
-            .call("get_state", json!({}), CALL_TIMEOUT)
-            .map_err(map_rpc)?;
+        let mut rpc = match PiRpc::spawn_command(&ctx.workspace, command, &args, &[], false) {
+            Ok(rpc) => rpc,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&session_dir);
+                return Err(map_rpc(error));
+            }
+        };
+        let state = match rpc.call("get_state", json!({}), CALL_TIMEOUT) {
+            Ok(state) => state,
+            Err(error) => {
+                // Keep data if termination is not confirmed.
+                if rpc.close().is_ok() {
+                    let _ = std::fs::remove_dir_all(&session_dir);
+                }
+                return Err(map_rpc(error));
+            }
+        };
         let native = text(&state, "sessionId").unwrap_or_default();
         self.workspace = Some(ctx.workspace);
         self.session_dir = Some(session_dir);

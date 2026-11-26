@@ -91,3 +91,9 @@ pendiente y requiere validación/contención nativa antes de aceptación.
 Gate pendiente: cargo fmt, clippy, tests y full nativo en ambos hosts con
 mismo SHA limpio. Pruebas de proceso reales de argumentos, Unicode y árbol
 de procesos aún pendientes. No ampliar compatibilidad ni marcar PASS sin logs.
+
+El fixture de proceso `fleet-agent/tests/provider_process.rs` verifica argv
+literal en un ejecutable Rust copiado a una ruta Unicode con espacios; en
+Windows verifica también el prefijo de Node+JS mediante un ejecutable fixture
+(no ejecuta Node real), rechaza CMD y configuraciones ambiguas. El fixture
+se incorpora a cargo test del workspace sin cambios de dependencias.

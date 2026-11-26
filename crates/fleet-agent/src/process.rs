@@ -124,9 +124,12 @@ pub fn user_home() -> Option<PathBuf> {
 /// On failure terminate/reap only our direct child. A descendant inheriting
 /// stdout can delay EOF; the caller still returns at the deadline, but tree
 /// containment remains a separate native-process validation requirement.
-pub fn version_stdout(mut command: Command) -> Result<Vec<u8>, AgentError> {
-    command.arg("--version");
-    capture_stdout(command, VERSION_TIMEOUT)
+pub fn version_stdout(command: &Command) -> Result<Vec<u8>, AgentError> {
+    // provider_command builds only a program and fixed prefix arguments.
+    // Preserve the exact executable and entrypoint used for the later RPC.
+    let mut probe = Command::new(command.get_program());
+    probe.args(command.get_args()).arg("--version");
+    capture_stdout(probe, VERSION_TIMEOUT)
 }
 
 fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, AgentError> {
@@ -180,8 +183,10 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
                     Err(mpsc::TryRecvError::Empty) => {}
                 }
             }
-            if exited && output.is_some() {
-                return output.ok_or_else(|| unavailable("missing version output"));
+            if exited {
+                if let Some(bytes) = output.take() {
+                    return Ok(bytes);
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }

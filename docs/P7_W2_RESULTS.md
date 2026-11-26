@@ -31,3 +31,10 @@ Quedan por validar entrypoints de las instalaciones reales, descubrimiento
 Fleet, argumentos de proceso adversos, descendientes y recuperación; W1-F
 formal permanece pendiente de evidencia original. No cambios de versiones,
 main, workflows, ni gates de release.
+
+Segundo candidato: el ejecutable/entrypoint del sondeo se conserva durante
+open de Pi y Gentle Shell; las consultas nativas RPC de Codex y Gentle Shell
+rechazan versiones incompatibles. Se agrega fixture negro argv Windows/Linux,
+limpieza del hijo directo ante caída de RPC y error de startup y drenaje de
+stdout de OpenCode después de readiness. UNTESTED; no confundir fixture Node
+con una instalación real ni hijo directo con contención de descendientes.

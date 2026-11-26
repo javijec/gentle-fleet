@@ -159,13 +159,10 @@ fn classify(
 impl RpcClient {
     /// Arranca `codex app-server` heredando el entorno (incluidas las
     /// credenciales nativas). No copia ni escribe `auth.json` ni `CODEX_HOME`.
-    pub fn spawn(workspace: &Path) -> Result<Self, RpcError> {
-        let program = super::codex_program()
-            .map_err(|error| RpcError::new(error.code, error.message))?;
-        Self::spawn_with_program(workspace, &program)
-    }
-
-    pub fn spawn_with_program(workspace: &Path, program: &std::ffi::OsStr) -> Result<Self, RpcError> {
+    pub fn spawn_with_program(
+        workspace: &Path,
+        program: &std::ffi::OsStr,
+    ) -> Result<Self, RpcError> {
         let mut child = Command::new(program)
             .arg("app-server")
             .current_dir(workspace)
@@ -458,6 +455,17 @@ impl RpcClient {
                 ))
             }
             Err(error) => Err(RpcError::new("StopUnconfirmed", error.to_string())),
+        }
+    }
+}
+
+impl Drop for RpcClient {
+    fn drop(&mut self) {
+        self.reader_alive.store(false, Ordering::Release);
+        drop(self.stdin.take());
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }

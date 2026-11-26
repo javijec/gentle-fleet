@@ -53,8 +53,10 @@ fn shell_command() -> Result<std::process::Command, AgentError> {
     )
 }
 
-fn detect_version() -> Result<(ProviderVersion, String), AgentError> {
-    let output = fleet_agent::process::version_stdout(shell_command()?)?;
+fn detect_version(
+    command: &std::process::Command,
+) -> Result<(ProviderVersion, String), AgentError> {
+    let output = fleet_agent::process::version_stdout(command)?;
     let stdout = String::from_utf8_lossy(&output);
     let shell_version = stdout
         .lines()
@@ -281,7 +283,7 @@ impl GentleShellDriver {
     }
 
     pub fn probe(&mut self) -> ProviderDescriptor {
-        match detect_version() {
+        match shell_command().and_then(|command| detect_version(&command)) {
             Ok((version, embedded_pi)) => {
                 self.descriptor = metadata(
                     version.clone(),
@@ -434,7 +436,8 @@ impl AgentDriver for GentleShellDriver {
                 message: "Gentle Shell workspace is not a directory".into(),
             });
         }
-        let (version, embedded_pi) = detect_version()?;
+        let command = shell_command()?;
+        let (version, embedded_pi) = detect_version(&command)?;
         if !COMPATIBILITY.compatible(&version) {
             return Err(AgentError {
                 code: "incompatible_version".into(),
@@ -448,9 +451,8 @@ impl AgentDriver for GentleShellDriver {
             "--no-session".to_string(),
         ];
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
-        let mut rpc =
-            JsonlRpc::spawn_command(&ctx.workspace, shell_command()?, &args, &environment, true)
-                .map_err(map_rpc)?;
+        let mut rpc = JsonlRpc::spawn_command(&ctx.workspace, command, &args, &environment, true)
+            .map_err(map_rpc)?;
         let state = rpc
             .call("get_state", json!({}), CALL_TIMEOUT)
             .map_err(map_rpc)?;
@@ -845,15 +847,22 @@ impl DriverFactory for GentleShellFactory {
         // del cache estático de una sesión abierta en otro proceso.
         let args = vec!["--mode".into(), "rpc".into(), "--no-session".into()];
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
-        let mut rpc =
-            JsonlRpc::spawn_command(
-                &std::env::temp_dir(),
-                shell_command()?,
-                &args,
-                &environment,
-                true,
-            )
-                .map_err(map_rpc)?;
+        let command = shell_command()?;
+        let (version, _) = detect_version(&command)?;
+        if !COMPATIBILITY.compatible(&version) {
+            return Err(AgentError {
+                code: "incompatible_version".into(),
+                message: "Gentle Shell is outside the supported version range".into(),
+            });
+        }
+        let mut rpc = JsonlRpc::spawn_command(
+            &std::env::temp_dir(),
+            command,
+            &args,
+            &environment,
+            true,
+        )
+        .map_err(map_rpc)?;
         let mut desktop = DesktopClient::new();
         let result = (|| -> Result<Vec<NativeSessionInfo>, AgentError> {
             desktop.negotiate(&mut rpc).map_err(AgentError::from)?;

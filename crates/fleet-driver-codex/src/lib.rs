@@ -62,7 +62,7 @@ fn codex_program() -> Result<OsString, AgentError> {
 }
 
 fn detect_version(program: &OsStr) -> Result<ProviderVersion, AgentError> {
-    let output = fleet_agent::process::version_stdout(Command::new(program))?;
+    let output = fleet_agent::process::version_stdout(&Command::new(program))?;
     let stdout = String::from_utf8_lossy(&output);
     let version = stdout
         .split_whitespace()
@@ -700,7 +700,16 @@ fn native_refs() -> &'static std::sync::Mutex<HashMap<String, String>> {
 }
 
 fn connect_probe() -> Result<RpcClient, AgentError> {
-    let mut rpc = RpcClient::spawn(&std::env::temp_dir()).map_err(to_agent_error)?;
+    let program = codex_program()?;
+    let version = detect_version(&program)?;
+    if !COMPATIBILITY.compatible(&version) {
+        return Err(AgentError {
+            code: "incompatible_version".into(),
+            message: "Codex is outside the supported version range".into(),
+        });
+    }
+    let mut rpc =
+        RpcClient::spawn_with_program(&std::env::temp_dir(), &program).map_err(to_agent_error)?;
     rpc.call(
         "initialize",
         json!({

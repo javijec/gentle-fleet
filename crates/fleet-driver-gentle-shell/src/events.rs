@@ -82,11 +82,11 @@ impl EventMapper {
                     .unwrap_or("");
                 match update_type {
                     "text_delta" => {
-                        self.message_delta_seen = true;
                         let delta = text(&update, "delta");
                         if delta.is_empty() {
                             return Vec::new();
                         }
+                        self.message_delta_seen = true;
                         self.scoped(DomainEvent::AssistantDelta {
                             turn_id: turn,
                             text: delta,
@@ -423,6 +423,23 @@ mod tests {
                 status: TurnStatus::Interrupted,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn empty_delta_does_not_hide_final_message() {
+        let mut mapper = EventMapper::default();
+        mapper.begin_turn("turn-1".into());
+        assert!(mapper
+            .map(&json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":""}}))
+            .is_empty());
+        let events = mapper.map(&json!({
+            "type":"message_end",
+            "message":{"role":"assistant","content":[{"type":"text","text":"final"}]}
+        }));
+        assert!(matches!(
+            &events[0].kind,
+            DomainEvent::AssistantMessage {text, ..} if text == "final"
         ));
     }
 

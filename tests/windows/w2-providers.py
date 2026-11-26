@@ -59,6 +59,44 @@ def jsonl(text):
     return [json.loads(line) for line in text.split("\n") if line]
 
 
+def stop_reason(text):
+    # Fixed labels only. Never include native messages, URLs, IDs or tokens.
+    reasons = (
+        ("provider exited with active descendants", "active_descendants"),
+        ("provider job did not become empty", "job_not_empty"),
+        ("required forced termination", "forced_termination"),
+        ("exited unsuccessfully after close", "provider_nonzero_exit"),
+        ("driver did not close in time", "driver_close_timeout"),
+        ("driver worker exited without close confirmation", "driver_worker_disconnected"),
+        ("driver command channel disconnected", "driver_command_disconnected"),
+        ("driver command queue full", "driver_queue_full"),
+        ("waiting for runner RPC lock", "runner_rpc_lock_timeout"),
+        ("runner_rpc_timeout", "runner_rpc_timeout"),
+        ("runner did not acknowledge", "runner_shutdown_ack_missing"),
+        ("runner exit cannot be verified", "runner_exit_unverified"),
+        ("runner closed the connection", "runner_connection_closed"),
+        ("StopUnconfirmed", "stop_unconfirmed"),
+    )
+    return next((label for text_part, label in reasons if text_part in text), "unknown")
+
+
+def turn_diagnostics(kinds, marker):
+    deltas = [k["text"] for k in kinds if k["type"] == "assistant_delta"]
+    messages = [k["text"] for k in kinds if k["type"] == "assistant_message"]
+    return {
+        "delta_count": len(deltas),
+        "delta_chars": sum(map(len, deltas)),
+        "message_count": len(messages),
+        "message_chars": sum(map(len, messages)),
+        "marker_in_deltas": marker in "".join(deltas) if marker else None,
+        "marker_in_messages": any(marker in text for text in messages) if marker else None,
+        "tool_started": sum(k["type"] == "tool_started" for k in kinds),
+        "tool_succeeded": sum(k["type"] == "tool_completed" and k.get("success") is True for k in kinds),
+        "agent_errors": sum(k["type"] == "agent_error" for k in kinds),
+        "terminal_statuses": [k["status"] for k in kinds if k["type"] == "turn_completed"],
+    }
+
+
 def discover_paths(args):
     env = {k: os.environ[k] for k in LAUNCH_KEYS if k in os.environ}
     overrides = {
@@ -137,7 +175,8 @@ class Fixture:
                      "invalid_workspace", "InvalidArgument")
             code = next((c for c in codes if re.search(
                 r"(?<![\w])" + re.escape(c) + r"(?![\w])", result.stderr)), "unknown")
-            raise Failure(f"CLI {argv[0]} exit {result.returncode}; code={code}")
+            detail = f"; reason={stop_reason(result.stderr)}" if argv[0] == "stop" else ""
+            raise Failure(f"CLI {argv[0]} exit {result.returncode}; code={code}{detail}")
         return result.stdout.rstrip("\r\n")
 
     def mark(self, stage, status="PASS", detail=None):
@@ -242,10 +281,13 @@ class Fixture:
         require(status == "Completed", f"turn ended with {status}")
         require(sum(k["type"] == "user_message" and k["text"] == message for k in kinds) == 1,
                 "user message missing or duplicated")
-        deltas = [k["text"] for k in kinds if k["type"] == "assistant_delta"]
-        messages = [k["text"] for k in kinds if k["type"] == "assistant_message"]
-        require(bool(deltas) and marker in ("".join(deltas) + "".join(messages)),
-                "expected streamed answer missing")
+        diagnostic = turn_diagnostics(kinds, marker)
+        self.row.setdefault("turn_diagnostics", []).append(
+            {"stage": "read-only tool" if tools else "chat", **diagnostic})
+        require(diagnostic["delta_chars"] > 0,
+                "no nonempty streamed text; final message alone does not prove streaming")
+        require(diagnostic["marker_in_deltas"] or diagnostic["marker_in_messages"],
+                "expected marker missing from assistant text")
         if tools:
             require(any(k["type"] == "tool_started" for k in kinds)
                     and any(k["type"] == "tool_completed" and k["success"] for k in kinds),
@@ -342,6 +384,9 @@ class Fixture:
                     "session creation not confirmed")
             self.session = receipt[0]
             self.mark(stage)
+            if self.args.stop_only:
+                self.row["status"] = "PASS"
+                return
             stage = "chat"
             events = self.chat()
             self.mark(stage, detail="streaming, one terminal, operation and exact replay")
@@ -387,8 +432,21 @@ class Fixture:
                             for r in rows), "durable Stopped missing")
                 self.stopped = True
                 self.mark("stop")
-            except (Failure, OSError, ValueError):
-                self.mark("stop", "FAIL", "stop not confirmed; fixture retained")
+            except (Failure, OSError, ValueError) as error:
+                detail = str(error) if isinstance(error, Failure) else type(error).__name__
+                self.mark("stop", "FAIL", detail + "; fixture retained")
+                try:
+                    events = self.timeline()
+                    self.row["stop_diagnostics"] = {
+                        "session_states": [e["kind"]["state"] for e in events
+                                           if e["kind"]["type"] == "session_state_changed"],
+                        "notice_reasons": [reason for e in events
+                                           if e["kind"]["type"] == "agent_notice"
+                                           for reason in [stop_reason(e["kind"]["message"])]
+                                           if reason != "unknown"],
+                    }
+                except (Failure, OSError, ValueError, KeyError):
+                    self.row["stop_diagnostics"] = {"status": "unavailable"}
                 self.row["status"] = "FAIL"
         if self.create_attempted and not self.stopped:
             self.row["retained_fixture"] = str(self.root)
@@ -407,6 +465,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--real", action="store_true", help="authorize real model turns")
     parser.add_argument("--provider", choices=("all", *PROVIDERS), default="all")
+    parser.add_argument("--stop-only", action="store_true", help="open/close session without a model turn")
     parser.add_argument("--tools", action="store_true", help="extra read-only tool turn")
     parser.add_argument("--recovery", action="store_true", help="extra chat after daemon restart")
     parser.add_argument("--interrupt", action="store_true", help="extra streaming interruption turn")
@@ -419,6 +478,8 @@ def main():
     if os.name != "nt" or not args.real:
         print("BLOCKED: requires native Windows and explicit --real")
         return 1
+    if args.stop_only and (args.tools or args.recovery or args.interrupt):
+        parser.error("--stop-only cannot be combined with model-turn options")
     if not 1 <= args.turn_timeout <= 600:
         parser.error("--turn-timeout must be 1..600 seconds")
     if not all((ROOT / "target/debug" / exe).is_file() for exe in EXES):
@@ -444,7 +505,8 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / (uuid.uuid4().hex + ".json")
     report = {"commit": sha, "started": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "tools": args.tools, "recovery": args.recovery, "interrupt": args.interrupt,
+              "stop_only": args.stop_only, "tools": args.tools,
+              "recovery": args.recovery, "interrupt": args.interrupt,
               "opencode_mode": args.opencode_mode, "providers": []}
     for provider in PROVIDERS if args.provider == "all" else (args.provider,):
         row = {"provider": provider, "status": "BLOCKED", "checks": []}

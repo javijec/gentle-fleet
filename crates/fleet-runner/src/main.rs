@@ -19,6 +19,10 @@ use fleet_providers::builtin_registry_from_env;
 
 use spool::Spool;
 
+// Must exceed the provider's 2s graceful EOF wait, but stay below the
+// daemon's 5s Shutdown RPC deadline. A timeout is still StopUnconfirmed.
+const DRIVER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+
 struct Args {
     runner_id: String,
     session_id: SessionId,
@@ -320,7 +324,7 @@ fn spawn_driver_loop(
     commands: Receiver<DriverCommand>,
     shared: Arc<RunnerShared>,
     startup: Sender<Result<(), String>>,
-    closed_tx: Sender<()>,
+    closed_tx: Sender<Result<(), String>>,
 ) {
     let spool = Arc::clone(&shared.spool);
     let pending_approvals = Arc::clone(&shared.pending_approvals);
@@ -416,16 +420,16 @@ fn spawn_driver_loop(
                     }
                 }
                 Ok(DriverCommand::Stop) => {
-                    match driver.close() {
-                        Ok(()) => {
-                            provider_alive.store(false, Ordering::Release);
-                            let _ = closed_tx.send(());
-                        }
-                        Err(error) => {
-                            eprintln!("runner driver close not confirmed: {error}");
-                        }
-                    }
-                    break;
+                    let outcome = driver.close().map_err(|error| {
+                        fleet_agent::redact_provider_error(&error.to_string())
+                    });
+                    // A success is only sent after the driver and its owned
+                    // process resources have been dropped. Keep errors typed
+                    // by the Shutdown response path; never turn them into OK.
+                    drop(driver);
+                    provider_alive.store(false, Ordering::Release);
+                    let _ = closed_tx.send(outcome);
+                    return;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -513,7 +517,7 @@ fn serve_daemon(
     identity: RunnerIdentity,
     shared: Arc<RunnerShared>,
     commands: SyncSender<DriverCommand>,
-    closed_rx: Arc<Mutex<Receiver<()>>>,
+    closed_rx: Arc<Mutex<Receiver<Result<(), String>>>>,
 ) -> Result<(), String> {
     let spool = &shared.spool;
     let pending_approvals = &shared.pending_approvals;
@@ -708,9 +712,9 @@ fn serve_daemon(
                 let received = closed_rx
                     .lock()
                     .expect("closed channel poisoned")
-                    .recv_timeout(Duration::from_millis(500));
+                    .recv_timeout(DRIVER_CLOSE_TIMEOUT);
                 match received {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         let response = RunnerResponse::Shutdown {
                             status: RUNNER_SHUTDOWN_STOPPED.into(),
                         };
@@ -724,12 +728,22 @@ fn serve_daemon(
                         .map_err(|e| e.to_string())?;
                         std::process::exit(0);
                     }
-                    Err(_) => {
+                    outcome => {
+                        let message = match outcome {
+                            Ok(Err(error)) => error,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                "driver did not close in time".into()
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                "driver worker exited without close confirmation".into()
+                            }
+                            Ok(Ok(())) => unreachable!(),
+                        };
                         write_runner_frame(
                             &mut writer,
                             &RunnerFrame::Notice {
                                 code: "StopUnconfirmed".into(),
-                                message: "driver did not close in time".into(),
+                                message,
                             },
                         )
                         .map_err(|e| e.to_string())?;

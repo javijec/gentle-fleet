@@ -268,3 +268,9 @@ El estado PASS de un proveedor acredita únicamente los checks ejecutados,
 no los omitidos (aprobaciones, interrupción, controles mutables, aislamiento
 entre proveedores y recovery durante turno). El gate fake/determinista no
 sustituye smoke real. Sin cambios a requisitos de release.
+
+W2: primer smoke conjunto 11a943d detectó cinco FAIL. El candidato corrige
+la discrepancia de plazos de cierre y supresión por delta vacío; SlowClose
+exige salida real del runner y los fixtures negativos conservan incertidumbre.
+Gate nativo obligatorio tras cambios de producción; no declarar PASS de
+streaming con un mensaje completo sin deltas.

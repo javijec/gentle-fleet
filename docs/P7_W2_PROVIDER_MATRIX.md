@@ -39,3 +39,15 @@ incompatible; actualizar/seleccionar una instalación >=1.6,<2 explícitamente.
 
 `--interrupt` opt-in: Codex, Pi y Gentle Shell según capacidades; OpenCode
 UNSUPPORTED. El smoke no cambia permisos ni simula una cancelación exitosa.
+
+### Primer smoke completo — 11a943d
+
+| Proveedor | Chat | Herramienta | Recovery | Interrupt | Stop |
+|---|---|---|---|---|---|
+| OpenCode 2.4.2 Attached | PASS | PASS | PASS | UNSUPPORTED | PASS |
+| Codex 0.172.0 | PASS | FAIL | UNTESTED | UNTESTED | FAIL |
+| Pi 1.6.1 | FAIL | UNTESTED | UNTESTED | UNTESTED | FAIL |
+| Gentle Shell 4.8.0 | PASS | PASS | PASS | PASS | FAIL |
+
+Descubrimiento y apertura PASS en los cuatro. Correcciones posteriores
+candidatas UNTESTED. No asumir que el PASS de Attached acredita Owned.

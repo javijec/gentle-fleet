@@ -133,3 +133,25 @@ carrera ganada por el terminal Completed se registra BLOCKED. OpenCode
 queda UNSUPPORTED para interrupt. Se agrega regresión FakeDriver de
 replay JSONL exacto en Lifecycle. UNTESTED; no sustituye aprobación
 interactiva, aislamiento simultáneo ni la aceptación formal W2.
+
+## Primer smoke conjunto real (11a943d, 26/11/2026)
+
+Informe JSON aportado por el propietario: OpenCode 2.4.2 Attached PASS
+(7 checks, interrupt UNSUPPORTED); Codex 0.172.0 PASS discovery/session/chat/
+controls, FAIL herramienta y stop; Pi 1.6.1 PASS discovery/session, FAIL chat
+y stop; Gentle Shell 4.8.0 PASS discovery/session/chat/controls/herramienta/
+recovery/interrupt, FAIL stop. Total 20 PASS, 5 FAIL, 1 UNSUPPORTED; 6 etapas
+no ejecutadas. Los tres fixtures fallidos se retuvieron. No publicar rutas
+ni texto nativo. No atribuir la causa exacta del FAIL a este informe agregado.
+
+Candidato: se corrige desalineación del plazo de close del runner (500ms,
+menor que los 2s de EOF del transporte) a 3s, dentro de RPC Shutdown de 5s.
+El worker entrega resultado explícito después de drop del driver; no cambia
+la política de exit, job ni StopUnconfirmed. Fixture SlowClose (1000ms) y
+CloseFailure/CloseBlocked conservados. Se corrige otro defecto confirmado
+estáticamente: un delta vacío marcaba falsamente el mensaje como streamed
+y suprimía el texto final en los tres mappers RPC. Regresiones de mensaje
+final, sin inventar deltas. El smoke registra conteos y presencia del marker,
+no texto, y etiquetas de error de stop; --stop-only evita llamadas de modelo.
+La causa real de ausencia de texto y de cada stop aún requiere confirmación
+nativa. UNTESTED; no se declara cierre de W2 ni cambios a main.

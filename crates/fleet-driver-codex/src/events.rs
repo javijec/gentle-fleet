@@ -95,14 +95,14 @@ impl EventMapper {
         };
         match method {
             "item/agentMessage/delta" => {
+                let Some(delta) = text(&params, "delta") else {
+                    return Vec::new();
+                };
                 if let Some(id) = text(&params, "itemId") {
                     self.delta_items.insert(id);
                 } else {
                     self.unscoped_delta = true;
                 }
-                let Some(delta) = text(&params, "delta") else {
-                    return Vec::new();
-                };
                 self.event(DomainEvent::AssistantDelta {
                     turn_id: turn,
                     text: delta,
@@ -638,6 +638,24 @@ mod tests {
         assert!(matches!(
             second[0].kind,
             DomainEvent::AssistantMessage { .. }
+        ));
+    }
+
+    #[test]
+    fn empty_delta_does_not_hide_final_message() {
+        let mut mapper = EventMapper::default();
+        mapper.begin_turn("native-turn".into(), "fleet-turn".into());
+        assert!(mapper.map(&json!({
+            "method":"item/agentMessage/delta",
+            "params":{"itemId":"m1","delta":""}
+        })).is_empty());
+        let events = mapper.map(&json!({
+            "method":"item/completed",
+            "params":{"item":{"id":"m1","type":"agentMessage","text":"final"}}
+        }));
+        assert!(matches!(
+            &events[0].kind,
+            DomainEvent::AssistantMessage {text, ..} if text == "final"
         ));
     }
 

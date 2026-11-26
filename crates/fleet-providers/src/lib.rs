@@ -21,6 +21,10 @@ fn fake_config_from_env() -> FakeConfig {
     FakeConfig {
         block_send: env_flag("FLEET_FAKE_BLOCK_SEND"),
         block_close: env_flag("FLEET_FAKE_BLOCK_CLOSE"),
+        slow_close_ms: std::env::var("FLEET_FAKE_SLOW_CLOSE_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
         fail_close: env_flag("FLEET_FAKE_FAIL_CLOSE"),
         fail_send: env_flag("FLEET_FAKE_FAIL_SEND"),
         emit_provider_error: env_flag("FLEET_FAKE_PROVIDER_ERROR"),

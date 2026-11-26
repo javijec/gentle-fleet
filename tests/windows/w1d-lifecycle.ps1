@@ -1,13 +1,13 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery', 'Acceptance')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'SlowClose', 'Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery', 'Acceptance')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($Scenario -eq 'All') {
-    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked')) {
+    foreach ($case in @('Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'SlowClose')) {
         Write-Output "W1-D scenario: $case"
         & $PSCommandPath -Scenario $case
     }
@@ -78,6 +78,9 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
         }
         if ($Scenario -eq 'CloseBlocked') {
             $info.Environment['FLEET_FAKE_BLOCK_CLOSE'] = '1'
+        }
+        if ($Scenario -eq 'SlowClose') {
+            $info.Environment['FLEET_FAKE_SLOW_CLOSE_MS'] = '1000'
         }
     }
     foreach ($argument in $Arguments) { [void]$info.ArgumentList.Add($argument) }
@@ -575,6 +578,13 @@ try {
         }
         if ($daemon.HasExited -or $sentinel.HasExited) { throw 'stop affected an unrelated process' }
         Write-Output "PASS: $Scenario produces the expected durable result"
+        return
+    }
+    if ($Scenario -eq 'SlowClose') {
+        Assert-CompletedTurn $first.Session 'W1-D before slow close'
+        Assert-Stopped $first
+        if ($daemon.HasExited -or $sentinel.HasExited) { throw 'slow close affected an unrelated process' }
+        Write-Output 'PASS: slow close confirms runner exit after a 1000ms driver close'
         return
     }
     if ($Scenario -in @('CloseFailure', 'CloseBlocked')) {

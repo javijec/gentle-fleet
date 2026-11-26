@@ -29,9 +29,11 @@ evitar asociar un turno anterior al siguiente.
 La reserva de `operation_key` (incluye `session_id` y payload) es atómica y
 precede al despacho; si el despacho falla, la operación queda registrada como
 fallida y se publica un resultado terminal. No hay reenvío automático tras
-timeout. `StopSession` tiene plazo acotado (500 ms de ack del driver): si el
-driver no responde, se publica `SessionStateChanged(Stopped)` y un aviso, y el
-hilo se suelta sin bloquear al cliente.
+timeout. `StopSession` solicita el cierre explícito con plazo acotado. En el
+runner de proceso recién lanzado, `Stopped` requiere respuesta Shutdown tipada
+y salida exitosa verificada del hijo propio. Una respuesta ausente, un error
+o una salida no verificable produce `StopUnconfirmed`, no un cierre exitoso.
+El reattach y la reconciliación de identidad quedan sujetos al gate W1-E.
 
 Operation: Prepared → Dispatched → Confirmed / Rejected / OutcomeUnknown → Reconciled. Un resultado confirmado es durable y se puede consultar después de reiniciar.
 

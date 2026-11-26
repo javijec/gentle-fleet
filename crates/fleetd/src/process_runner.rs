@@ -1,5 +1,6 @@
 //! Runner real: lanza y reconecta procesos `fleet-runner` mediante IPC local.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -198,7 +199,12 @@ impl ProcessHandle {
 
     fn rpc(&self, request: RunnerRequest) -> Result<RunnerResponse, AgentError> {
         let mut io = self.io.lock().expect("runner stream poisoned");
-        self.rpc_locked(&mut io, request, None)
+        self.rpc_locked(
+            &mut io,
+            request,
+            None,
+            &Cell::new("writing RPC request"),
+        )
     }
 
     // Include contention for the per-runner RPC lock in the deadline. Cancel
@@ -210,14 +216,14 @@ impl ProcessHandle {
         timeout: Duration,
     ) -> Result<RunnerResponse, AgentError> {
         let deadline = Instant::now() + timeout;
-        let timeout_error = || AgentError {
+        let timeout_error = |phase: &str| AgentError {
             code: "runner_rpc_timeout".into(),
-            message: "runner RPC deadline expired; connection cancelled".into(),
+            message: format!("runner RPC deadline expired while {phase}; connection cancelled"),
         };
         let mut io = loop {
             if Instant::now() >= deadline {
                 let _ = self.cancellation.shutdown(std::net::Shutdown::Both);
-                return Err(timeout_error());
+                return Err(timeout_error("waiting for RPC lock"));
             }
             match self.io.try_lock() {
                 Ok(io) => break io,
@@ -245,11 +251,12 @@ impl ProcessHandle {
                 }
             })
             .map_err(io_error)?;
-        let response = self.rpc_locked(&mut io, request, Some(deadline));
+        let phase = Cell::new("writing RPC request");
+        let response = self.rpc_locked(&mut io, request, Some(deadline), &phase);
         let _ = done_tx.send(());
         if watchdog.join().unwrap_or(true) || Instant::now() >= deadline {
             let _ = self.cancellation.shutdown(std::net::Shutdown::Both);
-            return Err(timeout_error());
+            return Err(timeout_error(phase.get()));
         }
         response
     }
@@ -259,6 +266,7 @@ impl ProcessHandle {
         io: &mut RunnerIo,
         request: RunnerRequest,
         deadline: Option<Instant>,
+        phase: &Cell<&'static str>,
     ) -> Result<RunnerResponse, AgentError> {
         let request_id = format!("d{}", self.next_request.fetch_add(1, Ordering::SeqCst));
         write_runner_frame(
@@ -269,6 +277,7 @@ impl ProcessHandle {
             },
         )
         .map_err(io_error)?;
+        phase.set("waiting for RPC response");
         loop {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(AgentError {
@@ -727,6 +736,7 @@ mod tests {
             .rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50))
             .unwrap_err();
         assert_eq!(error.code, "runner_rpc_timeout");
+        assert!(error.message.contains("waiting for RPC lock"));
         drop(held);
 
         let (handle, _peer) = pair();
@@ -734,6 +744,7 @@ mod tests {
             .rpc_bounded(RunnerRequest::Shutdown, Duration::from_millis(50))
             .unwrap_err();
         assert_eq!(error.code, "runner_rpc_timeout");
+        assert!(error.message.contains("waiting for RPC response"));
     }
 
     #[cfg(windows)]
@@ -823,7 +834,9 @@ mod tests {
         let result = done_rx
             .recv_timeout(Duration::from_secs(4))
             .expect("Shutdown cancellation hung");
-        assert_eq!(result.unwrap_err().code, "runner_rpc_timeout");
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "runner_rpc_timeout");
+        assert!(error.message.contains("waiting for RPC response"));
         release_tx.send(()).unwrap();
         worker.join().unwrap();
         server.join().unwrap();

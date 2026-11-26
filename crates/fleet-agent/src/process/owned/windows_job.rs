@@ -74,7 +74,10 @@ impl Job {
             return Ok(());
         }
         if unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) } == 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            if self.active()? != 0 {
+                return Err(error);
+            }
         }
         Ok(())
     }

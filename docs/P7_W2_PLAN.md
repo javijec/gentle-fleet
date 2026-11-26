@@ -109,3 +109,7 @@ entre creación suspendida y asignación si muere el host; este candidato no
 acredita atomicidad de creación/assign frente a crash. El fixture de job se
 incorpora a cargo test. Validar Windows nativo y Linux full mismo SHA, con
 w1f si cambia infraestructura compartida; revisar resultados y logs originales.
+
+Además, fixture de root bloqueado y descendiente activo, y prueba de muerte
+del propietario tras asignación que espera el handle del hijo. No equiparar
+esta última con una prueba de crash durante creación del proceso suspendido.

@@ -257,10 +257,26 @@ mod tests {
             Ok("large") => print!("{}", "x".repeat(MAX_VERSION_BYTES + 1)),
             Ok("hang") => std::thread::sleep(Duration::from_secs(20)),
             #[cfg(windows)]
-            Ok("tree") => {
+            Ok("tree") | Ok("tree_hang") => {
                 let descendant = fixture("hang").spawn().unwrap();
                 drop(descendant);
                 println!("spawned descendant");
+                if std::env::var("FLEET_TEST_VERSION_FIXTURE").as_deref() == Ok("tree_hang") {
+                    std::thread::sleep(Duration::from_secs(20));
+                }
+            }
+            #[cfg(windows)]
+            Ok("job_owner") => {
+                let child = spawn_owned(
+                    fixture("hang")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null()),
+                )
+                .unwrap();
+                println!("job child pid={}", child.root_id());
+                std::thread::sleep(Duration::from_secs(20));
+                drop(child);
             }
             _ => {}
         }
@@ -337,6 +353,89 @@ mod tests {
 
         let error = capture_stdout(fixture("tree"), VERSION_TIMEOUT).unwrap_err();
         assert_eq!(error.message, "provider version probe left active descendants");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_terminates_blocked_root_and_descendant() {
+        let mut root = spawn_owned(
+            fixture("tree_hang")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .unwrap();
+        let deadline = Instant::now() + VERSION_TIMEOUT;
+        while root.active_processes().unwrap() < 2 {
+            assert!(Instant::now() < deadline, "descendant was not started");
+            assert!(root.try_wait().unwrap().is_none());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        root.kill().unwrap();
+        root.wait().unwrap();
+        assert_eq!(root.active_processes().unwrap(), 0);
+        let error = capture_stdout(fixture("tree_hang"), Duration::from_secs(2)).unwrap_err();
+        assert_eq!(error.message, "provider version probe timed out");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_kill_on_owner_death() {
+        use std::io::BufRead;
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+
+        // The owner itself is deliberately NOT placed in a private job by
+        // this test: killing it must close its child's job handle, not kill
+        // the child through some enclosing test job.
+        let mut owner = fixture("job_owner")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = owner.stdout.take().unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(pid) = line
+                    .split("job child pid=")
+                    .nth(1)
+                    .and_then(|text| text.trim().parse::<u32>().ok())
+                {
+                    let _ = tx.send(pid);
+                    break;
+                }
+            }
+        });
+        let outcome = (|| -> std::io::Result<OwnedHandle> {
+            let pid = rx
+                .recv_timeout(VERSION_TIMEOUT)
+                .map_err(std::io::Error::other)?;
+            // PID is used only to obtain an observation handle for a freshly
+            // created fixture child while its owner is alive.
+            let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let child = unsafe { OwnedHandle::from_raw_handle(handle) };
+            if unsafe { WaitForSingleObject(child.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+                return Err(std::io::Error::other("fixture child not alive before owner death"));
+            }
+            Ok(child)
+        })();
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        reader.join().unwrap();
+        let child = outcome.unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(child.as_raw_handle(), 5000) },
+            WAIT_OBJECT_0,
+            "private job did not kill child when its owner died"
+        );
     }
 
     #[cfg(windows)]

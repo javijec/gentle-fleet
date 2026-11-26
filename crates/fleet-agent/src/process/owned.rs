@@ -87,12 +87,26 @@ impl OwnedChild {
     /// Reap the owned job first, then report that shutdown was not orderly.
     pub fn ensure_tree_empty(&mut self) -> io::Result<()> {
         #[cfg(windows)]
-        if self.job.active()? != 0 {
-            self.kill()?;
-            self.wait()?;
-            return Err(io::Error::other("provider exited with active descendants"));
+        {
+            // Root exit and job accounting may become observable at different
+            // instants. Give the job a small bounded grace period to drain.
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(200);
+            while self.job.active()? != 0 {
+                if std::time::Instant::now() >= deadline {
+                    self.kill()?;
+                    self.wait()?;
+                    return Err(io::Error::other("provider exited with active descendants"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
         Ok(())
+    }
+
+    #[cfg(all(windows, test))]
+    pub(super) fn root_id(&self) -> u32 {
+        self.child.id()
     }
 
     #[cfg(all(windows, test))]

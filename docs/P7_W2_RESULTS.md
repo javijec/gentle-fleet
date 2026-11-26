@@ -92,3 +92,8 @@ rechazan versiones incompatibles. Se agrega fixture negro argv Windows/Linux,
 limpieza del hijo directo ante caída de RPC y error de startup y drenaje de
 stdout de OpenCode después de readiness. UNTESTED; no confundir fixture Node
 con una instalación real ni hijo directo con contención de descendientes.
+
+Regresiones adicionales candidatas: terminación del root bloqueado con hijo
+activo y prueba de kill-on-close cuando el propietario del job muere sin
+Drop. Se da un margen acotado de 200 ms al contador del job tras el exit
+normal del root. Sigue UNTESTED; no acredita atomicidad durante spawn/assign.

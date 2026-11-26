@@ -21,7 +21,7 @@ use fleet_domain::store::{
 };
 use fleet_domain::{
     AgentEvent, ControlState, DomainEvent, Event, EventKind, HostId, ProviderDescriptor,
-    ProviderId, RunnerEvent, RunnerMode, RunnerStatus, SessionId, SessionState, TurnState,
+    ProviderId, RunnerEvent, RunnerIdentity, RunnerMode, RunnerStatus, SessionId, SessionState, TurnState,
     TurnStatus, WorkspaceId,
 };
 use runner::{RunnerCommand, RunnerHandle, RunnerLaunchContext, RunnerLauncher};
@@ -761,13 +761,19 @@ impl SessionManager {
             },
         );
         if let Err(error) = self
-            .store
-            .update_runner_status(runner_id, RunnerStatus::Uncertain)
+            .sync_uncertain_approvals_locked(&mut state, session_id)
+            .and_then(|()| {
+                self.store
+                    .update_runner_status(runner_id, RunnerStatus::Uncertain)
+                    .map_err(to_agent_error)
+            })
         {
-            // Fail closed: if the DB still says `active`, a restart would
-            // reattach the runner and contradict the in-memory uncertainty.
+            // Already holding the manager state lock. Do not recursively
+            // acquire it through record_storage_fault on a storage error.
             eprintln!("cannot persist runner uncertainty: {error:?}; original: {reason}");
-            self.record_storage_fault(&error.message);
+            if state.storage_fault.is_none() {
+                state.storage_fault = Some(error.message);
+            }
         }
     }
 
@@ -817,21 +823,35 @@ impl SessionManager {
         Ok(())
     }
 
-    fn mark_failed_recovery(&self, identity: &RunnerIdentity) -> Result<(), AgentError> {
+    fn sync_uncertain_approvals_locked(
+        &self,
+        state: &mut ManagerState,
+        session_id: &str,
+    ) -> Result<(), AgentError> {
         self.store
-            .update_runner_status(&identity.runner_id, RunnerStatus::Uncertain)
+            .mark_session_approvals_uncertain(session_id)
             .map_err(to_agent_error)?;
-        self.store
-            .mark_session_approvals_uncertain(&identity.session_id)
-            .map_err(to_agent_error)?;
-        let approvals = self.store
-            .list_approvals(Some(&identity.session_id))
-            .map_err(to_agent_error)?;
-        let mut state = self.state.lock().expect("manager poisoned");
-        for approval in approvals {
+        for approval in self.store.list_approvals(Some(session_id)).map_err(to_agent_error)? {
             state.approvals.insert(approval.approval_id.clone(), approval);
         }
         Ok(())
+    }
+
+    fn mark_failed_recovery(&self, identity: &RunnerIdentity) -> Result<(), AgentError> {
+        let mut state = self.state.lock().expect("manager poisoned");
+        let outcome = self
+            .sync_uncertain_approvals_locked(&mut state, &identity.session_id)
+            .and_then(|()| {
+                self.store
+                    .update_runner_status(&identity.runner_id, RunnerStatus::Uncertain)
+                    .map_err(to_agent_error)
+            });
+        if let Err(error) = &outcome {
+            if state.storage_fault.is_none() {
+                state.storage_fault = Some(error.message.clone());
+            }
+        }
+        outcome
     }
 
     /// Reintenta adjuntar runners persistentes tras reiniciar el daemon.
@@ -840,13 +860,26 @@ impl SessionManager {
         let mut recovered = Vec::new();
         let records = self.store.list_runners().map_err(to_agent_error)?;
         for record in records {
+            if matches!(record.status, RunnerStatus::Lost | RunnerStatus::Uncertain) {
+                // Also reconcile approvals left by an older daemon that
+                // recorded runner loss without updating its approval catalog.
+                let mut state = self.state.lock().expect("manager poisoned");
+                if let Err(error) = self.sync_uncertain_approvals_locked(
+                    &mut state,
+                    &record.identity.session_id,
+                ) {
+                    if state.storage_fault.is_none() {
+                        state.storage_fault = Some(error.message.clone());
+                    }
+                    return Err(error);
+                }
+                continue;
+            }
             if matches!(
                 record.status,
                 RunnerStatus::Stopped
                     | RunnerStatus::StopUnconfirmed
-                    | RunnerStatus::Lost
                     | RunnerStatus::Stopping
-                    | RunnerStatus::Uncertain
             ) {
                 continue;
             }

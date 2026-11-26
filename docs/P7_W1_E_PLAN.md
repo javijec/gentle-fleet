@@ -43,3 +43,10 @@ adversa y carreras de conexión/ACK, validación de recuperación ante pérdida
 de runner con daemon vivo, evidencia completa D, full Windows/Linux mismo
 SHA limpio, protocolo 10/10, revisión de logs y cero P0/P1 confirmados.
 No se declara PASS ni cierre; no se requiere otra cuenta ni otra PC Windows.
+
+Se añade cuarto escenario RunnerLossLive: el daemon vivo observa la pérdida del
+runner, la aprobación queda incierta antes y después del reinicio. La ruta
+compartida marca y refresca aprobaciones antes de persistir runner Uncertain;
+si falla almacenamiento mantiene el bloqueo de efectos y no recaptura su
+propio mutex. El startup también reconcilia aprobaciones de registros Lost o
+Uncertain históricos. El caso sigue UNTESTED. No se declara PASS de W1-D/E.

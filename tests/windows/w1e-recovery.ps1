@@ -6,7 +6,7 @@ Push-Location $repo
 try {
     & cargo build -p fleet-runner --example w1e_spool_probe --locked
     if ($LASTEXITCODE -ne 0) { throw 'W1-E spool probe build failed' }
-    foreach ($scenario in @('Recovery', 'RunnerLoss', 'ApprovalRecovery')) {
+    foreach ($scenario in @('Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')) {
         Write-Output "W1-E scenario: $scenario"
         & (Join-Path $PSScriptRoot 'w1d-lifecycle.ps1') -Scenario $scenario
     }

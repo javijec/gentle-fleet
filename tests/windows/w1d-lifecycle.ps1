@@ -1,6 +1,6 @@
 # Native lifecycle regressions; no external provider or user data.
 param(
-    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'ApprovalRecovery')]
+    [ValidateSet('All', 'Lifecycle', 'MissingRunner', 'InvalidRunner', 'SilentRunner', 'Interrupt', 'InterruptFailure', 'ActiveStop', 'CloseFailure', 'CloseBlocked', 'Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')]
     [string]$Scenario = 'All'
 )
 $ErrorActionPreference = 'Stop'
@@ -56,7 +56,7 @@ function Start-OwnedProcess([string]$Executable, [string[]]$Arguments) {
         if ($Scenario -eq 'Recovery') {
             $info.Environment['FLEET_FAKE_SLOW_TURN_MS'] = '8000'
         }
-        if ($Scenario -in @('RunnerLoss', 'ApprovalRecovery')) {
+        if ($Scenario -in @('RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')) {
             $info.Environment['FLEET_FAKE_APPROVAL'] = '1'
         }
         if ($Scenario -in @('Interrupt', 'InterruptFailure', 'ActiveStop')) {
@@ -345,7 +345,7 @@ try {
         return
     }
     $first = New-FixtureSession $workspaceId
-    if ($Scenario -in @('Recovery', 'RunnerLoss', 'ApprovalRecovery')) {
+    if ($Scenario -in @('Recovery', 'RunnerLoss', 'RunnerLossLive', 'ApprovalRecovery')) {
         $key = [guid]::NewGuid().ToString('N')
         $script:fixtureOperationKey = $key
         $message = 'W1-E recovery fixture prompt'
@@ -369,9 +369,11 @@ try {
             } while ($deadline.Elapsed.TotalSeconds -lt 20)
             if (-not $approvalId) { throw 'pending approval was not observed' }
         }
-        Stop-OwnedProcess $daemon
-        $script:daemon = $null
-        if ($first.Process.HasExited -or $sentinel.HasExited) { throw 'runner did not survive daemon termination' }
+        if ($Scenario -ne 'RunnerLossLive') {
+            Stop-OwnedProcess $daemon
+            $script:daemon = $null
+        }
+        if ($first.Process.HasExited -or $sentinel.HasExited) { throw 'original runner or sentinel exited before fault' }
         if ($Scenario -eq 'Recovery') {
             $probeExe = Join-Path $repo 'target/debug/examples/w1e_spool_probe.exe'
             $spool = Join-Path $root "private data/fleet-runner-runner-$($first.Session).spool.sqlite"
@@ -385,12 +387,27 @@ try {
                 Stop-OwnedProcess $probe
             }
         }
-        if ($Scenario -eq 'RunnerLoss') {
+        if ($Scenario -in @('RunnerLoss', 'RunnerLossLive')) {
             $first.Process.Kill()
             if (-not $first.Process.WaitForExit(5000)) { throw 'owned runner did not terminate' }
         }
+        if ($Scenario -eq 'RunnerLossLive') {
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
+                    Where-Object { ($_ -split "\t")[0] -eq $first.Session })
+                $approval = (Invoke-FixtureCli @('approval', $approvalId)) -split "\t"
+                if ($rows.Count -eq 1 -and ($rows[0] -split "\t")[3] -eq 'NeedsReconciliation' -and
+                    $approval.Count -ge 4 -and $approval[3] -eq 'uncertain') { break }
+                Start-Sleep -Milliseconds 100
+            } while ($deadline.Elapsed.TotalSeconds -lt 20)
+            if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'NeedsReconciliation' -or
+                $approval.Count -lt 4 -or $approval[3] -ne 'uncertain') {
+                throw 'live daemon failed to classify lost runner and approval'
+            }
+        }
         Restart-FixtureDaemon
-        if ($Scenario -eq 'RunnerLoss') {
+        if ($Scenario -in @('RunnerLoss', 'RunnerLossLive')) {
             $rows = @((Invoke-FixtureCli @('session', 'list')) -split "\r?\n" |
                 Where-Object { ($_ -split "\t")[0] -eq $first.Session })
             if ($rows.Count -ne 1 -or ($rows[0] -split "\t")[3] -ne 'NeedsReconciliation') {

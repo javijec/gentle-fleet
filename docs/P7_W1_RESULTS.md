@@ -1,6 +1,6 @@
 # P7-W1 — resultados
 
-## Revisión parcial independiente del gate final (26/11/2026)
+## Estado vigente — revisión parcial independiente del gate final (26/11/2026)
 
 Se localizaron `reports/combined/d6d1c8c309ec4a16bf20e0ef3388b55f/`
 y los logs originales de ambos hosts. `combined.json`, `windows.json` y
@@ -18,7 +18,9 @@ constituye todavía la revisión técnica completa de todos los riesgos y logs
 exigida por W1-F; **cierre técnico formal pendiente**. La evidencia de dos SID
 sigue diferida a release; no es PASS. No se ha repetido el gate histórico.
 
-**Estado: ABIERTO.** Base `7701bba`; W0 CI
+## Evidencia histórica (no describe el estado vigente)
+
+**Estado histórico: ABIERTO.** Base `7701bba`; W0 CI
 [#45234810431](https://github.com/javijec/gentle-fleet/actions/runs/45234810431)
 PASS en Windows, backend Linux y desktop Linux.
 

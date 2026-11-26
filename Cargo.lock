@@ -89,6 +89,7 @@ version = "0.1.0"
 dependencies = [
  "fleet-domain",
  "serde",
+ "windows-sys",
 ]
 
 [[package]]
@@ -198,6 +199,7 @@ dependencies = [
 name = "fleet-rpc-jsonl"
 version = "0.1.0"
 dependencies = [
+ "fleet-agent",
  "serde_json",
 ]
 

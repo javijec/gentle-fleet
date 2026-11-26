@@ -1,5 +1,29 @@
 # P7-W2-A — resultados preliminares
 
+## Candidato de contención de procesos Windows (26/11/2026)
+
+UNTESTED: se agrega un Job Object privado por proceso proveedor (sondeos,
+Codex RPC, JSONL Pi/Gentle Shell y OpenCode owned). Se crea suspendido, se
+asigna por handle de Child y se comprueba el único hilo inicial y su identidad
+antes de reanudar. Se rechazan fallos de asignación, incluso restricciones
+del job padre, sin fallback inseguro. No se cambia el lanzamiento de runners,
+ni se incorpora OpenCode attached al job. Al cerrar se verifica salida del
+root y cero procesos activos; kill-on-close es respaldo, no prueba de cierre.
+Un root exitoso con descendientes activos produce error tras limpieza.
+
+Fixture Windows: root real con hijo que hereda stdout, root ya salido,
+limpieza comprobada por conteo de job y EOF, y un centinela independiente
+que sigue vivo. Se comprueba también rechazo del sondeo con descendientes.
+Cancelación del lector de sondeo con handle de hilo propio si EOF se demora.
+Linux mantiene su política previa de hijo directo. Se reutiliza windows-sys
+0.61.2 ya fijado; no hay dependencias externas nuevas en el lock.
+
+Límites: no es sandbox contra inyección de procesos del mismo SID, ni
+contiene servicios creados por intermediarios externos al árbol. Se requiere
+validación nativa del arranque suspendido, jobs anidados y fixture de proceso,
+incluida revisión de riesgo de muerte durante la asignación inicial.
+No se declara PASS nuevo, cierre W1 ni W2-A; W2-B NO-GO hasta validar.
+
 ## Revisión de `0203b5c` (26/11/2026)
 
 **W2-A sigue ABIERTO; NO-GO W2-B.** El informe original
@@ -28,7 +52,9 @@ No se modificó código de producción ni se afirma que la limpieza esté resuel
 Se requiere corregir los defectos confirmados, pruebas de proceso Windows y
 regresión Linux y un nuevo gate del mismo SHA limpio antes de cerrar W2-A.
 
-**Estado: ABIERTO / NO-GO.** Base actualizada `8354b19`; no hay cambios de
+## Evidencia histórica — base `8354b19`
+
+**Estado histórico: ABIERTO / NO-GO.** Base actualizada `8354b19`; no hay cambios de
 infraestructura común ni pruebas nuevas acreditadas en este registro.
 
 La inspección inicial encontró rutas distintas de descubrimiento: Codex

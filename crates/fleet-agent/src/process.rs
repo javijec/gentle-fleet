@@ -11,6 +11,9 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+mod owned;
+pub use owned::{spawn_owned, OwnedChild};
+
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_VERSION_BYTES: usize = 64 * 1024;
 
@@ -127,9 +130,9 @@ pub fn user_home() -> Option<PathBuf> {
 }
 
 /// Bounded stdout capture, null stdin/stderr, successful exit required.
-/// On failure terminate/reap only our direct child. A descendant inheriting
-/// stdout can delay EOF; the caller still returns at the deadline, but tree
-/// containment remains a separate native-process validation requirement.
+/// Windows contains the process tree in an owned job and requires it empty.
+/// Unix retains direct-child supervision. The probe deadline is independent
+/// of EOF from stdout.
 pub fn version_stdout(command: &Command) -> Result<Vec<u8>, AgentError> {
     // provider_command builds only a program and fixed prefix arguments.
     // Preserve the exact executable and entrypoint used for the later RPC.
@@ -139,28 +142,38 @@ pub fn version_stdout(command: &Command) -> Result<Vec<u8>, AgentError> {
 }
 
 fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, AgentError> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| unavailable("cannot start provider version probe"))?;
+    let mut child = spawn_owned(
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .map_err(|_| unavailable("cannot start contained provider version probe"))?;
     let deadline = Instant::now() + timeout;
     let stdout = child.stdout.take().expect("piped stdout");
     let (tx, rx) = mpsc::sync_channel(1);
-    let reader = std::thread::Builder::new().spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout
-            .take((MAX_VERSION_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes);
-        let _ = tx.send(result);
-    });
-    if reader.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(unavailable("cannot start provider version reader"));
-    }
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_cancelled = cancelled.clone();
+    let reader = std::thread::Builder::new()
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let mut stdout = stdout.take((MAX_VERSION_BYTES + 1) as u64);
+            let result = (|| {
+                let mut chunk = [0u8; 4096];
+                loop {
+                    if reader_cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                        return Err(std::io::Error::other("version reader cancelled"));
+                    }
+                    let count = stdout.read(&mut chunk)?;
+                    if count == 0 {
+                        return Ok(bytes);
+                    }
+                    bytes.extend_from_slice(&chunk[..count]);
+                }
+            })();
+            let _ = tx.send(result);
+        })
+        .map_err(|_| unavailable("cannot start provider version reader"))?;
     let result = (|| {
         let mut output = None;
         let mut exited = false;
@@ -176,6 +189,9 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
                     if !status.success() {
                         return Err(unavailable("provider version probe exited unsuccessfully"));
                     }
+                    child
+                        .ensure_tree_empty()
+                        .map_err(|_| unavailable("provider version probe left active descendants"))?;
                     exited = true;
                 }
             }
@@ -200,8 +216,30 @@ fn capture_stdout(mut command: Command, timeout: Duration) -> Result<Vec<u8>, Ag
         }
     })();
     if result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        let cleanup = child.kill().and_then(|_| child.wait());
+        #[cfg(windows)]
+        {
+            // A leaked pipe handle outside the private job must not trap this
+            // reader. Cancel only the thread created by this invocation.
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::IO::CancelSynchronousIo;
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !reader.is_finished() && Instant::now() < deadline {
+                // Repeated cancellation covers the interval before ReadFile.
+                unsafe { CancelSynchronousIo(reader.as_raw_handle()) };
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if !reader.is_finished() {
+                return Err(unavailable("provider version reader cancellation unconfirmed"));
+            }
+            let _ = reader.join();
+        }
+        if cleanup.is_err() {
+            return Err(unavailable("provider version process cleanup unconfirmed"));
+        }
+    } else {
+        let _ = reader.join();
     }
     result
 }
@@ -211,12 +249,19 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::zombie_processes)] // tree fixture deliberately leaves a descendant to the job
     fn version_fixture() {
         match std::env::var("FLEET_TEST_VERSION_FIXTURE").as_deref() {
             Ok("ok") => println!("fixture 1.2.3"),
             Ok("fail") => std::process::exit(9),
             Ok("large") => print!("{}", "x".repeat(MAX_VERSION_BYTES + 1)),
             Ok("hang") => std::thread::sleep(Duration::from_secs(20)),
+            #[cfg(windows)]
+            Ok("tree") => {
+                let descendant = fixture("hang").spawn().unwrap();
+                drop(descendant);
+                println!("spawned descendant");
+            }
             _ => {}
         }
     }
@@ -238,6 +283,60 @@ mod tests {
         let start = Instant::now();
         assert!(capture_stdout(fixture("hang"), Duration::from_millis(250)).is_err());
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_reaps_descendants_after_root_exit_without_touching_sentinel() {
+        let mut sentinel = spawn_owned(
+            fixture("hang")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .unwrap();
+        let mut root = spawn_owned(
+            fixture("tree")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = root.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            assert!(Instant::now() < deadline, "root did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The root already exited, but its descendant holds stdout open.
+        assert!(root.active_processes().unwrap() > 0);
+        let error = root.ensure_tree_empty().unwrap_err();
+        assert_eq!(error.to_string(), "provider exited with active descendants");
+        assert_eq!(root.active_processes().unwrap(), 0);
+        let mut stdout = root.stdout.take().unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            let mut data = String::new();
+            let result = stdout.read_to_string(&mut data).map(|_| data);
+            let _ = tx.send(result);
+        });
+        assert!(rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap()
+            .contains("spawned descendant"));
+        reader.join().unwrap();
+        assert!(sentinel.try_wait().unwrap().is_none());
+        assert_eq!(sentinel.active_processes().unwrap(), 1);
+        sentinel.kill().unwrap();
+        sentinel.wait().unwrap();
+
+        let error = capture_stdout(fixture("tree"), VERSION_TIMEOUT).unwrap_err();
+        assert_eq!(error.message, "provider version probe left active descendants");
     }
 
     #[cfg(windows)]

@@ -8,7 +8,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
+
+use fleet_agent::process::{spawn_owned, OwnedChild};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -147,7 +149,7 @@ fn classify(
 }
 
 pub struct JsonlRpc {
-    child: Child,
+    child: OwnedChild,
     stdin: Option<ChildStdin>,
     next_id: AtomicU64,
     pending: Pending,
@@ -203,12 +205,13 @@ impl JsonlRpc {
         for (key, value) in environment {
             command.env(key, value);
         }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| RpcError::new("provider_unavailable", error.to_string()))?;
+        let mut child = spawn_owned(
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|error| RpcError::new("provider_unavailable", error.to_string()))?;
         let stdin = child
             .stdin
             .take()
@@ -493,7 +496,12 @@ impl JsonlRpc {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
             match self.child.try_wait() {
-                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) if status.success() => {
+                    return self
+                        .child
+                        .ensure_tree_empty()
+                        .map_err(|error| RpcError::new("StopUnconfirmed", error.to_string()));
+                }
                 Ok(Some(_)) => {
                     return Err(RpcError::new(
                         "StopUnconfirmed",
@@ -504,8 +512,10 @@ impl JsonlRpc {
                 Err(error) => return Err(RpcError::new("StopUnconfirmed", error.to_string())),
             }
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child
+            .kill()
+            .and_then(|_| self.child.wait())
+            .map_err(|error| RpcError::new("StopUnconfirmed", error.to_string()))?;
         Err(RpcError::new(
             "StopUnconfirmed",
             "provider required forced termination after close",
@@ -517,10 +527,7 @@ impl Drop for JsonlRpc {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Release);
         drop(self.stdin.take());
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+        // OwnedChild cleans up the private job even if its root already exited.
     }
 }
 
@@ -601,14 +608,15 @@ while [ "$i" -lt 300 ]; do
 done
 printf '{"type":"response","id":"fleet-1","success":true,"data":{"ok":true}}\n'
 "#;
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = spawn_owned(
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));

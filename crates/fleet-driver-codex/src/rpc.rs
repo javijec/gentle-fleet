@@ -8,7 +8,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
+
+use fleet_agent::process::{spawn_owned, OwnedChild};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -59,7 +61,7 @@ pub struct ServerRequest {
 type Pending = Arc<Mutex<HashMap<u64, mpsc::SyncSender<Result<Value, RpcError>>>>>;
 
 pub struct RpcClient {
-    child: Child,
+    child: OwnedChild,
     stdin: Option<ChildStdin>,
     next_id: AtomicU64,
     pending: Pending,
@@ -163,14 +165,15 @@ impl RpcClient {
         workspace: &Path,
         program: &std::ffi::OsStr,
     ) -> Result<Self, RpcError> {
-        let mut child = Command::new(program)
-            .arg("app-server")
-            .current_dir(workspace)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| RpcError::new("provider_unavailable", error.to_string()))?;
+        let mut child = spawn_owned(
+            Command::new(program)
+                .arg("app-server")
+                .current_dir(workspace)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|error| RpcError::new("provider_unavailable", error.to_string()))?;
         let stdin = child
             .stdin
             .take()
@@ -441,14 +444,19 @@ impl RpcClient {
         // Cerrar stdin es la señal de apagado ordenado del App Server.
         drop(self.stdin.take());
         match self.child.wait_timeout(Duration::from_secs(2)) {
-            Ok(Some(status)) if status.success() => Ok(()),
+            Ok(Some(status)) if status.success() => self
+                .child
+                .ensure_tree_empty()
+                .map_err(|error| RpcError::new("StopUnconfirmed", error.to_string())),
             Ok(Some(_)) => Err(RpcError::new(
                 "StopUnconfirmed",
                 "App Server exited unsuccessfully after close",
             )),
             Ok(None) => {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                self.child
+                    .kill()
+                    .and_then(|_| self.child.wait())
+                    .map_err(|error| RpcError::new("StopUnconfirmed", error.to_string()))?;
                 Err(RpcError::new(
                     "StopUnconfirmed",
                     "App Server required forced termination after close",
@@ -463,10 +471,7 @@ impl Drop for RpcClient {
     fn drop(&mut self) {
         self.reader_alive.store(false, Ordering::Release);
         drop(self.stdin.take());
-        if !matches!(self.child.try_wait(), Ok(Some(_))) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+        // OwnedChild always cleans up the entire private Windows job on drop.
     }
 }
 
@@ -476,7 +481,7 @@ trait WaitTimeout {
     fn wait_timeout(&mut self, timeout: Duration) -> io::Result<Option<std::process::ExitStatus>>;
 }
 
-impl WaitTimeout for Child {
+impl WaitTimeout for OwnedChild {
     fn wait_timeout(&mut self, timeout: Duration) -> io::Result<Option<std::process::ExitStatus>> {
         let deadline = std::time::Instant::now() + timeout;
         loop {

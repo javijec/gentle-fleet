@@ -8,7 +8,9 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::{Child, Stdio};
+use std::process::Stdio;
+
+use fleet_agent::process::{spawn_owned, OwnedChild};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -40,7 +42,7 @@ pub struct OpenCodeDriver {
     base_url: Option<String>,
     password: Option<String>,
     native_session_id: Option<String>,
-    child: Option<Child>,
+    child: Option<OwnedChild>,
     stop: Arc<AtomicBool>,
     events_rx: Option<Receiver<Value>>,
     local_events: VecDeque<AgentEvent>,
@@ -195,19 +197,20 @@ impl OpenCodeDriver {
 
         let mut command =
             fleet_agent::process::provider_command("opencode", "FLEET_OPENCODE_BIN", None)?;
-        let mut child = command
-            .args([
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-            ])
-            .current_dir(&workspace)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
+        let mut child = spawn_owned(
+            command
+                .args([
+                    "serve",
+                    "--hostname",
+                    "127.0.0.1",
+                    "--port",
+                    &port.to_string(),
+                ])
+                .current_dir(&workspace)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
             .map_err(|e| AgentError {
                 code: "provider_unavailable".into(),
                 message: format!("cannot start `opencode serve`: {e}"),
@@ -246,8 +249,10 @@ impl OpenCodeDriver {
         }
         let Some(password) = password.filter(|value| !value.is_empty() && listening) else {
             drop(rx);
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill().and_then(|_| child.wait()).map_err(|_| AgentError {
+                code: "StopUnconfirmed".into(),
+                message: "OpenCode startup cleanup unconfirmed".into(),
+            })?;
             return Err(AgentError {
                 code: "provider_unavailable".into(),
                 message: "opencode serve did not announce readiness and password".into(),

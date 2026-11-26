@@ -1,6 +1,6 @@
 # P7-W1-F — aceptación integral nativa Windows
 
-Estado: candidato UNTESTED. El propietario reportó PASS de D y E y de los gates
+Estado vigente: gate automatizado final PASS, con informes originales revisados parcialmente en P7_W1_RESULTS.md; aceptación técnica integral pendiente. El siguiente texto describe el plan histórico. El propietario reportó PASS de D y E y de los gates
 conjuntos anteriores. No se recibieron los informes originales completos; este
 corte consolida la evidencia pendiente y cubre los requisitos restantes de F.
 No introduce cambios de producción ni proveedores reales.

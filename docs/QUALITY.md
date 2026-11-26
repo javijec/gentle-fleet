@@ -258,3 +258,7 @@ El motor no incluye una interfaz gráfica. El gate del workspace incorpora `scri
 ### P7-W2-A — candidato común
 
 Sin evidencia nativa nueva. Mantener full Windows/Linux y regresiones W1 sobre el mismo SHA limpio; no contar los fixtures como proveedores reales. El sondeo acotado y la resolución sin shell requieren validación nativa; la contención de descendientes y los entrypoints reales siguen pendientes. Ver P7_W2_PLAN.md.
+
+W2-A contención candidata: no inferir PASS del gate 0203b5c para el nuevo
+código. Requiere prueba nativa de job privado y EOF, centinela independiente,
+regresión Linux y revisión de startup/crash; mantener W1 y release sin cambios.

@@ -97,3 +97,15 @@ literal en un ejecutable Rust copiado a una ruta Unicode con espacios; en
 Windows verifica también el prefijo de Node+JS mediante un ejecutable fixture
 (no ejecuta Node real), rechaza CMD y configuraciones ambiguas. El fixture
 se incorpora a cargo test del workspace sin cambios de dependencias.
+
+## Candidato de contención Windows
+
+La implementación usa Job Objects privados en fleet-agent. CREATE_SUSPENDED,
+asignación del handle de proceso, comprobación del hilo inicial y ResumeThread;
+no se reanuda sin asignación. No se emplea nightly ni se tocan los jobs de
+runner/daemon. No se habilita breakaway. La terminación debe comprobar cero
+procesos activos antes de considerar cierre exitoso. Revisar también la ventana
+entre creación suspendida y asignación si muere el host; este candidato no
+acredita atomicidad de creación/assign frente a crash. El fixture de job se
+incorpora a cargo test. Validar Windows nativo y Linux full mismo SHA, con
+w1f si cambia infraestructura compartida; revisar resultados y logs originales.

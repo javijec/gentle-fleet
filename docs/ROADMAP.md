@@ -16,7 +16,7 @@ El motor y sus clientes headless son el único alcance activo. La evidencia hist
 | --- | --- | --- |
 | P0–P5 | Sesiones, persistencia, runner, proveedores y SSH | Cerrados para el alcance documentado Linux / cliente Windows SSH |
 | P6-H | SDK Rust reutilizable sin GUI | Cerrado en Linux; integrado en main `7700b6a` |
-| P7-W1 | Motor Windows: IPC, persistencia, procesos y recuperación | A–F implementados; gate W1-F PASS reportado; revisión formal pendiente |
+| P7-W1 | Motor Windows: IPC, persistencia, procesos y recuperación | A–F implementados; gate W1-F PASS revisado parcialmente; aceptación técnica pendiente |
 | P7-W2 | Conformidad con proveedores nativos Windows | W2-A candidato abierto; W2-B–G pendientes |
 | P7-H | Desacople del workspace y validación headless | Implementado; primer gate pendiente antes de continuar W1/W2 |
 | P7-W4 | SSH bidireccional y configuración portable | Después de W1; validación final con motor headless |
@@ -220,3 +220,8 @@ Operador confirma PASS integral modo w1f tras corrección SHM; HEAD remoto obser
 Por instrucción del propietario se inicia W2 sobre W1-F con PASS integral reportado, sin declarar aceptación formal de W1 antes de revisión de evidencia. Primer corte W2-A: resolución nativa de Codex y smoke real chat/streaming/replay/cierre opt-in. Ver [plan W2](P7_W2_PLAN.md). Los restantes checks reales y proveedores siguen pendientes. Sin cambios de rango de compatibilidad, main, W4 ni release.
 
 W2: nomenclatura vigente A infraestructura, B OpenCode, C Codex, D Pi, E Gentle Shell, F conformidad conjunta, G aceptación. Candidato común UNTESTED; no cerrar W2-A ni W1 formal sin sus evidencias. Ver P7_W2_PLAN.md y P7_W2_RESULTS.md.
+
+W2-A: candidato de Job Objects publicado, UNTESTED. El gate anterior 0203b5c
+queda como evidencia histórica. Ver P7_W2_RESULTS.md; no iniciar W2-B hasta
+validar y revisar contención. La revisión parcial de W1 ya figura al comienzo
+de P7_W1_RESULTS.md; no equivale a aceptación formal ni release.

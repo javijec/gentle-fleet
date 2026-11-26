@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fleet-agent = { path = "../fleet-agent" }
 serde_json.workspace = true

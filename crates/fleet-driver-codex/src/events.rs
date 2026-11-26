@@ -645,10 +645,12 @@ mod tests {
     fn empty_delta_does_not_hide_final_message() {
         let mut mapper = EventMapper::default();
         mapper.begin_turn("native-turn".into(), "fleet-turn".into());
-        assert!(mapper.map(&json!({
-            "method":"item/agentMessage/delta",
-            "params":{"itemId":"m1","delta":""}
-        })).is_empty());
+        assert!(mapper
+            .map(&json!({
+                "method":"item/agentMessage/delta",
+                "params":{"itemId":"m1","delta":""}
+            }))
+            .is_empty());
         let events = mapper.map(&json!({
             "method":"item/completed",
             "params":{"item":{"id":"m1","type":"agentMessage","text":"final"}}

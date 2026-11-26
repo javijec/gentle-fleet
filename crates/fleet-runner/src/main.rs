@@ -421,9 +421,9 @@ fn spawn_driver_loop(
                     }
                 }
                 Ok(DriverCommand::Stop) => {
-                    let outcome = driver.close().map_err(|error| {
-                        fleet_agent::redact_provider_error(&error.to_string())
-                    });
+                    let outcome = driver
+                        .close()
+                        .map_err(|error| fleet_agent::redact_provider_error(&error.to_string()));
                     // A success is only sent after the driver and its owned
                     // process resources have been dropped. Keep errors typed
                     // by the Shutdown response path; never turn them into OK.

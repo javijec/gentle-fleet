@@ -448,9 +448,13 @@ mod tests {
         assert!(mapper.fleet_turn.is_some());
         let settled = json!({"type":"agent_settled","aborted":false});
         let events = mapper.map(&settled);
-        assert!(matches!(&events[0].kind, DomainEvent::TurnCompleted {
-            status: TurnStatus::Failed, ..
-        }));
+        assert!(matches!(
+            &events[0].kind,
+            DomainEvent::TurnCompleted {
+                status: TurnStatus::Failed,
+                ..
+            }
+        ));
 
         mapper.begin_turn("turn-2".into());
         mapper.map(&failure);
@@ -458,9 +462,13 @@ mod tests {
             "role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]
         }}));
         let events = mapper.map(&settled);
-        assert!(matches!(&events[0].kind, DomainEvent::TurnCompleted {
-            status: TurnStatus::Completed, ..
-        }));
+        assert!(matches!(
+            &events[0].kind,
+            DomainEvent::TurnCompleted {
+                status: TurnStatus::Completed,
+                ..
+            }
+        ));
     }
 
     #[test]

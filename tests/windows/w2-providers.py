@@ -41,7 +41,9 @@ def require(condition, message):
         raise Failure(message)
 
 
-def compatible(provider, version):
+def compatible(provider, version, experimental_gentle_shell_5=False):
+    if provider == "gentle-shell" and experimental_gentle_shell_5 and version == "5.0.0":
+        return True
     match = re.match(r"^(\d+)\.(\d+)(?:[.-]|$)", version or "")
     if not match:
         return False
@@ -120,8 +122,6 @@ def discover_paths(args):
         "FLEET_CODEX_BIN": Path(os.environ.get("LOCALAPPDATA", str(home))) /
             "Programs/OpenAI/Codex/bin/codex.exe",
         "FLEET_PI_JS": home / ".pi/agent/bin/pi-launcher.js",
-        "FLEET_GENTLE_SHELL_JS": Path(os.environ.get("APPDATA", str(home))) /
-            "npm/node_modules/gentle-pi/bin/gentle-shell.mjs",
         "FLEET_NODE_BIN": Path(os.environ.get("ProgramFiles", r"C:\Program Files")) /
             "nodejs/node.exe",
     }
@@ -155,6 +155,8 @@ class Fixture:
             FLEET_OPENCODE_MODE=args.opencode_mode,
             FLEET_W2_DIAGNOSTICS="1",
         )
+        if args.experimental_gentle_shell_5:
+            self.env["FLEET_GENTLE_SHELL_EXPERIMENTAL_5"] = "1"
         self.daemon = None
         self.discovery_reasons = []
         self.session = None
@@ -395,7 +397,7 @@ class Fixture:
             self.row["version"] = version
             self.row["mode"] = agent["mode"]
             self.row["availability"] = agent["availability"]
-            if not compatible(self.provider, version):
+            if not compatible(self.provider, version, self.args.experimental_gentle_shell_5):
                 if self.provider == "gentle-shell":
                     # Allow the stderr drain to consume the already written
                     # diagnostic before the unavailable result is recorded.
@@ -568,6 +570,8 @@ def main():
                         help="read-only diagnostic of a retained W2 fixture; no model call")
     parser.add_argument("--real", action="store_true", help="authorize real model turns")
     parser.add_argument("--provider", choices=("all", *PROVIDERS), default="all")
+    parser.add_argument("--experimental-gentle-shell-5", action="store_true",
+                        help="explicitly test exact 5.0.0 candidate; not release support")
     parser.add_argument("--stop-only", action="store_true", help="open/close session without a model turn")
     parser.add_argument("--tools", action="store_true", help="extra read-only tool turn")
     parser.add_argument("--recovery", action="store_true", help="extra chat after daemon restart")
@@ -628,6 +632,7 @@ def main():
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / (uuid.uuid4().hex + ".json")
     report = {"commit": sha, "started": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "experimental_gentle_shell_5": args.experimental_gentle_shell_5,
               "stop_only": args.stop_only, "tools": args.tools,
               "recovery": args.recovery, "interrupt": args.interrupt,
               "opencode_mode": args.opencode_mode, "providers": []}

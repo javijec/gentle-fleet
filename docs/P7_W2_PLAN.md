@@ -139,3 +139,7 @@ Diagnóstico sin consumo de modelo: `--inspect-fixture <ruta TEMP>` (repetible)
 consulta solo fixtures retenidos por API y guarda conteos sin texto; si
 el daemon ya no responde, BLOCKED. `--real --stop-only` prueba apertura y
 cierre de todos o de uno sin prompt. El full se mantiene para aceptación.
+
+Bundle Gentle Shell 5.0.0: primero comprobar descubrimiento y stop-only
+con `--experimental-gentle-shell-5`; después smoke real completo con el mismo
+flag. Mantener rango estable 4.x y documentar evidencia del nuevo major.

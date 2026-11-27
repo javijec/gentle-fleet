@@ -177,3 +177,16 @@ en Windows y diagnóstico clasificado de discovery; no se modifica el rango.
 La causa de exit no cero de Pi y de versión desconocida de Gentle Shell no
 está confirmada; el candidato no acredita que sean causados por pipes o
 latencia. UNTESTED; validar stop-only de Pi/Gentle Shell y gate full.
+
+## Bundle Windows Gentle Shell — a8b8413
+
+Stop-only Gentle Shell BLOCKED exe_not_found. El propietario confirmó
+instalación alternativa en ~/.gentle-shell-bundle: current 5.0.0-1.6.1,
+launcher generado apunta a Node 24.21.0 y versions/<current>/node_modules/
+gentle-pi/bin/gentle-shell.mjs. No ejecutar CMD. Resolver ambas raíces del
+bundle, la versión activa y el runtime exacto del launcher como datos,
+con paths contenidos y lectura acotada; fallback npm y overrides explícitos.
+El 5.0.0 es un nuevo major no aceptado. Solo se admite como candidato exacto
+si FLEET_GENTLE_SHELL_EXPERIMENTAL_5=1 (harness --experimental-gentle-shell-5),
+con negociación Desktop RPC existente. No se amplía rango estable ni se
+acepta otro 5.x. UNTESTED; confirmar --version real, stop-only y smoke full.

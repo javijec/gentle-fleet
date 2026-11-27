@@ -55,3 +55,9 @@ candidatas UNTESTED. No asumir que el PASS de Attached acredita Owned.
 Stop-only en 9932566: OpenCode Attached y Codex Owned PASS; Pi stop FAIL
 (exit no cero); Gentle Shell discovery BLOCKED (versión desconocida).
 Corrección de cierre JSONL y diagnóstico de discovery candidatos UNTESTED.
+
+Gentle Shell bundle observado: current `5.0.0-1.6.1`, Node `24.21.0`.
+El marcador de instalación no sustituye `--version`. Resolver bundle
+nativamente; 5.0.0 candidato experimental exacto con opt-in, no soportado
+para release hasta conformance. El informe a8b8413 solo contiene Gentle Shell;
+resultado nuevo de Pi no aportado.

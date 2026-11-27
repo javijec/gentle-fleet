@@ -7,6 +7,8 @@
 
 mod desktop;
 mod events;
+#[cfg(windows)]
+mod windows_bundle;
 
 use fleet_rpc_jsonl as rpc;
 
@@ -34,6 +36,17 @@ const COMPATIBILITY: VersionRange = VersionRange {
     min_minor: 8,
     max_major_exclusive: 5,
 };
+// 5.0.0 is a candidate, not part of the accepted 4.x range. Permit an
+// explicit local experiment only; never admit arbitrary 5.x versions.
+fn compatible_version(version: &ProviderVersion, experimental: bool) -> bool {
+    COMPATIBILITY.compatible(version)
+        || (experimental && version.text == "5.0.0")
+}
+
+fn experimental_5() -> bool {
+    std::env::var("FLEET_GENTLE_SHELL_EXPERIMENTAL_5").as_deref() == Ok("1")
+}
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const EMBEDDED_PI_VERSION: &str = "1.5.2";
 const HISTORY_UNSUPPORTED: &str = "Gentle Shell native history requires verified session-bound read-only RPC; an ephemeral --no-session process cannot prove the selected session identity";
@@ -46,6 +59,10 @@ fn map_rpc(error: fleet_rpc_jsonl::RpcError) -> AgentError {
 }
 
 fn shell_command() -> Result<std::process::Command, AgentError> {
+    #[cfg(windows)]
+    if let Some(command) = windows_bundle::discover()? {
+        return Ok(command);
+    }
     fleet_agent::process::provider_command(
         PROGRAM,
         "FLEET_GENTLE_SHELL_BIN",
@@ -296,7 +313,7 @@ impl GentleShellDriver {
             Ok((version, embedded_pi)) => {
                 self.descriptor = metadata(
                     version.clone(),
-                    if COMPATIBILITY.compatible(&version) {
+                    if compatible_version(&version, experimental_5()) {
                         ProviderAvailability::Available
                     } else {
                         ProviderAvailability::Unavailable
@@ -326,6 +343,9 @@ impl GentleShellDriver {
                         }
                         "provider override must be an existing absolute .exe" => "invalid_exe",
                         "configure either provider EXE or JS, not both" => "ambiguous_launcher",
+                        "Gentle Shell bundle metadata invalid" => "bundle_metadata_invalid",
+                        "Gentle Shell bundle entrypoint or runtime missing" => "bundle_files_missing",
+                        "Gentle Shell bundle path escaped root" => "bundle_path_escape",
                         _ => "other_probe_failure",
                     };
                     eprintln!("fleet-w2-discovery gentle-shell {reason}");
@@ -467,10 +487,13 @@ impl AgentDriver for GentleShellDriver {
         }
         let command = shell_command()?;
         let (version, embedded_pi) = detect_version(&command)?;
-        if !COMPATIBILITY.compatible(&version) {
+        if !compatible_version(&version, experimental_5()) {
             return Err(AgentError {
                 code: "incompatible_version".into(),
-                message: format!("Gentle Shell {} is outside >=4.8,<5", version.text),
+                message: format!(
+                    "Gentle Shell {} is outside >=4.8,<5 (5.0.0 requires explicit experimental opt-in)",
+                    version.text
+                ),
             });
         }
         self.descriptor = metadata(version, ProviderAvailability::Available);
@@ -843,6 +866,10 @@ impl DriverFactory for GentleShellFactory {
         COMPATIBILITY
     }
 
+    fn supports(&self, version: &ProviderVersion) -> bool {
+        compatible_version(version, experimental_5())
+    }
+
     fn create(&self) -> Box<dyn AgentDriver> {
         Box::new(GentleShellDriver::new())
     }
@@ -878,7 +905,7 @@ impl DriverFactory for GentleShellFactory {
         let environment = [("GENTLE_SHELL_INTERACTIVE_HOST", "1")];
         let command = shell_command()?;
         let (version, _) = detect_version(&command)?;
-        if !COMPATIBILITY.compatible(&version) {
+        if !compatible_version(&version, experimental_5()) {
             return Err(AgentError {
                 code: "incompatible_version".into(),
                 message: "Gentle Shell is outside the supported version range".into(),
@@ -973,6 +1000,16 @@ mod tests {
         ));
         assert_eq!(driver.permission_mode.as_deref(), Some("normal"));
         assert_eq!(driver.last_desktop_snapshot.as_ref().unwrap()["seq"], 24);
+    }
+
+    #[test]
+    fn experimental_five_is_exact_and_opt_in() {
+        assert!(compatible_version(&ProviderVersion::parse("4.8.0"), false));
+        assert!(!compatible_version(&ProviderVersion::parse("5.0.0"), false));
+        assert!(compatible_version(&ProviderVersion::parse("5.0.0"), true));
+        assert!(!compatible_version(&ProviderVersion::parse("5.0.1"), true));
+        assert!(!compatible_version(&ProviderVersion::parse("5.1.0"), true));
+        assert!(!compatible_version(&ProviderVersion::parse("5.0.0-unknown"), true));
     }
 
     #[test]

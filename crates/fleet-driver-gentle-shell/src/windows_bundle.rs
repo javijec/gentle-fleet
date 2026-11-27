@@ -36,7 +36,9 @@ fn active_version(text: &str) -> Result<&str, AgentError> {
     let value = text.trim_end_matches(['\r', '\n']);
     if value.len() <= 128
         && value.as_bytes().first().is_some_and(u8::is_ascii_digit)
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
         && !value.contains("..")
         && !value.ends_with('.')
     {
@@ -47,16 +49,16 @@ fn active_version(text: &str) -> Result<&str, AgentError> {
 }
 
 fn node_version(text: &str) -> Result<&str, AgentError> {
-    let mut matches = text.lines().filter_map(|line| {
-        line.trim().strip_prefix(PREFIX)?.strip_suffix(SUFFIX)
-    });
+    let mut matches = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(PREFIX)?.strip_suffix(SUFFIX));
     let version = matches.next().ok_or_else(|| error(INVALID))?;
     if matches.next().is_some()
         || version.len() > 32
         || version.split('.').count() != 3
-        || !version.split('.').all(|part| {
-            !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())
-        })
+        || !version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
     {
         return Err(error(INVALID));
     }
@@ -87,7 +89,11 @@ fn resolve(root: &Path) -> Result<Command, AgentError> {
     let node = node_version(&launcher_text)?;
     let entry = contained_file(&root, &root.join("versions").join(version).join(ENTRY))?;
     let executable = contained_file(
-        &root, &root.join("runtime").join(format!("node-{node}")).join("node.exe"),
+        &root,
+        &root
+            .join("runtime")
+            .join(format!("node-{node}"))
+            .join("node.exe"),
     )?;
     let mut command = Command::new(executable);
     command.arg(entry);
@@ -117,8 +123,12 @@ pub(super) fn discover() -> Result<Option<Command>, AgentError> {
             }
             if let Some(root) = roots.iter().find(|root| {
                 let candidate = root.join("bin");
-                candidate == bin || candidate.canonicalize().ok()
-                    .zip(bin.canonicalize().ok()).is_some_and(|(a,b)| a == b)
+                candidate == bin
+                    || candidate
+                        .canonicalize()
+                        .ok()
+                        .zip(bin.canonicalize().ok())
+                        .is_some_and(|(a, b)| a == b)
             }) {
                 if root.join("bin/gentle-shell.cmd").is_file() {
                     return resolve(root).map(Some);
@@ -158,8 +168,16 @@ mod tests {
         let text = format!("@echo off\r\n{line}\r\nexit /b %errorlevel%\r\n");
         assert_eq!(node_version(&text).unwrap(), "24.21.0");
         assert_eq!(active_version("5.0.0-1.6.1\r\n").unwrap(), "5.0.0-1.6.1");
-        for value in ["../5.0.0", "5.0.0/evil", "5.0.0:stream", "5.0.0%PATH%",
-                      "5.0.0\r\n6.0.0", "5.0.0.", "", "5.0.0 "] {
+        for value in [
+            "../5.0.0",
+            "5.0.0/evil",
+            "5.0.0:stream",
+            "5.0.0%PATH%",
+            "5.0.0\r\n6.0.0",
+            "5.0.0.",
+            "",
+            "5.0.0 ",
+        ] {
             assert!(active_version(value).is_err());
         }
         assert!(node_version(&format!("{PREFIX}24.21.0 & evil{SUFFIX}")).is_err());
@@ -168,24 +186,39 @@ mod tests {
 
     #[test]
     fn resolves_active_version_and_matching_runtime_only() {
-        let root = std::env::temp_dir().join(format!(
-            "fleet-gs-bundle-{}-{:?}", std::process::id(), std::thread::current().id()
-        ).replace(['(', ')'], ""));
+        let root = std::env::temp_dir().join(
+            format!(
+                "fleet-gs-bundle-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            )
+            .replace(['(', ')'], ""),
+        );
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::create_dir_all(root.join("runtime/node-24.21.0")).unwrap();
         std::fs::write(root.join("runtime/node-24.21.0/node.exe"), b"fixture").unwrap();
-        std::fs::write(root.join("bin/gentle-shell.cmd"),
-            format!("{PREFIX}24.21.0{SUFFIX}\r\n")).unwrap();
+        std::fs::write(
+            root.join("bin/gentle-shell.cmd"),
+            format!("{PREFIX}24.21.0{SUFFIX}\r\n"),
+        )
+        .unwrap();
         for version in ["4.8.0-1.6.0", "5.0.0-1.6.1"] {
             let entry = root.join("versions").join(version).join(ENTRY);
             std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
             std::fs::write(&entry, b"fixture").unwrap();
             std::fs::write(root.join("current"), version).unwrap();
             let command = resolve(&root).unwrap();
-            assert_eq!(Path::new(command.get_program()),
-                root.join("runtime/node-24.21.0/node.exe").canonicalize().unwrap());
-            assert_eq!(Path::new(command.get_args().next().unwrap()), entry.canonicalize().unwrap());
+            assert_eq!(
+                Path::new(command.get_program()),
+                root.join("runtime/node-24.21.0/node.exe")
+                    .canonicalize()
+                    .unwrap()
+            );
+            assert_eq!(
+                Path::new(command.get_args().next().unwrap()),
+                entry.canonicalize().unwrap()
+            );
         }
         std::fs::write(root.join("current"), "../outside").unwrap();
         assert!(resolve(&root).is_err());

@@ -39,8 +39,7 @@ const COMPATIBILITY: VersionRange = VersionRange {
 // 5.0.0 is a candidate, not part of the accepted 4.x range. Permit an
 // explicit local experiment only; never admit arbitrary 5.x versions.
 fn compatible_version(version: &ProviderVersion, experimental: bool) -> bool {
-    COMPATIBILITY.compatible(version)
-        || (experimental && version.text == "5.0.0")
+    COMPATIBILITY.compatible(version) || (experimental && version.text == "5.0.0")
 }
 
 fn experimental_5() -> bool {
@@ -344,7 +343,9 @@ impl GentleShellDriver {
                         "provider override must be an existing absolute .exe" => "invalid_exe",
                         "configure either provider EXE or JS, not both" => "ambiguous_launcher",
                         "Gentle Shell bundle metadata invalid" => "bundle_metadata_invalid",
-                        "Gentle Shell bundle entrypoint or runtime missing" => "bundle_files_missing",
+                        "Gentle Shell bundle entrypoint or runtime missing" => {
+                            "bundle_files_missing"
+                        }
                         "Gentle Shell bundle path escaped root" => "bundle_path_escape",
                         _ => "other_probe_failure",
                     };
@@ -1009,7 +1010,10 @@ mod tests {
         assert!(compatible_version(&ProviderVersion::parse("5.0.0"), true));
         assert!(!compatible_version(&ProviderVersion::parse("5.0.1"), true));
         assert!(!compatible_version(&ProviderVersion::parse("5.1.0"), true));
-        assert!(!compatible_version(&ProviderVersion::parse("5.0.0-unknown"), true));
+        assert!(!compatible_version(
+            &ProviderVersion::parse("5.0.0-unknown"),
+            true
+        ));
     }
 
     #[test]

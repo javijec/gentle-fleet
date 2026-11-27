@@ -68,6 +68,7 @@ pub struct RpcClient {
     notifications: Receiver<Value>,
     server_requests: Receiver<ServerRequest>,
     reader_alive: Arc<AtomicBool>,
+    closing: Arc<AtomicBool>,
     dropped_notifications: Arc<AtomicU64>,
     last_stderr: Arc<Mutex<Vec<String>>>,
     deferred_notifications: VecDeque<Value>,
@@ -191,20 +192,31 @@ impl RpcClient {
         let (notification_tx, notifications) = mpsc::sync_channel(NOTIFICATION_QUEUE);
         let (server_tx, server_requests) = mpsc::sync_channel(SERVER_REQUEST_QUEUE);
         let reader_alive = Arc::new(AtomicBool::new(true));
+        let closing = Arc::new(AtomicBool::new(false));
         let dropped_notifications = Arc::new(AtomicU64::new(0));
         let last_stderr = Arc::new(Mutex::new(Vec::new()));
 
         let reader_pending = pending.clone();
         let reader_alive_thread = reader_alive.clone();
+        let reader_closing = closing.clone();
         let reader_dropped = dropped_notifications.clone();
         std::thread::spawn(move || {
             let mut reader = io::BufReader::new(stdout);
             loop {
+                if reader_closing.load(Ordering::Acquire) {
+                    // After explicit shutdown no frame can affect a turn.
+                    // Drain raw bytes even if the provider emits a partial frame.
+                    let _ = io::copy(&mut reader, &mut io::sink());
+                    break;
+                }
                 if !reader_alive_thread.load(Ordering::Acquire) {
                     break;
                 }
                 match read_line_bounded(&mut reader) {
                     Ok(Some(line)) => {
+                        if reader_closing.load(Ordering::Acquire) {
+                            continue;
+                        }
                         match serde_json::from_str::<Value>(&line) {
                             Ok(value) => classify(
                                 value,
@@ -228,23 +240,16 @@ impl RpcClient {
             reader_alive_thread.store(false, Ordering::Release);
         });
 
-        let stderr_alive = reader_alive.clone();
         let stderr_log = last_stderr.clone();
         std::thread::spawn(move || {
             let mut reader = io::BufReader::new(stderr);
-            while stderr_alive.load(Ordering::Acquire) {
-                match read_line_bounded(&mut reader) {
-                    Ok(Some(line)) => {
-                        // Los logs de stderr pueden contener IDs nativos; se
-                        // conservan solo en memoria y nunca se publican tal cual.
-                        let mut log = stderr_log.lock().expect("stderr log poisoned");
-                        if log.len() == 16 {
-                            log.remove(0);
-                        }
-                        log.push(line);
-                    }
-                    _ => break,
+            // stdout EOF is not stderr EOF. Do not close a live writer's pipe.
+            while let Ok(Some(line)) = read_line_bounded(&mut reader) {
+                let mut log = stderr_log.lock().expect("stderr log poisoned");
+                if log.len() == 16 {
+                    log.remove(0);
                 }
+                log.push(line);
             }
         });
 
@@ -256,6 +261,7 @@ impl RpcClient {
             notifications,
             server_requests,
             reader_alive,
+            closing,
             dropped_notifications,
             last_stderr,
             deferred_notifications: VecDeque::new(),
@@ -440,8 +446,13 @@ impl RpcClient {
     }
 
     pub fn close(&mut self) -> Result<(), RpcError> {
-        self.reader_alive.store(false, Ordering::Release);
-        // Cerrar stdin es la señal de apagado ordenado del App Server.
+        self.closing.store(true, Ordering::Release);
+        // Disconnect delivery queues to release a blocked reader, then let
+        // both OS pipes drain during the existing bounded EOF shutdown.
+        let (_, notifications) = mpsc::sync_channel(1);
+        let (_, requests) = mpsc::sync_channel(1);
+        self.notifications = notifications;
+        self.server_requests = requests;
         drop(self.stdin.take());
         match self.child.wait_timeout(Duration::from_secs(2)) {
             Ok(Some(status)) if status.success() => self

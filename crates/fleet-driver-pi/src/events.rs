@@ -10,6 +10,7 @@ use crate::rpc::UiRequest;
 pub struct EventMapper {
     pub fleet_turn: Option<String>,
     message_delta_seen: bool,
+    last_assistant_failed: bool,
 }
 
 fn as_text(value: &serde_json::Value) -> String {
@@ -45,11 +46,13 @@ impl EventMapper {
     pub fn begin_turn(&mut self, turn: String) {
         self.fleet_turn = Some(turn);
         self.message_delta_seen = false;
+        self.last_assistant_failed = false;
     }
 
     pub fn end_turn(&mut self) {
         self.fleet_turn = None;
         self.message_delta_seen = false;
+        self.last_assistant_failed = false;
     }
 
     fn scoped(&self, kind: DomainEvent) -> Option<fleet_domain::AgentEvent> {
@@ -122,7 +125,25 @@ impl EventMapper {
                 let message = field(event, "message").cloned().unwrap_or_default();
                 let role = text(&message, "role");
                 let had_deltas = std::mem::replace(&mut self.message_delta_seen, false);
-                if role != "assistant" || had_deltas {
+                if role != "assistant" {
+                    return Vec::new();
+                }
+                // A retry may replace an errored assistant message. Track
+                // the latest final assistant outcome; do not terminate here.
+                self.last_assistant_failed = text(&message, "stopReason") == "error";
+                if self.last_assistant_failed {
+                    let detail = text(&message, "errorMessage");
+                    let detail = if detail.is_empty() {
+                        "Pi assistant message reported stopReason=error".into()
+                    } else {
+                        redact_provider_error(&detail)
+                    };
+                    return self
+                        .scoped(DomainEvent::AgentError { message: detail })
+                        .into_iter()
+                        .collect();
+                }
+                if had_deltas {
                     return Vec::new();
                 }
                 let body = as_text(field(&message, "content").unwrap_or(&serde_json::Value::Null));
@@ -213,6 +234,8 @@ impl EventMapper {
                         turn_id: turn,
                         status: if aborted {
                             TurnStatus::Interrupted
+                        } else if self.last_assistant_failed {
+                            TurnStatus::Failed
                         } else {
                             TurnStatus::Completed
                         },
@@ -410,6 +433,34 @@ mod tests {
             }
         ));
         assert!(mapper.fleet_turn.is_none());
+    }
+
+    #[test]
+    fn explicit_assistant_failure_is_terminal_only_at_settlement() {
+        let mut mapper = EventMapper::default();
+        mapper.begin_turn("turn-1".into());
+        let failure = json!({"type":"message_end","message":{
+            "role":"assistant","stopReason":"error","errorMessage":"model unavailable",
+            "content":[]
+        }});
+        let events = mapper.map(&failure);
+        assert!(matches!(&events[0].kind, DomainEvent::AgentError { .. }));
+        assert!(mapper.fleet_turn.is_some());
+        let settled = json!({"type":"agent_settled","aborted":false});
+        let events = mapper.map(&settled);
+        assert!(matches!(&events[0].kind, DomainEvent::TurnCompleted {
+            status: TurnStatus::Failed, ..
+        }));
+
+        mapper.begin_turn("turn-2".into());
+        mapper.map(&failure);
+        mapper.map(&json!({"type":"message_end","message":{
+            "role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]
+        }}));
+        let events = mapper.map(&settled);
+        assert!(matches!(&events[0].kind, DomainEvent::TurnCompleted {
+            status: TurnStatus::Completed, ..
+        }));
     }
 
     #[test]

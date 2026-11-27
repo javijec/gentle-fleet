@@ -86,6 +86,7 @@ def stop_reason(text):
 def error_classes(kinds):
     """Return fixed diagnostic categories only, never native text or paths."""
     patterns = (
+        ("pi_handled_without_model", r"Pi prompt disposition=handled"),
         ("sandbox", r"\bsandbox\b|sandboxing"),
         ("access_denied", r"access (?:is )?denied|permission denied|unauthorized|eacces|eperm"),
         ("auth", r"\b401\b|authentication|not authenticated|api key|oauth|credential|not logged in"),

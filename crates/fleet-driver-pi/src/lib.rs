@@ -453,6 +453,11 @@ impl AgentDriver for PiDriver {
         };
         let disposition = text(&response, "disposition").unwrap_or_default();
         if disposition == "handled" {
+            if std::env::var_os("FLEET_W2_DIAGNOSTICS").is_some() {
+                self.emit(DomainEvent::AgentNotice {
+                    message: "Pi prompt disposition=handled (no model execution)".into(),
+                });
+            }
             // Ninguna ejecución del modelo: el turno se cierra aquí y no se
             // espera `agent_settled`, que nunca llegará.
             let turn = self.mapper.fleet_turn.take().unwrap_or(input.turn_id);

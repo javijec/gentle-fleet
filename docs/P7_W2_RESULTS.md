@@ -220,3 +220,18 @@ fallidas/salida; incluir notices/errors sin turn_id dentro de ventana del
 prompt, conservar fixtures fallidos aun con stop exitoso (daemon apagado).
 No modificar sandbox, autoaprobar, reintentar mutaciones ni admitir cierre con
 descendientes activos. Gentle Shell permanece experimental hasta gate formal.
+
+## Repetición focalizada — 55ee56a
+
+Codex: discovery/session/chat/controls PASS, herramienta FAIL (1 iniciada,
+1 fallida, 1 output, error genérico), stop FAIL active_descendants. Pi:
+discovery/session/stop PASS, chat FAIL sin texto, terminal Completed, sin
+error de sesión observado. Fixtures conservados. Candidato: transporte Codex
+mantiene stdout/stderr durante EOF y desconecta colas al cierre; fixture
+nativo de salida abundante; no cambia verificación de job ni sandbox.
+Pi mapea stopReason=error de mensaje asistente a AgentError y al estado
+Failed solo al agent_settled si no fue reemplazado por otro mensaje;
+regresión de error y retry. Diagnóstico fijo de disposition=handled.
+No se confirma que estas sean causas reales hasta inspección nativa;
+se requiere revisar output de herramienta Codex localmente y no exponer
+credenciales. UNTESTED. No repetir OpenCode/Gentle Shell para diagnosticar.

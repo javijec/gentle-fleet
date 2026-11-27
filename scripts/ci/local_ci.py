@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -189,10 +190,58 @@ def manual_rows(os_name, sha, evidence):
     return rows
 
 
+def plain_directory(path):
+    """Never walk a symlink/junction/reparse point during log deletion."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(info.st_mode) or (
+        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        raise RuntimeError(f"Unsafe CI log directory: {path}")
+    return True
+
+
+def purge_old_logs(reports):
+    """Delete only generated .log files; leave JSON and manual evidence intact."""
+    if not plain_directory(reports):
+        return 0
+    count = 0
+    for dirname, pattern in (
+        ("logs", r"(windows|linux)-\d{8}T\d{12}Z"),
+        ("both", r"[0-9a-f]{32}"),
+    ):
+        parent = reports / dirname
+        if not plain_directory(parent):
+            continue
+        for run_dir in sorted(parent.iterdir()):
+            if not re.fullmatch(pattern, run_dir.name):
+                continue
+            if not plain_directory(run_dir):
+                continue
+            for log in sorted(run_dir.iterdir()):
+                if log.suffix != ".log":
+                    continue
+                info = log.lstat()
+                if not stat.S_ISREG(info.st_mode) or (
+                    getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                ):
+                    raise RuntimeError(f"Unsafe CI log file: {log}")
+                log.unlink()
+                count += 1
+            if not any(run_dir.iterdir()):
+                run_dir.rmdir()
+    return count
+
+
 def run(args):
     os_name = current_platform()
     sha = clean_head(args.expect_sha)
     out = args.output or ROOT / "reports" / f"{os_name}-{args.profile}.json"
+    if not args.keep_logs:
+        removed = purge_old_logs(ROOT / "reports")
+        print(f"Cleaned {removed} old CI log(s); JSON reports retained", flush=True)
     logs = ROOT / "reports" / "logs" / (os_name + "-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
     logs.mkdir(parents=True, mode=0o700)
     rows = []
@@ -253,6 +302,8 @@ def main():
     parser.add_argument("--expect-sha")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--manual-evidence", type=Path)
+    parser.add_argument("--keep-logs", action="store_true",
+                        help="retain previous CI logs instead of cleaning them")
     args = parser.parse_args()
     if args.manual_evidence and args.profile != "release":
         parser.error("--manual-evidence requires release")

@@ -190,3 +190,14 @@ El 5.0.0 es un nuevo major no aceptado. Solo se admite como candidato exacto
 si FLEET_GENTLE_SHELL_EXPERIMENTAL_5=1 (harness --experimental-gentle-shell-5),
 con negociación Desktop RPC existente. No se amplía rango estable ni se
 acepta otro 5.x. UNTESTED; confirmar --version real, stop-only y smoke full.
+
+## CI posterior al bundle — cda68bb
+
+Operador reporta FAIL en clippy Windows/Linux y e2e_concurrency Linux;
+contenido de logs no aportado, causas exactas pendientes. Incompatibilidad
+estática: espera de Shutdown de 3s frente al contrato de stop bajo driver
+ocupado <2s en e2e_concurrency. Candidato separa inicio de close (500ms)
+de close iniciado (3s); mantiene StopUnconfirmed en ambos timeouts,
+no modifica el límite de e2e ni la confirmación de salida. Regresión de
+fases y resultado de error. Limpieza de logs CI previos por defecto,
+con --keep-logs y JSON preservados. UNTESTED; solicitar logs originales.

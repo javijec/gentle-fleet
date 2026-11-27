@@ -19,10 +19,43 @@ use fleet_providers::builtin_registry_from_env;
 
 use spool::Spool;
 
-// Must exceed the provider's 2s graceful EOF wait, but stay below the
-// daemon's 5s Shutdown RPC deadline. A timeout is still StopUnconfirmed.
+// A blocked prompt must not consume the graceful-close budget. Once
+// the worker starts closing, allow the provider's 2s EOF wait, within
+// the daemon's 5s Shutdown RPC deadline. Neither timeout confirms stop.
+const DRIVER_CLOSE_START_TIMEOUT: Duration = Duration::from_millis(500);
 const DRIVER_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
-type DriverCloseResult = Result<(), String>;
+
+enum DriverCloseProgress {
+    Started,
+    Finished(Result<(), String>),
+}
+
+fn await_driver_close(
+    receiver: &Receiver<DriverCloseProgress>,
+    start_timeout: Duration,
+    close_timeout: Duration,
+) -> Result<(), String> {
+    match receiver.recv_timeout(start_timeout) {
+        Ok(DriverCloseProgress::Started) => {}
+        Ok(DriverCloseProgress::Finished(_)) => {
+            return Err("driver close result without start confirmation".into());
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            return Err("driver did not start close in time".into());
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err("driver worker exited without close confirmation".into());
+        }
+    }
+    match receiver.recv_timeout(close_timeout) {
+        Ok(DriverCloseProgress::Finished(result)) => result,
+        Ok(DriverCloseProgress::Started) => Err("duplicate driver close start".into()),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err("driver did not close in time".into()),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("driver worker exited without close confirmation".into())
+        }
+    }
+}
 
 struct Args {
     runner_id: String,
@@ -325,7 +358,7 @@ fn spawn_driver_loop(
     commands: Receiver<DriverCommand>,
     shared: Arc<RunnerShared>,
     startup: Sender<Result<(), String>>,
-    closed_tx: Sender<DriverCloseResult>,
+    closed_tx: Sender<DriverCloseProgress>,
 ) {
     let spool = Arc::clone(&shared.spool);
     let pending_approvals = Arc::clone(&shared.pending_approvals);
@@ -421,6 +454,7 @@ fn spawn_driver_loop(
                     }
                 }
                 Ok(DriverCommand::Stop) => {
+                    let _ = closed_tx.send(DriverCloseProgress::Started);
                     let outcome = driver
                         .close()
                         .map_err(|error| fleet_agent::redact_provider_error(&error.to_string()));
@@ -429,7 +463,7 @@ fn spawn_driver_loop(
                     // by the Shutdown response path; never turn them into OK.
                     drop(driver);
                     provider_alive.store(false, Ordering::Release);
-                    let _ = closed_tx.send(outcome);
+                    let _ = closed_tx.send(DriverCloseProgress::Finished(outcome));
                     return;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -518,7 +552,7 @@ fn serve_daemon(
     identity: RunnerIdentity,
     shared: Arc<RunnerShared>,
     commands: SyncSender<DriverCommand>,
-    closed_rx: Arc<Mutex<Receiver<DriverCloseResult>>>,
+    closed_rx: Arc<Mutex<Receiver<DriverCloseProgress>>>,
 ) -> Result<(), String> {
     let spool = &shared.spool;
     let pending_approvals = &shared.pending_approvals;
@@ -710,12 +744,13 @@ fn serve_daemon(
                     .map_err(|e| e.to_string())?;
                     continue;
                 }
-                let received = closed_rx
-                    .lock()
-                    .expect("closed channel poisoned")
-                    .recv_timeout(DRIVER_CLOSE_TIMEOUT);
+                let received = await_driver_close(
+                    &closed_rx.lock().expect("closed channel poisoned"),
+                    DRIVER_CLOSE_START_TIMEOUT,
+                    DRIVER_CLOSE_TIMEOUT,
+                );
                 match received {
-                    Ok(Ok(())) => {
+                    Ok(()) => {
                         let response = RunnerResponse::Shutdown {
                             status: RUNNER_SHUTDOWN_STOPPED.into(),
                         };
@@ -729,17 +764,7 @@ fn serve_daemon(
                         .map_err(|e| e.to_string())?;
                         std::process::exit(0);
                     }
-                    outcome => {
-                        let message = match outcome {
-                            Ok(Err(error)) => error,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                "driver did not close in time".into()
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                "driver worker exited without close confirmation".into()
-                            }
-                            Ok(Ok(())) => unreachable!(),
-                        };
+                    Err(message) => {
                         write_runner_frame(
                             &mut writer,
                             &RunnerFrame::Notice {
@@ -782,4 +807,31 @@ impl StatusStr for RunnerStatus {
             RunnerStatus::Uncertain => "uncertain",
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn shutdown_wait_distinguishes_queued_and_started_close() {
+    let (tx, rx) = mpsc::channel();
+    let short = Duration::from_millis(20);
+    let long = Duration::from_secs(1);
+    assert_eq!(
+        await_driver_close(&rx, short, long).unwrap_err(),
+        "driver did not start close in time"
+    );
+    tx.send(DriverCloseProgress::Started).unwrap();
+    assert_eq!(
+        await_driver_close(&rx, short, short).unwrap_err(),
+        "driver did not close in time"
+    );
+    tx.send(DriverCloseProgress::Started).unwrap();
+    tx.send(DriverCloseProgress::Finished(Ok(()))).unwrap();
+    await_driver_close(&rx, short, long).unwrap();
+    tx.send(DriverCloseProgress::Started).unwrap();
+    tx.send(DriverCloseProgress::Finished(Err("fixture failure".into())))
+        .unwrap();
+    assert_eq!(
+        await_driver_close(&rx, short, long).unwrap_err(),
+        "fixture failure"
+    );
 }

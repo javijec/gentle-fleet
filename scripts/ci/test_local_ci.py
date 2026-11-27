@@ -2,12 +2,49 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from console import result_line, show_result, summary
-from local_ci import overall, plan, validate_report, expected_ids, manual_rows
+from local_ci import overall, plan, validate_report, expected_ids, manual_rows, purge_old_logs
 
 
 class LocalCITests(unittest.TestCase):
+    def test_log_cleanup_keeps_reports_and_other_files(self):
+        with TemporaryDirectory() as directory:
+            reports = Path(directory) / "reports"
+            native = reports / "logs" / "linux-20261127T002239194693Z"
+            repeated = reports / "both" / ("a" * 32)
+            unrelated = reports / "logs" / "manual"
+            for folder in (native, repeated, unrelated):
+                folder.mkdir(parents=True)
+                (folder / "fixture.log").write_text("old", encoding="utf-8")
+            (repeated / "native.json").write_text("{}", encoding="utf-8")
+            (reports / "manual.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(purge_old_logs(reports), 2)
+            self.assertFalse(native.exists())
+            self.assertFalse((repeated / "fixture.log").exists())
+            self.assertTrue((repeated / "native.json").exists())
+            self.assertTrue((reports / "manual.json").exists())
+            self.assertTrue((unrelated / "fixture.log").exists())
+            self.assertEqual(purge_old_logs(reports), 0)
+
+    def test_log_cleanup_rejects_symlink_directory(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "outside"
+            target.mkdir()
+            (target / "keep.log").write_text("keep", encoding="utf-8")
+            reports = root / "reports"
+            reports.mkdir()
+            try:
+                (reports / "logs").symlink_to(target, target_is_directory=True)
+            except OSError:
+                self.skipTest("creating symlinks requires privileges on this host")
+            with self.assertRaises(RuntimeError):
+                purge_old_logs(reports)
+            self.assertTrue((target / "keep.log").exists())
+
     def test_console_colors_and_success_log_hidden(self):
         row = dict(id="build", status="PASS", log="private.log", seconds=1.2)
         self.assertIn("\x1b[32mPASS\x1b[0m", result_line(row, enabled=True))

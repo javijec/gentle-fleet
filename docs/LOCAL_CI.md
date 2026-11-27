@@ -143,3 +143,15 @@ Antes del gate, verifica que HEAD coincide con la rama origin, ejecuta cargo fmt
 ## Gate de aceptación W1-F
 
 `both.py --mode w1f` ejecuta full Windows/Linux sobre el mismo SHA limpio y exige protocolo Windows 10/10 más Lifecycle 20/20 (`-Scenario Lifecycle`). Los registros `protocol_runs` y `lifecycle_runs` quedan en windows.json; combined.json cuenta ambos grupos además de los checks full. `w1f-acceptance` forma parte de full Windows y verifica concurrencia, aprobaciones y backpressure/replay mediante API pública. Se conserva el modo w1c y su validación anterior. AUTOMATED_PASS no certifica el gate manual ni release. Ver P7_W1_F_PLAN.md.
+
+## Limpieza de logs entre ejecuciones
+
+Por defecto cada CI nativo borra los .log generados por corridas anteriores
+bajo reports/logs/<plataforma>-<timestamp>/ y reports/both/<id>/. El
+coordinador aplica la misma política en Windows y Linux por SSH. Conserva
+JSON, evidencia manual, otros archivos y logs de la corrida nueva. Los
+reportes históricos pueden conservar referencias a logs ya borrados.
+Copiar los logs necesarios antes de ejecutar otra prueba. `--keep-logs`
+en both.py o local_ci.py conserva los anteriores. No ejecutar dos CI
+simultáneamente sobre el mismo checkout. No se atraviesan symlinks ni
+junctions; un directorio generado inseguro bloquea la limpieza.

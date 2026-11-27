@@ -80,10 +80,11 @@ def worker(args):
     try:
         # Preserve the default Rust test parallelism for the repeated IPC tests.
         os.environ.pop("RUST_TEST_THREADS", None)
-        code = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/ci/local_ci.py"), "--profile", profile,
-             "--expect-sha", args.sha, "--output", str(report_path)], cwd=ROOT,
-        ).returncode
+        command = [sys.executable, str(ROOT / "scripts/ci/local_ci.py"), "--profile", profile,
+                   "--expect-sha", args.sha, "--output", str(report_path)]
+        if args.keep_logs:
+            command.append("--keep-logs")
+        code = subprocess.run(command, cwd=ROOT).returncode
         record["ci_exit_code"] = code
         record["ci"] = json.loads(report_path.read_text(encoding="utf-8"))
         status = validate_report(record["ci"], args.platform, args.sha, profile)
@@ -291,6 +292,8 @@ def coordinator(args):
     try:
         for platform, (host, root) in hosts.items():
             common = ["--platform", platform, "--sha", sha, "--run-id", run_id, "--mode", mode]
+            if getattr(args, "keep_logs", False):
+                common.append("--keep-logs")
             row = {"status": "BLOCKED"}
             data["platforms"][platform] = row
             try:
@@ -343,6 +346,8 @@ def coordinator(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("quick", "full", "w1c", "w1f"))
+    parser.add_argument("--keep-logs", action="store_true",
+                        help="retain old CI logs on both native hosts")
     parser.add_argument("--auto-format", action="store_true",
                         help="Format clean local branch, confirm commit/push and sync SSH checkout")
     for platform in ("windows", "linux"):

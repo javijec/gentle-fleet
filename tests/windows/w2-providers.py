@@ -83,7 +83,33 @@ def stop_reason(text):
     return next((label for text_part, label in reasons if text_part in text), "unknown")
 
 
-def turn_diagnostics(kinds, marker):
+def error_classes(kinds):
+    """Return fixed diagnostic categories only, never native text or paths."""
+    patterns = (
+        ("sandbox", r"\bsandbox\b|sandboxing"),
+        ("access_denied", r"access (?:is )?denied|permission denied|unauthorized|eacces|eperm"),
+        ("auth", r"\b401\b|authentication|not authenticated|api key|oauth|credential|not logged in"),
+        ("rate_limit", r"\b429\b|rate.limit|quota|insufficient credits"),
+        ("model", r"model not found|unknown model|no model|unsupported model|model unavailable"),
+        ("missing_file", r"cannot find path|no such file|file not found|enoent"),
+        ("command_missing", r"not recognized|command not found|not installed"),
+        ("network", r"connection refused|network error|fetch failed|econnreset|timed out"),
+        ("provider_error", r"\berror\b|failed|failure"),
+    )
+    labels = set()
+    for kind in kinds:
+        if kind.get("type") not in ("agent_error", "agent_notice", "turn_failed", "tool_output"):
+            continue
+        value = kind.get("message", kind.get("output", ""))
+        if not isinstance(value, str):
+            continue
+        for label, pattern in patterns:
+            if re.search(pattern, value, re.IGNORECASE):
+                labels.add(label)
+    return sorted(labels)
+
+
+def turn_diagnostics(kinds, marker, context=()):
     deltas = [k["text"] for k in kinds if k["type"] == "assistant_delta"]
     messages = [k["text"] for k in kinds if k["type"] == "assistant_message"]
     return {
@@ -95,7 +121,10 @@ def turn_diagnostics(kinds, marker):
         "marker_in_messages": any(marker in text for text in messages) if marker else None,
         "tool_started": sum(k["type"] == "tool_started" for k in kinds),
         "tool_succeeded": sum(k["type"] == "tool_completed" and k.get("success") is True for k in kinds),
-        "agent_errors": sum(k["type"] == "agent_error" for k in kinds),
+        "tool_failed": sum(k["type"] == "tool_completed" and k.get("success") is False for k in kinds),
+        "tool_output_count": sum(k["type"] == "tool_output" for k in kinds),
+        "agent_errors": sum(k["type"] == "agent_error" for k in (*kinds, *context)),
+        "error_classes": error_classes((*kinds, *context)),
         "terminal_statuses": [k["status"] for k in kinds if k["type"] == "turn_completed"],
     }
 
@@ -305,14 +334,20 @@ class Fixture:
                        "Return its contents exactly. Do not write files or run any other task.")
         else:
             message = f"Reply with exactly {marker}. Do not use any tools."
+        before = len(self.timeline())
         key, operation_id, turn = self.prompt(message)
         events, kinds, status = self.wait_turn(turn, tools)
+        # AgentError/AgentNotice may be session-scoped rather than turn-scoped.
+        # Include only events observed within this prompt window.
+        context = [e["kind"] for e in events[before:]
+                   if not e["kind"].get("turn_id")
+                   and e["kind"]["type"] in ("agent_error", "agent_notice")]
+        diagnostic = turn_diagnostics(kinds, marker, context)
+        self.row.setdefault("turn_diagnostics", []).append(
+            {"stage": "read-only tool" if tools else "chat", **diagnostic})
         require(status == "Completed", f"turn ended with {status}")
         require(sum(k["type"] == "user_message" and k["text"] == message for k in kinds) == 1,
                 "user message missing or duplicated")
-        diagnostic = turn_diagnostics(kinds, marker)
-        self.row.setdefault("turn_diagnostics", []).append(
-            {"stage": "read-only tool" if tools else "chat", **diagnostic})
         require(diagnostic["delta_chars"] > 0,
                 "no nonempty streamed text; final message alone does not prove streaming")
         require(diagnostic["marker_in_deltas"] or diagnostic["marker_in_messages"],
@@ -488,7 +523,13 @@ class Fixture:
             return
         try:
             self.stop_daemon()
-            shutil.rmtree(self.root)
+            if self.row["status"] != "PASS":
+                # Preserve the failed turn's evidence even when stop succeeds.
+                # No daemon remains running solely to retain diagnostics.
+                self.row["retained_fixture"] = str(self.root)
+                print("Stopped fixture retained for local diagnosis:", self.root, flush=True)
+            else:
+                shutil.rmtree(self.root)
         except (OSError, subprocess.TimeoutExpired):
             self.row["retained_fixture"] = str(self.root)
             self.row["status"] = "FAIL"
@@ -557,6 +598,8 @@ def inspect_fixture(root):
         summary["sessions"].append({
             "provider": provider, "state": state, "turn_state": turn_state,
             "turns": turn_rows,
+            "session_error_classes": error_classes(
+                [e["kind"] for e in events if not e["kind"].get("turn_id")]),
             "notice_reasons": [reason for e in events if e["kind"]["type"] == "agent_notice"
                                for reason in [stop_reason(e["kind"]["message"])]
                                if reason != "unknown"],

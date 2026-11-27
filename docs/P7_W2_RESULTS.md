@@ -201,3 +201,22 @@ de close iniciado (3s); mantiene StopUnconfirmed en ambos timeouts,
 no modifica el límite de e2e ni la confirmación de salida. Regresión de
 fases y resultado de error. Limpieza de logs CI previos por defecto,
 con --keep-logs y JSON preservados. UNTESTED; solicitar logs originales.
+
+## Smoke real conjunto — 2e07fcb (27/11/2026 UTC)
+
+Informe propietario: 22 PASS, 3 FAIL, 1 UNSUPPORTED, 6 checks no ejecutados.
+OpenCode 2.4.2 Attached 7 PASS + interrupt UNSUPPORTED; Gentle Shell 5.0.0
+Owned (opt-in experimental) 8 PASS; Codex 0.172.0 discovery/session/chat/
+controls PASS, herramienta FAIL (15 deltas, 76 caracteres, marcador ausente,
+2 herramientas iniciadas, 0 éxitos), stop FAIL StopUnconfirmed por
+active_descendants. Pi 1.6.1 discovery/session/stop PASS, chat FAIL (0 deltas,
+0 mensajes, terminal Completed). No demuestra causas de errores de modelo o
+herramientas; la cuenta original de agent_errors solo miraba turn_id y no
+incluía errores de sesión. El fixture Codex sigue retenido para inspección.
+El propietario también reporta CI full/w1f PASS en ambas plataformas; falta
+JSON nativo para vincular formalmente el resultado al SHA. W2 no cerrado.
+Candidato diagnóstico: categorías fijas de error y conteos de herramientas
+fallidas/salida; incluir notices/errors sin turn_id dentro de ventana del
+prompt, conservar fixtures fallidos aun con stop exitoso (daemon apagado).
+No modificar sandbox, autoaprobar, reintentar mutaciones ni admitir cierre con
+descendientes activos. Gentle Shell permanece experimental hasta gate formal.

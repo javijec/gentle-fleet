@@ -61,3 +61,7 @@ El marcador de instalación no sustituye `--version`. Resolver bundle
 nativamente; 5.0.0 candidato experimental exacto con opt-in, no soportado
 para release hasta conformance. El informe a8b8413 solo contiene Gentle Shell;
 resultado nuevo de Pi no aportado.
+
+Smoke conjunto 2e07fcb: Gentle Shell 5.0.0 experimental 8/8 PASS y OpenCode
+Attached 7 PASS/1 UNSUPPORTED; Codex herramienta y stop FAIL, Pi chat FAIL
+pero stop PASS. No implica compatibilidad completa de todos los proveedores.

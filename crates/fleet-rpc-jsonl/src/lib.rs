@@ -276,18 +276,13 @@ impl JsonlRpc {
         std::thread::spawn(move || {
             let mut reader = io::BufReader::new(stderr);
             // stdout EOF is not stderr EOF. Keep draining shutdown output.
-            loop {
-                match read_lf_line(&mut reader) {
-                    Ok((Some(bytes), _)) => {
-                        let line = String::from_utf8_lossy(&bytes).into_owned();
-                        let mut log = stderr_log.lock().expect("stderr log poisoned");
-                        if log.len() == 16 {
-                            log.remove(0);
-                        }
-                        log.push(line);
-                    }
-                    _ => break,
+            while let Ok((Some(bytes), _)) = read_lf_line(&mut reader) {
+                let line = String::from_utf8_lossy(&bytes).into_owned();
+                let mut log = stderr_log.lock().expect("stderr log poisoned");
+                if log.len() == 16 {
+                    log.remove(0);
                 }
+                log.push(line);
             }
         });
 
